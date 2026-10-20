@@ -36,14 +36,14 @@ var (
 		Name:      "step_duration_seconds",
 		Help:      "Duration of individual pipeline operation attempts in seconds, excluding time between retries. Not end-to-end latency.",
 		Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-	}, []string{"component", "step", "result"})
+	}, []string{"component", "step", "database", "table", "result"})
 
 	PipelineRetriesScheduledTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "pipeline",
 		Name:      "retries_scheduled_total",
 		Help:      "Number of failed pipeline operations released for retry, excluding cancellation. Does not count executed retries or SDK-internal retries.",
-	}, []string{"component", "step"})
+	}, []string{"component", "step", "database", "table"})
 
 	// Ingestor metrics
 	IngestorHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{

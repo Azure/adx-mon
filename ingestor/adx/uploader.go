@@ -477,10 +477,10 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 		if err != nil {
 			result = "error"
 		}
-		metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", result).Observe(time.Since(now).Seconds())
+		metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", database, table, result).Observe(time.Since(now).Seconds())
 		if err != nil {
 			if !errors.Is(ctx.Err(), context.Canceled) {
-				metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_queued_upload").Inc()
+				metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_queued_upload", database, table).Inc()
 			}
 			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
 			return

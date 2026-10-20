@@ -229,7 +229,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 		start := time.Now()
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
-			metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", "error").Observe(time.Since(start).Seconds())
+			metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", "", "", "error").Observe(time.Since(start).Seconds())
 			logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
 				target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 			continue
@@ -273,7 +273,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			result = "error"
 			logger.Warnf("Failed to scrape %s/%s/%s at %s: %s", target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 		}
-		metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", result).Observe(time.Since(start).Seconds())
+		metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", "", "", result).Observe(time.Since(start).Seconds())
 
 		if err := iter.Close(); err != nil {
 			logger.Errorf("Failed to close iterator for %s/%s/%s: %s", target.Namespace, target.Pod, target.Container, err.Error())

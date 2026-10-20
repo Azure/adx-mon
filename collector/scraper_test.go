@@ -54,7 +54,7 @@ func TestScraper_PipelineMetrics(t *testing.T) {
 
 			for _, result := range []string{"success", "error"} {
 				var m dto.Metric
-				h := metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", result)
+				h := metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", "", "", result)
 				require.NoError(t, h.(prometheus.Metric).Write(&m))
 				if result == tt.result {
 					require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())

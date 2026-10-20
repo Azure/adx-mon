@@ -61,7 +61,7 @@ func TestReplicator_PipelineMetrics(t *testing.T) {
 				require.Equal(t, tt.retries, pipelineRetriesScheduled(t, component))
 				for _, result := range []string{"success", "error"} {
 					var m dto.Metric
-					h := metrics.PipelineStepDurationSeconds.WithLabelValues(component, "transfer", result)
+					h := metrics.PipelineStepDurationSeconds.WithLabelValues(component, "transfer", "DB", "Table", result)
 					require.NoError(t, h.(prometheus.Metric).Write(&m))
 					success := tt.status == http.StatusAccepted
 					if (result == "success") == success {
@@ -159,7 +159,7 @@ func TestReplicator_PipelineMetricsContextErrors(t *testing.T) {
 				require.Equal(t, float64(1), retries)
 			}
 			var m dto.Metric
-			h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "transfer", "error")
+			h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "transfer", "DB", "Table", "error")
 			require.NoError(t, h.(prometheus.Metric).Write(&m))
 			require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())
 		})
@@ -185,7 +185,7 @@ func newTransferMetricsBatch(t *testing.T) *Batch {
 func pipelineRetriesScheduled(t *testing.T, component string) float64 {
 	t.Helper()
 	var m dto.Metric
-	require.NoError(t, metrics.PipelineRetriesScheduledTotal.WithLabelValues(component, "transfer").Write(&m))
+	require.NoError(t, metrics.PipelineRetriesScheduledTotal.WithLabelValues(component, "transfer", "DB", "Table").Write(&m))
 	return m.GetCounter().GetValue()
 }
 

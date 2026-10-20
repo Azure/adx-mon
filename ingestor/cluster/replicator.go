@@ -198,10 +198,10 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 		if err != nil {
 			result = "error"
 		}
-		metrics.PipelineStepDurationSeconds.WithLabelValues(r.component, "transfer", result).Observe(time.Since(start).Seconds())
+		metrics.PipelineStepDurationSeconds.WithLabelValues(r.component, "transfer", db, table, result).Observe(time.Since(start).Seconds())
 		if err != nil {
 			if !errors.Is(err, &ErrBadRequest{}) && !errors.Is(err, ErrSegmentExists) && !errors.Is(ctx.Err(), context.Canceled) {
-				metrics.PipelineRetriesScheduledTotal.WithLabelValues(r.component, "transfer").Inc()
+				metrics.PipelineRetriesScheduledTotal.WithLabelValues(r.component, "transfer", db, table).Inc()
 			}
 			if errors.Is(err, &ErrBadRequest{}) {
 				// If ingestor returns a bad request, we should drop the segments as it means we're sending something

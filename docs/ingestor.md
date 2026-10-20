@@ -11,8 +11,11 @@ merge into larger files which can impact query latency and increase resource req
 
 ## Pipeline timing metrics
 
-`adxmon_pipeline_step_duration_seconds` is a histogram with `component`, `step`, and `result` labels.
+`adxmon_pipeline_step_duration_seconds` is a histogram with `component`, `step`, `database`, `table`, and `result` labels.
 `result` is `success` or `error`; each observation describes one operation attempt, not one telemetry record.
+`database` and `table` identify the destination of a transfer or queued upload. They are empty for scrapes,
+which can contain metrics destined for multiple tables. Series count grows with the number of destinations;
+no target, segment, or batch IDs are used as labels.
 
 | Component | Step | Measurement |
 | --- | --- | --- |
@@ -21,19 +24,19 @@ merge into larger files which can impact query latency and increase resource req
 | `ingestor` | `transfer` | One WAL batch transfer to another ingestor. |
 | `ingestor` | `adx_queued_upload` | One queued upload operation, including schema preparation, compression, blob upload, and ingestion submission. Includes direct ingestion when using the Kusto emulator. |
 
-`adxmon_pipeline_retries_scheduled_total{component,step}` counts failed transfer and queued-upload
+`adxmon_pipeline_retries_scheduled_total{component,step,database,table}` counts failed transfer and queued-upload
 operations released for retry. Locked segments, overloaded peers, network errors, and failed queued uploads
 increment it. Rejected transfers (HTTP 400), already-present segments (HTTP 409), and context cancellation do not.
 Timeouts count because the segments are released for retry. The counter records retry decisions, not the
 number of retries actually executed; a restart, shutdown, or ownership change may prevent a retry.
 SDK-internal retries are not counted, but their duration is included in the upload operation.
 
-The histogram's `_count` gives completed attempts by result. For example, the mean duration by step is:
+The histogram's `_count` gives completed attempts by result. For example, the mean duration by destination and step is:
 
 ```promql
-sum by (component, step) (rate(adxmon_pipeline_step_duration_seconds_sum[5m]))
+sum by (component, step, database, table) (rate(adxmon_pipeline_step_duration_seconds_sum[5m]))
 /
-sum by (component, step) (rate(adxmon_pipeline_step_duration_seconds_count[5m]))
+sum by (component, step, database, table) (rate(adxmon_pipeline_step_duration_seconds_count[5m]))
 ```
 
 These are diagnostic timings, **not an additive end-to-end breakdown**. Scrapes, transfers, and uploads have

@@ -42,7 +42,7 @@ func TestUploader_PipelineMetricsAcrossRetry(t *testing.T) {
 	require.True(t, first.IsReleased())
 	require.False(t, first.IsRemoved())
 	require.FileExists(t, path)
-	require.Equal(t, float64(1), pipelineRetriesScheduled(t))
+	require.Equal(t, float64(1), pipelineRetriesScheduled(t, "Cpu"))
 
 	env.queue.err = nil
 	second := env.nextBatch(t, ingestpolicy.PriorityQueued)
@@ -53,10 +53,10 @@ func TestUploader_PipelineMetricsAcrossRetry(t *testing.T) {
 	require.NoFileExists(t, path)
 	require.Equal(t, 2, env.queue.calls)
 	require.Equal(t, testCSV, env.queue.data)
-	require.Equal(t, float64(1), pipelineRetriesScheduled(t))
+	require.Equal(t, float64(1), pipelineRetriesScheduled(t, "Cpu"))
 	for _, result := range []string{"success", "error"} {
 		var m dto.Metric
-		h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", result)
+		h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", "db", "Cpu", result)
 		require.NoError(t, h.(prometheus.Metric).Write(&m))
 		require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())
 		require.Positive(t, m.GetHistogram().GetSampleSum())
@@ -91,9 +91,9 @@ func TestUploader_PipelineMetricsCancellation(t *testing.T) {
 
 			require.True(t, batch.IsReleased())
 			require.False(t, batch.IsRemoved())
-			require.Zero(t, pipelineRetriesScheduled(t))
+			require.Zero(t, pipelineRetriesScheduled(t, "Cpu"))
 			var m dto.Metric
-			h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", "error")
+			h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", "db", "Cpu", "error")
 			require.NoError(t, h.(prometheus.Metric).Write(&m))
 			if duringUpload {
 				require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())
@@ -125,19 +125,47 @@ func TestUploader_PipelineMetricsTimeout(t *testing.T) {
 
 		require.True(t, batch.IsReleased())
 		require.False(t, batch.IsRemoved())
-		require.Equal(t, float64(1), pipelineRetriesScheduled(t))
+		require.Equal(t, float64(1), pipelineRetriesScheduled(t, "Cpu"))
 		var m dto.Metric
-		h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", "error")
+		h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", "db", "Cpu", "error")
 		require.NoError(t, h.(prometheus.Metric).Write(&m))
 		require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())
 		require.Equal(t, float64(5), m.GetHistogram().GetSampleSum())
 	})
 }
 
-func pipelineRetriesScheduled(t *testing.T) float64 {
+func TestUploader_PipelineMetricsSeparateDestinations(t *testing.T) {
+	metrics.PipelineStepDurationSeconds.Reset()
+	metrics.PipelineRetriesScheduledTotal.Reset()
+	t.Cleanup(metrics.PipelineStepDurationSeconds.Reset)
+	t.Cleanup(metrics.PipelineRetriesScheduledTotal.Reset)
+	env := newStreamingTestEnv(t)
+	env.addSegment(t, "Cpu", ingestpolicy.PriorityQueued, testCSV, time.Time{})
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityQueued))
+	env.addSegment(t, "Memory", ingestpolicy.PriorityQueued, testCSV, time.Time{})
+	env.queue.err = errors.New("submission failed")
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityQueued))
+
+	require.Zero(t, pipelineRetriesScheduled(t, "Cpu"))
+	require.Equal(t, float64(1), pipelineRetriesScheduled(t, "Memory"))
+	for _, table := range []string{"Cpu", "Memory"} {
+		for _, result := range []string{"success", "error"} {
+			var m dto.Metric
+			h := metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", "db", table, result)
+			require.NoError(t, h.(prometheus.Metric).Write(&m))
+			if (table == "Cpu") == (result == "success") {
+				require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())
+			} else {
+				require.Zero(t, m.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+}
+
+func pipelineRetriesScheduled(t *testing.T, table string) float64 {
 	t.Helper()
 	var m dto.Metric
-	require.NoError(t, metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_queued_upload").Write(&m))
+	require.NoError(t, metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_queued_upload", "db", table).Write(&m))
 	return m.GetCounter().GetValue()
 }
 
