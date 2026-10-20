@@ -472,7 +472,16 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := n.queuedUpload(ctx, data, database, table, mapping); err != nil {
+		err = n.queuedUpload(ctx, data, database, table, mapping)
+		result := "success"
+		if err != nil {
+			result = "error"
+		}
+		metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", result).Observe(time.Since(now).Seconds())
+		if err != nil {
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_queued_upload").Inc()
+			}
 			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
 			return
 		}

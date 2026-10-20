@@ -3,15 +3,71 @@ package collector
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestScraper_PipelineMetrics(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   string
+		result string
+	}{
+		{name: "success", status: http.StatusOK, body: "cpu 1\n", result: "success"},
+		{name: "http error", status: http.StatusInternalServerError, result: "error"},
+		{name: "parse error", status: http.StatusOK, body: "cpu not-a-number\n", result: "error"},
+		{name: "read error", status: http.StatusOK, body: strings.Repeat("x", 128*1024), result: "error"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			metrics.PipelineStepDurationSeconds.Reset()
+			t.Cleanup(metrics.PipelineStepDurationSeconds.Reset)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				w.(http.Flusher).Flush()
+				time.Sleep(10 * time.Millisecond)
+				fmt.Fprint(w, tt.body)
+			}))
+			defer server.Close()
+
+			client, err := NewMetricsClient(ClientOpts{})
+			require.NoError(t, err)
+			defer client.Close()
+			s := NewScraper(&ScraperOpts{MaxBatchSize: 100})
+			s.scrapeClient = client
+			s.targets["target"] = ScrapeTarget{Addr: server.URL}
+
+			s.scrapeTargets(context.Background())
+
+			for _, result := range []string{"success", "error"} {
+				var m dto.Metric
+				h := metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", result)
+				require.NoError(t, h.(prometheus.Metric).Write(&m))
+				if result == tt.result {
+					require.EqualValues(t, 1, m.GetHistogram().GetSampleCount())
+					if tt.status == http.StatusOK {
+						require.GreaterOrEqual(t, m.GetHistogram().GetSampleSum(), 0.01, "include response body reception, not just headers")
+					}
+				} else {
+					require.Zero(t, m.GetHistogram().GetSampleCount())
+				}
+			}
+		})
+	}
+}
 
 func TestScraper_OnUpdatePodReplacement(t *testing.T) {
 	tests := []struct {

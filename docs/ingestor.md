@@ -9,6 +9,43 @@ their own metrics, logs and traces.  The ingestor aggregates these data sources 
 instead of each pod or node sending data individually.  This reduces the number of small files that ADX must later 
 merge into larger files which can impact query latency and increase resource requirements.
 
+## Pipeline timing metrics
+
+`adxmon_pipeline_step_duration_seconds` is a histogram with `component`, `step`, and `result` labels.
+`result` is `success` or `error`; each observation describes one operation attempt, not one telemetry record.
+
+| Component | Step | Measurement |
+| --- | --- | --- |
+| `collector` | `scrape` | Start of a target scrape until its response iterator is exhausted or fails. Includes parsing and any synchronous batch writes performed while reading. |
+| `collector` | `transfer` | One WAL batch transfer to an ingestor, including request compression and the receiver's response. |
+| `ingestor` | `transfer` | One WAL batch transfer to another ingestor. |
+| `ingestor` | `adx_queued_upload` | One queued upload operation, including schema preparation, compression, blob upload, and ingestion submission. Includes direct ingestion when using the Kusto emulator. |
+
+`adxmon_pipeline_retries_scheduled_total{component,step}` counts failed transfer and queued-upload
+operations released for retry. Locked segments, overloaded peers, network errors, and failed queued uploads
+increment it. Rejected transfers (HTTP 400), already-present segments (HTTP 409), and context cancellation do not.
+Timeouts count because the segments are released for retry. The counter records retry decisions, not the
+number of retries actually executed; a restart, shutdown, or ownership change may prevent a retry.
+SDK-internal retries are not counted, but their duration is included in the upload operation.
+
+The histogram's `_count` gives completed attempts by result. For example, the mean duration by step is:
+
+```promql
+sum by (component, step) (rate(adxmon_pipeline_step_duration_seconds_sum[5m]))
+/
+sum by (component, step) (rate(adxmon_pipeline_step_duration_seconds_count[5m]))
+```
+
+These are diagnostic timings, **not an additive end-to-end breakdown**. Scrapes, transfers, and uploads have
+different batch sizes and observation counts. Summing buckets across steps combines the observations; it does
+not measure the duration of their sequence. Neither summing percentiles nor dividing the total `_sum` by the
+total `_count` yields end-to-end latency.
+
+Time between retry attempts, exact collector/ingestor residence, and ADX query visibility are not measured here.
+Queued-upload success means ingestion was submitted, not that its rows are queryable. Streaming ingestion
+continues to use the existing `adxmon_ingestor_realtime_*` metrics; its fallback to queued ingestion is
+included in `adx_queued_upload`, but the preceding streaming attempt is not.
+
 # Design
 
 The ingestor is designed to be deployed as a Kubernetes StatefulSet with multiple replicas.  It exposes several

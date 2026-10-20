@@ -402,6 +402,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}
 
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+			Component:                    "collector",
 			Hostname:                     opts.NodeName,
 			Partitioner:                  partitioner,
 			Health:                       health,
