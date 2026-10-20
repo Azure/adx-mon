@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -36,6 +37,7 @@ type Repository struct {
 }
 
 type RepositoryOpts struct {
+	Component              string
 	StorageDir             string
 	SegmentMaxSize         int64
 	SegmentMaxAge          time.Duration
@@ -244,6 +246,9 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		CreatedAt: createdAt,
 		Priority:  s.priority(prefix),
 	}
+	if s.opts.Component != "" {
+		info.Timing = NewSegmentTiming(info.CreatedAt, time.Now(), true)
+	}
 	s.index.Add(info)
 
 	if _, err := s.wals.GetOrCreate(prefix, func() (*WAL, error) {
@@ -287,6 +292,7 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 // walOpts returns the options for the WAL with the given prefix based on its ingestion priority.
 func (s *Repository) walOpts(prefix string) WALOpts {
 	opts := WALOpts{
+		Component:        s.opts.Component,
 		Prefix:           prefix,
 		StorageDir:       s.opts.StorageDir,
 		SegmentMaxSize:   s.opts.SegmentMaxSize,
@@ -422,14 +428,29 @@ func (s *Repository) sampleWALs(ctx context.Context) {
 		case <-t.C:
 		}
 
-		var sz int64
-		if err := s.wals.Each(func(key string, value *WAL) error {
-			sz += int64(value.Size())
-			return nil
-		}); err != nil {
-			logger.Errorf("Failed to sample WALs: %s", err.Error())
+		s.sampleWALsOnce()
+	}
+}
+
+func (s *Repository) sampleWALsOnce() {
+	var sz int64
+	var active int
+	var overdue time.Duration
+	now := time.Now()
+	if err := s.wals.Each(func(key string, value *WAL) error {
+		sz += int64(value.Size())
+		if ok, delay := value.rotationStatus(now); ok {
+			active++
+			overdue = max(overdue, delay)
 		}
-		atomic.StoreInt64(&s.size, sz)
+		return nil
+	}); err != nil {
+		logger.Errorf("Failed to sample WALs: %s", err.Error())
+	}
+	atomic.StoreInt64(&s.size, sz)
+	if s.opts.Component != "" {
+		metrics.PipelineActiveSegments.WithLabelValues(s.opts.Component).Set(float64(active))
+		metrics.PipelineRotationOverdueSeconds.WithLabelValues(s.opts.Component).Set(overdue.Seconds())
 	}
 }
 

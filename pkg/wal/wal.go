@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -42,7 +43,8 @@ func init() {
 }
 
 type WAL struct {
-	opts WALOpts
+	opts            WALOpts
+	database, table string
 
 	schemaPath string
 
@@ -85,10 +87,15 @@ type SegmentInfo struct {
 
 	// Priority is the ingestion priority of the segment's table.
 	Priority ingestpolicy.Priority
+
+	// Timing is optional, process-local lifecycle history shared across batches.
+	Timing *SegmentTiming
 }
 
 type WALOpts struct {
 	StorageDir string
+	// Component enables pipeline timing for collector or ingestor WALs. Empty disables it.
+	Component string
 
 	// WAL segment prefix
 	Prefix string
@@ -141,7 +148,20 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 		opts.Index = NewIndex()
 	}
 
+	var database, table string
+	if opts.Component != "" {
+		if opts.Component != "collector" && opts.Component != "ingestor" {
+			return nil, fmt.Errorf("invalid WAL component %q", opts.Component)
+		}
+		var err error
+		database, table, err = ParsePrefix(opts.Prefix)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &WAL{
+		database:      database,
+		table:         table,
 		index:         opts.Index,
 		opts:          opts,
 		scheduler:     opts.scheduler,
@@ -184,7 +204,7 @@ func (w *WAL) Close() error {
 			return err
 		}
 
-		w.index.Add(info)
+		w.publishSegment(info)
 	}
 
 	return nil
@@ -195,12 +215,15 @@ func (w *WAL) Close() error {
 const maxSegmentClosedRetries = 16
 
 func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
+	start := time.Now()
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	return w.writeWithRetry(ctx, func() (int, error) {
+	err := w.writeWithRetry(ctx, func() (int, error) {
 		return w.tryWrite(ctx, buf, opts...)
 	})
+	w.observeOperation("wal_write", start, err)
+	return err
 }
 
 // writeWithRetry calls write, retrying when the segment rotates concurrently.  A write that exceeds the max segment
@@ -357,6 +380,7 @@ func (w *WAL) rotateSegmentIfNecessary() {
 	if !w.requiresRotation() {
 		return
 	}
+	start := time.Now()
 
 	w.mu.RLock()
 	cur, closed := w.segment, w.closed
@@ -387,6 +411,12 @@ func (w *WAL) rotateSegmentIfNecessary() {
 	}
 
 	toClose := cur
+	if toClose != nil && toClose.Size() > 8 && w.opts.SegmentMaxAge > 0 {
+		deadline := toClose.CreatedAt().Add(w.opts.SegmentMaxAge)
+		if !time.Now().Before(deadline) {
+			w.observeDuration("wal_rotation_lateness", "success", time.Since(deadline))
+		}
+	}
 	w.setSegment(next)
 	w.mu.Unlock()
 
@@ -396,12 +426,14 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		if toClose.Size() > 8 {
 			info := toClose.Info()
 			info.Priority = w.opts.Priority
-			w.index.Add(info)
+			w.publishSegment(info)
 		} else {
 			_ = os.Remove(toClose.Path())
 		}
 
-		if err := toClose.Close(); err != nil {
+		err := toClose.Close()
+		w.observeOperation("wal_rotation", start, err)
+		if err != nil {
 			logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
 		}
 	}
@@ -460,12 +492,47 @@ func (w *WAL) Remove(path string) error {
 }
 
 func (w *WAL) Append(ctx context.Context, buf []byte) error {
+	start := time.Now()
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	return w.writeWithRetry(ctx, func() (int, error) {
+	err := w.writeWithRetry(ctx, func() (int, error) {
 		return w.tryAppend(ctx, buf)
 	})
+	w.observeOperation("wal_write", start, err)
+	return err
+}
+
+func (w *WAL) publishSegment(info SegmentInfo) {
+	if w.opts.Component != "" {
+		info.Timing = NewSegmentTiming(info.CreatedAt, time.Now(), false)
+	}
+	w.index.Add(info)
+}
+
+func (w *WAL) observeOperation(step string, start time.Time, err error) {
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	w.observeDuration(step, result, time.Since(start))
+}
+
+func (w *WAL) observeDuration(step, result string, duration time.Duration) {
+	if w.opts.Component != "" {
+		metrics.PipelineStepDurationSeconds.WithLabelValues(w.opts.Component, step, w.database, w.table, result).Observe(duration.Seconds())
+	}
+}
+
+func (w *WAL) rotationStatus(now time.Time) (active bool, overdue time.Duration) {
+	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
+	if createdAt == 0 || atomic.LoadInt64(&w.segmentSize) <= 8 {
+		return false, 0
+	}
+	if w.opts.SegmentMaxAge <= 0 {
+		return true, 0
+	}
+	return true, max(0, now.Sub(time.Unix(0, createdAt).Add(w.opts.SegmentMaxAge)))
 }
 
 func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {

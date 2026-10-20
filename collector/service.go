@@ -313,6 +313,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	})
 
 	storeOpts := storage.StoreOpts{
+		Component:        "collector",
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,

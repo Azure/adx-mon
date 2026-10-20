@@ -87,7 +87,8 @@ type Batch struct {
 	// Priority is the ingestion priority of the batch's table.
 	Priority ingestpolicy.Priority
 
-	batcher Batcher
+	batcher  Batcher
+	queuedAt time.Time
 
 	released bool
 	removed  bool
@@ -96,11 +97,58 @@ type Batch struct {
 
 // Release releases the segments in the batch so they can be processed again.
 func (b *Batch) Release() {
+	now := time.Now()
+	for _, si := range b.Segments {
+		if si.Timing != nil {
+			si.Timing.Release(now)
+		}
+	}
 	b.batcher.Release(b)
 
 	b.mu.Lock()
 	b.released = true
 	b.mu.Unlock()
+}
+
+// StartProcessing includes blocked enqueue, dispatcher and worker-queue time in the queue stage.
+func (b *Batch) StartProcessing() {
+	now := time.Now()
+	for _, si := range b.Segments {
+		if si.Timing != nil {
+			si.Timing.Start(b.queuedAt, now)
+		}
+	}
+}
+
+// RecordCompletion observes each successfully handed-off segment once, even if disk cleanup fails.
+func (b *Batch) RecordCompletion(component, route string, segments []wal.SegmentInfo) {
+	now := time.Now()
+	for _, si := range segments {
+		if si.Timing == nil {
+			continue
+		}
+		timing, ok := si.Timing.Complete(now)
+		if !ok {
+			continue
+		}
+		observe := func(step string, duration time.Duration) {
+			metrics.PipelineSegmentDurationSeconds.WithLabelValues(component, step, b.Database, b.Table, route).Observe(duration.Seconds())
+		}
+		if timing.Total >= 0 {
+			observe("total", timing.Total)
+		}
+		if timing.Incomplete != "" {
+			metrics.PipelineIncompleteSegmentsTotal.WithLabelValues(component, b.Database, b.Table, route, timing.Incomplete).Inc()
+			continue
+		}
+		observe("complete_total", timing.Total)
+		observe("wal_buffer", timing.Buffer)
+		observe("batch_wait", timing.Batching)
+		observe("retry_wait", timing.RetryWait)
+		observe("worker_queue", timing.Queue)
+		observe("processing", timing.Processing)
+		metrics.PipelineSegmentRetriesTotal.WithLabelValues(component, b.Database, b.Table, route).Add(float64(timing.Retries))
+	}
 }
 
 // Remove removes the segments in the batch from disk.
@@ -378,11 +426,13 @@ func (b *batcher) BatchSegments() error {
 	for _, p := range []ingestpolicy.Priority{ingestpolicy.PriorityRealtime, ingestpolicy.PriorityQueued} {
 		for _, v := range owned {
 			if v.Priority == p {
+				v.queuedAt = time.Now()
 				b.uploadQueueFor(p) <- v
 			}
 		}
 		for _, v := range notOwned {
 			if v.Priority == p {
+				v.queuedAt = time.Now()
 				b.transferQueueFor(p) <- v
 			}
 		}

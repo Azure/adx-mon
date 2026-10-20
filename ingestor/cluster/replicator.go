@@ -145,6 +145,7 @@ func (r *replicator) RealtimeTransferQueue() chan *Batch {
 }
 
 func (r *replicator) transfer(ctx context.Context, batch *Batch) {
+	batch.StartProcessing()
 	segments := batch.Segments
 
 	if err := func() error {
@@ -214,6 +215,7 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 				return nil
 			} else if errors.Is(err, ErrSegmentExists) {
 				// Segment already exists, remove our side so we don't keep retrying.
+				batch.RecordCompletion(r.component, "peer", segments)
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to remove segment: %s", err)
 				}
@@ -231,6 +233,7 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 			return err
 		}
 
+		batch.RecordCompletion(r.component, "peer", segments)
 		if logger.IsDebug() {
 			for _, seg := range segments {
 				logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())

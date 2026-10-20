@@ -171,6 +171,56 @@ func TestReplicator_RejectsInvalidComponent(t *testing.T) {
 	require.ErrorContains(t, err, "invalid replicator component")
 }
 
+func TestReplicator_LifecycleRetry(t *testing.T) {
+	metrics.PipelineSegmentDurationSeconds.Reset()
+	metrics.PipelineSegmentRetriesTotal.Reset()
+	t.Cleanup(metrics.PipelineSegmentDurationSeconds.Reset)
+	t.Cleanup(metrics.PipelineSegmentRetriesTotal.Reset)
+	status := http.StatusLocked
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(status)
+	}))
+	defer server.Close()
+	rep, err := NewReplicator(ReplicatorOpts{
+		Component: "ingestor", Hostname: "sender", DisableGzip: true,
+		Partitioner: &fakePartitioner{owner: "receiver", addr: server.URL},
+		Health:      &fakeHealthChecker{healthy: true},
+	})
+	require.NoError(t, err)
+	r := rep.(*replicator)
+	t.Cleanup(r.cli.httpClient.CloseIdleConnections)
+	batch := newTransferMetricsBatch(t)
+	batch.Database, batch.Table = "DB", "Table"
+	now := time.Now()
+	batch.Segments[0].Timing = wal.NewSegmentTiming(batch.Segments[0].CreatedAt, now, false)
+	batch.queuedAt = now
+	r.transfer(context.Background(), batch)
+	require.False(t, batch.IsRemoved())
+	// Rebatching copies SegmentInfo, including the shared timing history.
+	second := &Batch{
+		Database: batch.Database, Table: batch.Table, Segments: append([]wal.SegmentInfo(nil), batch.Segments...),
+		batcher: &fakeBatcher{}, queuedAt: time.Now(),
+	}
+	status = http.StatusAccepted
+	r.transfer(context.Background(), second)
+	require.True(t, second.IsRemoved())
+	var metric dto.Metric
+	var sum float64
+	for _, step := range []string{"wal_buffer", "batch_wait", "retry_wait", "worker_queue", "processing", "total"} {
+		h := metrics.PipelineSegmentDurationSeconds.WithLabelValues("ingestor", step, "DB", "Table", "peer")
+		require.NoError(t, h.(prometheus.Metric).Write(&metric))
+		require.EqualValues(t, 1, metric.GetHistogram().GetSampleCount(), step)
+		if step == "total" {
+			require.InDelta(t, sum, metric.GetHistogram().GetSampleSum(), 1e-9)
+		} else {
+			sum += metric.GetHistogram().GetSampleSum()
+		}
+	}
+	require.NoError(t, metrics.PipelineSegmentRetriesTotal.WithLabelValues("ingestor", "DB", "Table", "peer").Write(&metric))
+	require.Equal(t, float64(1), metric.GetCounter().GetValue())
+}
+
 func newTransferMetricsBatch(t *testing.T) *Batch {
 	t.Helper()
 	seg, err := wal.NewSegment(t.TempDir(), "DB_Table")
