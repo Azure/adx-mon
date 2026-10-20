@@ -25,7 +25,11 @@ ingestor --enforce-table-limits
 ```
 
 Global `max-disk-usage` and `max-segment-count` are always enforced, including
-in observe-only mode.
+in observe-only mode, as are the ingestor's `--max-intake-memory` ceiling and
+the disk reserved for realtime tables: queued tables still stop at
+`max-disk-usage` minus the realtime reservation. In observe-only mode a
+transfer larger than its table budget is imported, never rejected as
+oversized.
 
 ### Rollout
 
@@ -75,9 +79,16 @@ ingestor \
   --table-limit='{"database":"Logs","table":"Application","max-bytes":2147483648,"max-segments":2000}'
 ```
 
-Repeat `--table-limit` for additional overrides. `--max-intake-memory` bounds the
-bytes buffered across concurrent transfer requests; disk budgets alone do not
-protect process memory. Other required ingestor flags are omitted above.
+Repeat `--table-limit` for additional overrides. Other required ingestor flags
+are omitted above.
+
+`--max-intake-memory` (default 1 GiB) bounds the bytes buffered across
+concurrent transfer requests; disk budgets alone do not protect process memory.
+Each transfer is charged for the bytes it actually buffers, and a request that
+would exceed the ceiling gets a retryable `429` while the sender keeps its WAL
+files. The ceiling must be at least `--max-transfer-size`, or a full-size
+transfer could never be admitted; the ingestor refuses to start otherwise. See
+[Upgrading](#upgrading) for sizing.
 
 ## Shedding and recovery
 
@@ -97,7 +108,8 @@ When a table exceeds a quota, unrelated destinations continue being processed:
   `X-Adxmon-Overload-Scope: table`. The sender retains its WAL files and backs
   off that table for that peer. Legacy or unrecognized `429` responses remain
   peer-scoped.
-* A transfer larger than the destination's entire budget returns `413` with
+* With enforcement on, a transfer larger than the destination's entire budget
+  returns `413` with
   `X-Adxmon-Max-Transfer-Bytes`. The sender splits the batch and retries the
   halves. A single segment that still does not fit cannot be split or drained,
   so it is **dropped and logged**, and counted by
@@ -158,6 +170,50 @@ quota-shedding logs are limited to one message per table per minute.
 
 Per-table gauges disappear once a destination's backlog drains, bounding metric
 label lifetime. Cumulative counters persist.
+
+Intake memory is exported per `component`:
+
+| Metric | Meaning |
+|---|---|
+| `adxmon_intake_memory_bytes` | Bytes buffered by in-flight transfer requests |
+| `adxmon_intake_memory_limit_bytes` | `--max-intake-memory`; zero when disabled |
+
+Usage is measured even with the ceiling disabled, so it can be sized before it
+is enabled.
+
+## Upgrading
+
+Table budgets need no migration: they start in observe-only mode and shed
+nothing until enforcement is enabled. The intake memory ceiling is different. It
+is **enforced by default** on the ingestor at 1 GiB, and earlier releases had no
+ceiling.
+
+The ceiling bounds memory, not disk. It counts the transfer bodies an ingestor
+is buffering at one moment, which is unrelated to the disk backlog that table
+budgets and `--max-disk-usage` bound. Reaching it does not lose data: the
+ingestor returns a retryable `429` and the sending peer keeps its segments and
+retries. Hitting it persistently does delay delivery and grow sender backlogs.
+
+Check the defaults against your peak concurrency before upgrading. A peer
+transfers batches smaller than `--max-transfer-size` (100 MiB by default), and
+each peer sends up to `--max-transfer-concurrency` requests at once (50 by
+default), so a single peer alone could have about 5 GiB in flight toward one
+ingestor, and several peers can target the same ingestor. With the defaults,
+roughly ten near-full-size transfers in flight at once reach the 1 GiB ceiling.
+To size it:
+
+1. Estimate the average transfer size as
+   `rate(adxmon_ingestor_requests_received_bytes_total[5m])` divided by the
+   rate of `/transfer` requests in `adxmon_ingestor_requests_received_total`.
+2. After upgrading, watch `adxmon_intake_memory_bytes` against
+   `adxmon_intake_memory_limit_bytes`, and `429` responses in
+   `adxmon_ingestor_requests_received_total`.
+3. If usage stays near the limit, raise `--max-intake-memory` within the
+   ingestor's memory limit, or lower `--max-transfer-size`. Setting it to `0`
+   restores the previous unbounded behaviour.
+
+`--max-intake-memory` must be at least `--max-transfer-size`; an ingestor
+configured below that refuses to start.
 
 ## End-to-end verification
 
