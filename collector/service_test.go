@@ -11,11 +11,13 @@ import (
 	"testing"
 	"time"
 
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/otlp"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
 	connect "github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
@@ -751,4 +753,42 @@ func TestService_RealtimeTablesAreTransferredPromptly(t *testing.T) {
 	defer mu.Unlock()
 	require.Len(t, transfers, 1)
 	require.True(t, strings.HasPrefix(transfers[0], "Logs_Realtime_"), transfers[0])
+}
+
+// Admission replaces the store's disk checks, so the collector must give it the
+// realtime reservation or queued backlog can fill the reserved space.
+func TestService_AdmissionPreservesRealtimeDiskReservation(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
+	require.NoError(t, err)
+
+	const (
+		maxDiskUsage = 64 * 1024
+		reserved     = 32 * 1024
+	)
+	s, err := NewService(&ServiceOpts{
+		StorageDir:     t.TempDir(),
+		StorageBackend: storage.BackendADX,
+		ListenAddr:     "127.0.0.1:0",
+		Endpoint:       "https://127.0.0.1:1",
+		MaxSegmentSize: 1024,
+		MaxDiskUsage:   maxDiskUsage,
+		Realtime:       &RealtimeOpts{Policy: policy, ReservedDiskBytes: reserved},
+	})
+	require.NoError(t, err)
+	store := s.store.(*storage.LocalStore)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, store.Open(ctx))
+	defer store.Close()
+
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{
+		Value: &commonv1.AnyValue_StringValue{StringValue: strings.Repeat("a", 512)},
+	}}}}
+	var queuedErr error
+	for i := 0; i < 10000 && queuedErr == nil; i++ {
+		queuedErr = store.WriteOTLPLogs(ctx, "Logs", "Queued", logs)
+	}
+	require.ErrorIs(t, queuedErr, wal.ErrMaxDiskUsageExceeded)
+	require.LessOrEqual(t, store.Size(), int64(maxDiskUsage-reserved))
+	require.NoError(t, store.WriteOTLPLogs(ctx, "Logs", "Realtime", logs))
 }

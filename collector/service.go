@@ -321,6 +321,12 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.Realtime.enabled() {
+		// Admission replaces the repository's disk checks, so it must also
+		// hold back the space reserved for realtime tables.
+		budgetOpts.Policy = opts.Realtime.Policy
+		budgetOpts.RealtimeReservedBytes = opts.Realtime.ReservedDiskBytes
+	}
 
 	storeOpts := storage.StoreOpts{
 		StorageDir:       opts.StorageDir,
