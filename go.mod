@@ -26,7 +26,7 @@ require (
 	github.com/google/cel-go v0.31.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
-	github.com/klauspost/pgzip v1.2.7
+	github.com/klauspost/pgzip v1.3.0
 	github.com/libp2p/go-buffer-pool v0.1.0
 	github.com/lmittmann/tint v1.2.1
 	github.com/mattn/go-isatty v0.0.24
