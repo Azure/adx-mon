@@ -19,7 +19,7 @@ Authenticates via `azidentity.NewDefaultAzureCredential`. When both system-assig
 - **ADX Cluster/Database**: read/write (`Microsoft.Kusto/clusters/*`, `Microsoft.Kusto/clusters/databases/*`)
 - **Kusto Data Plane**: Execute management commands (`.show`, `.create table`, `.execute database script`, `.ingest inline`)
 
-For partition clusters, the managed identity specified in `federatedTargets[].managedIdentityClientId` needs ingest permissions on the hub's heartbeat database.
+For partition clusters, the identity used to write heartbeats needs ingest permissions on the hub's heartbeat database. Set `federatedTargets[].managedIdentityClientId` to select a user-assigned managed identity, or omit it to use the operator's `DefaultAzureCredential`.
 
 ### Networking
 All `endpoint` values must be resolvable and reachable (HTTPS) from the operator pod. Ensure outbound egress rules (Calico, NSGs, firewalls, Private Link) allow connections from the operator namespace to ADX endpoints.
@@ -69,7 +69,7 @@ Federation mode: `Partition` (local storage + heartbeat to hub) or `Federated` (
 
 ### `federation`
 **Partition clusters** need:
-- `federatedTargets[]`: each with `endpoint`, `heartbeatDatabase`, `heartbeatTable`, `managedIdentityClientId`
+- `federatedTargets[]`: each with required `endpoint`, `heartbeatDatabase`, and `heartbeatTable`; optional `managedIdentityClientId` (defaults to the operator's `DefaultAzureCredential`)
 - `partitioning`: free-form map (e.g., `{geo: EU, tenant: acme}`) sent in heartbeats. Common keys mirror operator labels such as `geo`, `tenant`, or `environment` so hubs can route traffic predictably.
 
 **Federated clusters** need:
@@ -87,7 +87,7 @@ Every 10min: enumerate local databases/tables/views → serialize with `partitio
 
 Heartbeat row (CSV): `Timestamp` (RFC3339), `ClusterEndpoint`, `Schema` (JSON array of `{database, tables[], views[]}`), `PartitionMetadata` (JSON of partitioning map).
 
-Authentication: `DefaultAzureCredential` for local cluster; switches to `managedIdentityClientId` for hub ingestion when both endpoint is HTTPS and identity specified.
+Authentication: `DefaultAzureCredential` for the local cluster and, when `managedIdentityClientId` is omitted, for hub ingestion. Switches to the specified user-assigned managed identity for hub ingestion when the endpoint is HTTPS and `managedIdentityClientId` is set.
 Failures to push heartbeats surface in the operator logs (`adxcluster-controller` logger) alongside the CRD name; reconcile once connectivity or permissions are restored.
 
 ### Federated Hubs  

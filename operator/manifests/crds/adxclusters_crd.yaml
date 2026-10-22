@@ -117,13 +117,14 @@ spec:
                           pattern: ^[a-zA-Z0-9_]+$
                           type: string
                         managedIdentityClientId:
-                          description: Used for writing logs to the federated cluster.
+                          description: |-
+                            ManagedIdentityClientId selects a user-assigned managed identity for writing heartbeats to the federated cluster.
+                            If omitted, the operator uses DefaultAzureCredential.
                           type: string
                       required:
                       - endpoint
                       - heartbeatDatabase
                       - heartbeatTable
-                      - managedIdentityClientId
                       type: object
                     type: array
                   heartbeatDatabase:

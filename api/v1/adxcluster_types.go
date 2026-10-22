@@ -97,9 +97,10 @@ type ADXClusterFederatedClusterSpec struct {
 	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
 	HeartbeatTable string `json:"heartbeatTable"`
 
-	//+kubebuilder:validation:Required
-	// Used for writing logs to the federated cluster.
-	ManagedIdentityClientId string `json:"managedIdentityClientId"`
+	//+kubebuilder:validation:Optional
+	// ManagedIdentityClientId selects a user-assigned managed identity for writing heartbeats to the federated cluster.
+	// If omitted, the operator uses DefaultAzureCredential.
+	ManagedIdentityClientId string `json:"managedIdentityClientId,omitempty"`
 }
 
 type ADXClusterProvisionSpec struct {
