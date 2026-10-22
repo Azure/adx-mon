@@ -133,6 +133,8 @@ Any ADX compatible visualization tool can be used to visualize collected telemet
 As part of the quick-start script, one can set up an Azure Managed Grafana (AMG) instance. After configuring ADX-Mon on the AKS cluster the script will prompt you about it, and you can provide the name of an existing Grafana instance you have access to or decide to create one.
 You will also be prompted about importing pre-built dashboards to monitor the AKS cluster.
 
+Before configuring data sources or importing dashboards, the script checks the Grafana API up to 30 times, waiting 30 seconds between attempts. This allows a newly provisioned instance to become available. Data-source creation and each dashboard import are retried up to three times, with 10 seconds between attempts. If retries are exhausted, the script reports the error and exits unsuccessfully rather than reporting a successful setup.
+
 > Note: The script tries to create the AMG instance in the same resource group as the ADX cluster. 
 
 Here's a glimpse of what comes as part of the pre-built dashboards:

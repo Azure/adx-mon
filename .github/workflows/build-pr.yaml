@@ -58,6 +58,9 @@ jobs:
           exit 1
         fi
 
+    - name: Test Grafana setup retries
+      run: bash build/scripts/test-grafana-setup.sh
+
     - name: Ensure k8s bundle is updated
       run: |
         make k8s-bundle
