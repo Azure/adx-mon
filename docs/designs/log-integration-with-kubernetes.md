@@ -2,7 +2,7 @@
 
 ## Summary
 
-Collector is designed to consume container logs based on annotations set on their containing pod (e.g. `adx-mon/scrape: true`, `adx-mon/log-database`, `adx-mon/log-table`). Collector is also intended to enrich logs from containers with the Kubernetes annotations and labels on a pod for use in transforms. This design attempts to hep reconciling the different states that can be observed from the Kubernetes Control Plane and the host while maintaining performance.
+Collector consumes container logs when the containing pod has an `adx-mon/log-destination: "Database:Table"` annotation or matches a configured static pod target. This is independent of the `adx-mon/scrape` annotation used for metrics. Collector also enriches logs from containers with the Kubernetes annotations and labels on a pod for use in transforms. This design attempts to help reconcile the different states that can be observed from the Kubernetes Control Plane and the host while maintaining performance.
 
 ## Problem definitions
 
@@ -46,7 +46,7 @@ Some concrete situations we are attempting to compensate for:
 ### Handling updates to pod metadata
 Pod annotations can be dynamically modified which can affect the attributes we expect to apply to logs, including the expected destination ADX database and table. It can also cause us to start scraping new container logs or to exclude containers from being scraped.
 
-We will immediately delete our container metadata and notify `TailSource` to remove a target when a container is made non-scrapable (e.g. the `adx-mon/scrape` annotation is removed or set to false), but the container still exists.
+When the log destination is removed or becomes invalid (and no static pod target supplies one), the container's log target is tombstoned. The tailer is removed after a grace period to allow remaining logs to flush. Changing `adx-mon/scrape` does not affect log collection.
 
 For changes in container metadata that are included in logs that do not change scrapability, we will send via a channel a new updated set of metadata that should be applied to logs from this container. This channel will be consumed asynchronously by the hot-loop within the tailing process to update its own local state. This avoids the need for mutexes in the hot path, but still allows the tailer to receive these changes in near real-time. This extends the actor metaphor for the tailer, where it consumes 3 types of messages within a single goroutine:
 

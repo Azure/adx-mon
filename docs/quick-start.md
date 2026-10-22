@@ -80,12 +80,11 @@ adx-mon/path: "/metrics"
 
 ### Logs
 
-ADX-Mon collector supports discovering logs from pods. To configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`.
+ADX-Mon collector supports discovering logs from pods. To enable log collection and configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`. You do not need `adx-mon/scrape` for logs; add it only if you also want to scrape the pod's metrics endpoints.
 
 By default, collector parses each log line as plaintext, but an optional list of log-parsers can be defined as a comma separated list. It currently supports json-formatted log lines in addition to plaintext.
 
 ```yaml
-adx-mon/scrape: "true"
 adx-mon/log-destination: "Logs:Collector"
 adx-mon/log-parsers: json
 ```
