@@ -105,6 +105,28 @@ Functions are created with `skipvalidation=true`, following [Microsoft guidance]
 
 Hubs auto-create databases discovered in heartbeats without mutating the CRD.
 
+### Heartbeat Schema Size Limit
+
+ADX limits ingested [`dynamic` values](https://learn.microsoft.com/en-us/kusto/query/scalar-data-types/dynamic) to **1 MiB uncompressed** by default. If the operator emits a heartbeat whose `Schema` value exceeds this limit, ADX stores `null` in that column rather than truncating the schema. The federated hub then cannot discover that partition's databases, tables, and views from the affected heartbeat.
+
+To allow schemas up to **32 MiB uncompressed**, apply a [ManagementCommand](crds.md#managementcommand) that changes the heartbeat table's `Schema` column encoding policy:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: heartbeat-schema-bigobject32
+  namespace: adx-mon
+spec:
+  database: "<your-heartbeat-database>"
+  body: |
+    .alter column <HeartbeatTable>.Schema policy encoding type='BigObject32'
+```
+
+Replace `<your-heartbeat-database>` and `<HeartbeatTable>` with the federated hub's configured `heartbeatDatabase` and `heartbeatTable`, and adjust the namespace for your deployment. The command must run against the hub cluster that stores the heartbeats, after the heartbeat table exists. The executing identity needs at least Table Admin permissions on that table.
+
+The [`BigObject32` encoding policy](https://learn.microsoft.com/en-us/kusto/management/alter-encoding-policy) disables indexing for the column and raises its value-size limit to 32 MiB; larger schemas still exceed the limit. This change applies to new ingestion and does not restore schema values already stored as `null`. After the next partition heartbeat, query the heartbeat table to confirm that `Schema` is populated.
+
 
 ## Examples
 The following snippets highlight common configurations and can be pasted directly into a manifest for quick starts.
@@ -217,6 +239,6 @@ spec:
 - **Provisioning failures**: Look for `ProvisioningInvalid` or Azure state (e.g., `Failed`) in conditions. Azure Activity Logs (Portal → Monitor → Activity Log) reveal authoritative ARM failures.
 - **Database issues**: Check operator logs; no dedicated condition for database creation failures. Most errors surface as reconciliation warnings with the database name.
 - **Federation debugging**: Query heartbeat table: `<heartbeatTable> | where Timestamp > ago(2h)` to confirm heartbeat freshness and partition metadata.
+- **Null heartbeat schemas**: If `Schema` is `null` for a partition with a large schema, see [Heartbeat Schema Size Limit](#heartbeat-schema-size-limit) for the column limit and encoding-policy workaround.
 - **Force requeue**: Update or annotate the CRD (`kubectl annotate --overwrite adxcluster/<name> adx-mon.azure.com/requeue=$(date +%s)`) to nudge a new reconciliation once prerequisites are fixed.
 - **Kusto errors**: Verify network connectivity, authentication, and required permissions, especially data-plane roles for managed identities listed in the CRD.
-

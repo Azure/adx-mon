@@ -477,6 +477,8 @@ The federated feature relies on a `heartbeat` table in the federated cluster to 
 | Schema             | dynamic   | Databases and tables present in the partition    |
 | PartitionMetadata  | dynamic   | Partitioning attributes (geo, location, etc.)    |
 
+ADX limits ingested `dynamic` values to 1 MiB uncompressed by default. Heartbeat `Schema` values exceeding this limit are stored as `null`, not truncated. See [Heartbeat Schema Size Limit](../adxcluster-controller.md#heartbeat-schema-size-limit) for a `ManagementCommand` example that raises the limit to 32 MiB with the `BigObject32` encoding policy.
+
 #### Field Explanations
 - **Timestamp**: The UTC time when the partition cluster emitted the heartbeat.
 - **ClusterEndpoint**: The fully qualified endpoint URL of the partition cluster.
