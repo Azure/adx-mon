@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -28,10 +29,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	klock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 var (
@@ -209,6 +212,7 @@ type TestStatementExecutor struct {
 	endpoint          string
 	stmts             []string
 	nextMgmtErr       error
+	nextMgmtErrs      []error
 	mockDataset       kustov1.Dataset
 	operationMockData map[string]*AsyncOperationStatus // Map operation ID to mock data
 	queriedOperations map[string]bool                  // Track which operations have been queried
@@ -306,6 +310,13 @@ func (t *TestStatementExecutor) Endpoint() string {
 
 func (t *TestStatementExecutor) Mgmt(ctx context.Context, stmt azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	t.stmts = append(t.stmts, stmt.String())
+	if len(t.nextMgmtErrs) > 0 {
+		err := t.nextMgmtErrs[0]
+		t.nextMgmtErrs = t.nextMgmtErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if t.nextMgmtErr != nil {
 		ret := t.nextMgmtErr
 		t.nextMgmtErr = nil
@@ -823,6 +834,191 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.Len(t, exec.stmts, 2)
 		require.Equal(t, v1.Success, store.funcs[0].Status.Status)
 	})
+}
+
+func TestFunctionThrottleBackoff(t *testing.T) {
+	backoff := functionThrottleBackoff()
+	require.Equal(t, 5, backoff.Steps)
+	for _, duration := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second} {
+		delay := backoff.Step()
+		require.GreaterOrEqual(t, delay, duration)
+		require.Less(t, delay, duration+duration/10)
+	}
+}
+
+func TestExecuteFunctionTargetThrottleDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	exec := &TestStatementExecutor{
+		database:    "db",
+		nextMgmtErr: kustoerrors.HTTP(kustoerrors.OpMgmt, "Too Many Requests", http.StatusTooManyRequests, io.NopCloser(strings.NewReader("")), ""),
+	}
+	result := executeFunctionTarget(ctx, ".create-or-alter function fn() { print 1 }", exec)
+	require.ErrorIs(t, result.err, context.DeadlineExceeded)
+	require.True(t, result.retryable)
+	require.Len(t, exec.stmts, 1)
+}
+
+func TestSyncFunctionsTaskHTTPFailures(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     int
+		body     string
+		failures int
+		attempts int
+		status   v1.FunctionStatusEnum
+	}{
+		{name: "HTTP throttle recovers", code: http.StatusTooManyRequests, body: `{"error":{"@permanent":true}}`, failures: 1, attempts: 2, status: v1.Success},
+		{name: "capacity throttle recovers", code: http.StatusBadRequest, body: `{"error":{"@message":"The control command was aborted due to throttling. Retrying after some backoff might succeed.","@permanent":true}}`, failures: 1, attempts: 2, status: v1.Success},
+		{name: "script wrapped throttle recovers", code: http.StatusBadRequest, body: `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create-or-alter function fn() { print 1 }'. Details: 'The control command was aborted due to throttling. Retrying after some backoff might succeed.'","@permanent":true}}`, failures: 1, attempts: 2, status: v1.Success},
+		{name: "exhausted throttling remains retryable", code: http.StatusTooManyRequests, body: `{"error":{"@permanent":true}}`, failures: 5, attempts: 5, status: v1.Failed},
+		{name: "server failure remains retryable", code: http.StatusServiceUnavailable, body: `{"error":{"@permanent":false}}`, failures: 1, attempts: 1, status: v1.Failed},
+		{name: "request timeout remains retryable", code: http.StatusRequestTimeout, failures: 1, attempts: 1, status: v1.Failed},
+		{name: "explicit transient bad request remains retryable", code: http.StatusBadRequest, body: `{"error":{"@message":"Transient management failure","@permanent":false}}`, failures: 1, attempts: 1, status: v1.Failed},
+		{name: "bad request without permanent flag is terminal", code: http.StatusBadRequest, body: `{"error":{"@message":"Invalid request"}}`, failures: 1, attempts: 1, status: v1.PermanentFailure},
+		{name: "bad request with malformed permanent flag is terminal", code: http.StatusBadRequest, body: `{"error":{"@permanent":"false"}}`, failures: 1, attempts: 1, status: v1.PermanentFailure},
+		{name: "syntax failure is permanent", code: http.StatusBadRequest, body: `{"error":{"@message":"Syntax error: SYN0002","@permanent":true}}`, failures: 1, attempts: 1, status: v1.PermanentFailure},
+		{name: "permission failure is permanent", code: http.StatusForbidden, failures: 1, attempts: 1, status: v1.PermanentFailure},
+		{name: "missing database is permanent", code: http.StatusNotFound, failures: 1, attempts: 1, status: v1.PermanentFailure},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fn := &v1.Function{
+				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+				Spec: v1.FunctionSpec{
+					Database: "db",
+					Body:     ".create-or-alter function fn() { print 1 }",
+				},
+			}
+			store := &TestFunctionStore{funcs: []*v1.Function{fn}, filterObserved: true}
+			exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
+			for range tt.failures {
+				exec.nextMgmtErrs = append(exec.nextMgmtErrs, kustoerrors.HTTP(kustoerrors.OpMgmt, http.StatusText(tt.code), tt.code, io.NopCloser(strings.NewReader(tt.body)), ""))
+			}
+			task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
+			start := time.Now()
+			require.NoError(t, task.Run(t.Context()))
+			require.Len(t, exec.stmts, tt.attempts)
+			require.Len(t, store.statusUpdates, 1)
+			fn = store.funcs[0]
+			require.Equal(t, tt.status, fn.Status.Status)
+			condition := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+			require.NotNil(t, condition)
+			if tt.status == v1.Failed {
+				require.Zero(t, fn.Status.ObservedGeneration)
+				require.Equal(t, "KustoExecutionRetrying", condition.Reason)
+				require.NotEmpty(t, fn.Status.Error)
+			} else {
+				require.Equal(t, fn.Generation, fn.Status.ObservedGeneration)
+			}
+			if tt.attempts > 1 {
+				require.GreaterOrEqual(t, time.Since(start), time.Second)
+			}
+			require.NoError(t, task.Run(t.Context()))
+			if tt.status == v1.Failed {
+				require.Len(t, exec.stmts, tt.attempts+1)
+				require.Equal(t, v1.Success, store.funcs[0].Status.Status)
+				require.Equal(t, fn.Generation, store.funcs[0].Status.ObservedGeneration)
+				require.Empty(t, store.funcs[0].Status.Error)
+			} else {
+				require.Len(t, exec.stmts, tt.attempts)
+			}
+		})
+	}
+}
+
+func TestSyncFunctionsTaskRecoversLegacyThrottling(t *testing.T) {
+	tests := []struct {
+		name   string
+		errors []error
+		final  v1.FunctionStatusEnum
+	}{
+		{name: "immediate recovery", final: v1.Success},
+		{
+			name: "transient failures before recovery",
+			errors: []error{
+				kustoerrors.HTTP(kustoerrors.OpMgmt, "Bad Request", http.StatusBadRequest, io.NopCloser(strings.NewReader(`{"error":{"@message":"Transient management failure","@permanent":false}}`)), ""),
+				kustoerrors.HTTP(kustoerrors.OpMgmt, "Service Unavailable", http.StatusServiceUnavailable, io.NopCloser(strings.NewReader("")), ""),
+			},
+			final: v1.Success,
+		},
+		{
+			name: "deterministic failure becomes terminal",
+			errors: []error{
+				kustoerrors.HTTP(kustoerrors.OpMgmt, "Bad Request", http.StatusBadRequest, io.NopCloser(strings.NewReader(`{"error":{"@message":"Syntax error: SYN0002","@permanent":true}}`)), ""),
+			},
+			final: v1.PermanentFailure,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1.AddToScheme(scheme))
+			fn := &v1.Function{
+				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+				Spec:       v1.FunctionSpec{Database: "db", Body: ".create-or-alter function fn() { print 1 }"},
+				Status: v1.FunctionStatus{
+					Status:             v1.PermanentFailure,
+					ObservedGeneration: 1,
+					Error:              "The control command was aborted due to throttling. Retrying after some backoff might succeed.",
+				},
+			}
+			fn.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", fn.Status.Error)
+			cli := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1.Function{}).WithObjects(fn).Build()
+			store := storage.NewFunctions(cli, nil)
+			exec := &TestStatementExecutor{database: "db", nextMgmtErrs: tt.errors}
+			attempts := len(tt.errors)
+			if tt.final == v1.Success {
+				attempts++
+			}
+			for i := range attempts {
+				// A fresh task also verifies recovery survives an ingestor restart.
+				task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
+				require.NoError(t, task.Run(t.Context()))
+				require.Len(t, exec.stmts, i+1)
+				actual := &v1.Function{}
+				require.NoError(t, cli.Get(t.Context(), client.ObjectKeyFromObject(fn), actual))
+				require.Equal(t, fn.Generation, actual.Generation)
+				require.Equal(t, fn.Spec, actual.Spec)
+				require.Equal(t, actual.Generation, actual.Status.ObservedGeneration)
+				if i+1 < attempts {
+					require.Equal(t, v1.Failed, actual.Status.Status)
+					require.Equal(t, "KustoExecutionRetrying", actual.GetCondition().Reason)
+				} else {
+					require.Equal(t, tt.final, actual.Status.Status)
+					if tt.final == v1.Success {
+						require.Empty(t, actual.Status.Error)
+						require.Equal(t, metav1.ConditionTrue, actual.GetCondition().Status)
+					}
+				}
+			}
+			require.NoError(t, NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil).Run(t.Context()))
+			require.Len(t, exec.stmts, attempts)
+		})
+	}
+}
+
+func TestSyncFunctionsTaskRetriesOnlyThrottledTarget(t *testing.T) {
+	store := &TestFunctionStore{funcs: []*v1.Function{{
+		ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+		Spec: v1.FunctionSpec{
+			AllDatabases: true,
+			Body:         ".create-or-alter function fn() { print 1 }",
+		},
+	}}}
+	healthy := &TestStatementExecutor{database: "metrics", endpoint: "https://cluster"}
+	throttled := &TestStatementExecutor{
+		database:    "logs",
+		endpoint:    "https://cluster",
+		nextMgmtErr: kustoerrors.HTTP(kustoerrors.OpMgmt, "Too Many Requests", http.StatusTooManyRequests, io.NopCloser(strings.NewReader("")), ""),
+	}
+	task := NewSyncFunctionsTask(store, []StatementExecutor{healthy, throttled}, nil)
+	require.NoError(t, task.Run(t.Context()))
+	require.Len(t, healthy.stmts, 1)
+	require.Len(t, throttled.stmts, 2)
+	require.Len(t, store.statusUpdates, 1)
+	require.Equal(t, v1.Success, store.funcs[0].Status.Status)
 }
 
 func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -156,6 +157,83 @@ func TestParseError(t *testing.T) {
 		require.Len(t, result, MaxErrorMessageLength)
 		require.Equal(t, exactMessage, result)
 	})
+}
+
+func TestIsExplicitlyTransientError(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "explicitly transient", body: `{"error":{"@permanent":false}}`, want: true},
+		{name: "explicitly permanent", body: `{"error":{"@permanent":true}}`},
+		{name: "absent flag", body: `{"error":{"@message":"Syntax error: SYN0002"}}`},
+		{name: "string flag", body: `{"error":{"@permanent":"false"}}`},
+		{name: "null flag", body: `{"error":{"@permanent":null}}`},
+		{name: "missing error", body: `{}`},
+		{name: "malformed JSON", body: `{"error":`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "Bad Request", http.StatusBadRequest, io.NopCloser(strings.NewReader(tt.body)), "")
+			require.Equal(t, tt.want, IsExplicitlyTransientError(fmt.Errorf("create function: %w", err)))
+		})
+	}
+	require.False(t, IsExplicitlyTransientError(nil))
+	require.False(t, IsExplicitlyTransientError(errors.New("temporary failure")))
+}
+
+func TestIsThrottlingMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "direct throttle", message: "The control command was aborted due to throttling. Retrying after some backoff might succeed.", want: true},
+		{name: "script throttle", message: "The command script was aborted. Command: '.create-or-alter function fn() { print 1 }'. Details: 'The control command was aborted due to throttling.'", want: true},
+		{name: "empty"},
+		{name: "syntax error", message: "Syntax error: SYN0002"},
+		{name: "permission error", message: "Access denied"},
+		{name: "missing database", message: "Database not found"},
+		{name: "signature in command only", message: "The command script was aborted. Command: '.create function fn() { print note=\"The control command was aborted due to throttling.\" }'. Details: 'Syntax error: SYN0002'"},
+		{name: "truncated script", message: "The command script was aborted. Command: '" + strings.Repeat("x", MaxErrorMessageLength)},
+		{name: "missing script prefix", message: "Command: 'fn'. Details: 'The control command was aborted due to throttling.'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := ParseError(errors.New(tt.message))
+			require.Equal(t, tt.want, IsThrottlingMessage(message))
+		})
+	}
+}
+
+func TestIsThrottlingError(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{name: "HTTP 429 without JSON", status: http.StatusTooManyRequests, body: "Too many requests", want: true},
+		{name: "HTTP 429 overrides permanent flag", status: http.StatusTooManyRequests, body: `{"error":{"@permanent":true}}`, want: true},
+		{name: "REST failure code", status: http.StatusBadRequest, body: `{"error":{"@failureCode":429,"@permanent":true}}`, want: true},
+		{name: "control command throttled", status: http.StatusBadRequest, body: `{"error":{"@message":"The control command was aborted due to throttling. Retrying after some backoff might succeed. CommandType: 'DatabaseScriptExecute', Capacity: 20, Origin: 'RequestRateLimitPolicy/WorkloadGroup/default'.","@permanent":true}}`, want: true},
+		{name: "script wraps throttling", status: http.StatusBadRequest, body: `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create-or-alter function fn() { print 1 }'. Details: 'The control command was aborted due to throttling. Retrying after some backoff might succeed.'","@permanent":true}}`, want: true},
+		{name: "syntax error", status: http.StatusBadRequest, body: `{"error":{"@message":"Syntax error: SYN0002","@permanent":true}}`},
+		{name: "permission denied", status: http.StatusForbidden, body: `{"error":{"@message":"Access denied","@permanent":true}}`},
+		{name: "database missing", status: http.StatusNotFound, body: `{"error":{"@message":"Database not found","@permanent":true}}`},
+		{name: "malformed JSON", status: http.StatusBadRequest, body: `{"error":`},
+		{name: "non-string message", status: http.StatusBadRequest, body: `{"error":{"@message":429}}`},
+		{name: "signature only in command", status: http.StatusBadRequest, body: `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted. Command: '.create function fn() { print note=\"The control command was aborted due to throttling.\" }'. Details: 'Syntax error: SYN0002'","@permanent":true}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, http.StatusText(tt.status), tt.status, io.NopCloser(strings.NewReader(tt.body)), "")
+			require.Equal(t, tt.want, IsThrottlingError(fmt.Errorf("create function: %w", err)))
+		})
+	}
+	require.False(t, IsThrottlingError(nil))
+	require.False(t, IsThrottlingError(errors.New("The control command was aborted due to throttling.")))
 }
 
 func TestIsMissingTableError(t *testing.T) {
