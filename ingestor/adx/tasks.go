@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,7 @@ import (
 	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/clock"
 )
 
@@ -315,9 +317,41 @@ func executeFunctionTarget(ctx context.Context, body string, target StatementExe
 	}
 
 	stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(body)
-	_, result.err = target.Mgmt(targetCtx, stmt)
-	result.retryable = targetCtx.Err() != nil || errors.Retry(result.err) || kustoutil.IsMissingTableError(result.err)
+	err := wait.ExponentialBackoffWithContext(targetCtx, functionThrottleBackoff(), func(ctx context.Context) (bool, error) {
+		_, result.err = target.Mgmt(ctx, stmt)
+		if kustoutil.IsThrottlingError(result.err) {
+			logger.Warnf("Throttled creating function on %s/%s; will retry with backoff: %v", result.endpoint, result.database, result.err)
+			return false, nil
+		}
+		return true, nil
+	})
+	// Keep the last Kusto error when attempts are exhausted so status retains the
+	// service's diagnostic rather than a generic backoff timeout.
+	if err != nil && !stderrors.Is(err, wait.ErrWaitTimeout) {
+		result.err = err
+	}
+	result.retryable = targetCtx.Err() != nil || isRetryableFunctionError(result.err)
 	return result
+}
+
+func functionThrottleBackoff() wait.Backoff {
+	return wait.Backoff{
+		Duration: time.Second,
+		Factor:   2,
+		Jitter:   0.1,
+		Steps:    5,
+	}
+}
+
+func isRetryableFunctionError(err error) bool {
+	if kustoutil.IsThrottlingError(err) || kustoutil.IsMissingTableError(err) || kustoutil.IsExplicitlyTransientError(err) {
+		return true
+	}
+	// The SDK's Retry helper does not unwrap HttpError to its embedded KustoError.
+	if httpErr, ok := stderrors.AsType[*errors.HttpError](err); ok {
+		return httpErr.StatusCode == http.StatusRequestTimeout || httpErr.StatusCode >= http.StatusInternalServerError
+	}
+	return errors.Retry(err)
 }
 
 func aggregateFunctionTargetResults(function *v1.Function, results []functionTargetResult) functionReconcileResult {

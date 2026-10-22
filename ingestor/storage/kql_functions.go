@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -254,7 +255,7 @@ func (f *functions) List(ctx context.Context, opts ListOptions) ([]*adxmonv1.Fun
 			fn.Status.Reason = "Function deleted"
 
 		} else if fn.GetGeneration() == fn.Status.ObservedGeneration {
-			if !opts.IncludeCriteriaMismatches || !criteriaNotMatched(&fn) {
+			if !retryableFunctionFailure(&fn) && (!opts.IncludeCriteriaMismatches || !criteriaNotMatched(&fn)) {
 				continue
 			}
 		} else {
@@ -270,6 +271,15 @@ func (f *functions) List(ctx context.Context, opts ListOptions) ([]*adxmonv1.Fun
 	}
 
 	return fns, nil
+}
+
+func retryableFunctionFailure(fn *adxmonv1.Function) bool {
+	if fn.Status.Status == adxmonv1.PermanentFailure {
+		return kustoutil.IsThrottlingMessage(fn.Status.Error)
+	}
+	// Recovered legacy failures may already have observed the current generation.
+	condition := fn.GetCondition()
+	return fn.Status.Status == adxmonv1.Failed && condition != nil && condition.Reason == "KustoExecutionRetrying"
 }
 
 func criteriaNotMatched(fn *adxmonv1.Function) bool {
