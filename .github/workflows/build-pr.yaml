@@ -65,3 +65,15 @@ jobs:
           echo "build/k8s/bundle.sh is not up to date. Please run 'make k8s-bundle' and commit the changes." >&2
           exit 1
         fi
+
+    - name: Ensure CRDs are updated
+      run: |
+        make generate-crd CMD=update
+        generated_paths=(api/v1 kustomize/bases operator/manifests/crds tools/crdgen/PROJECT)
+        generated_changes=$(git status --porcelain --untracked-files=all -- "${generated_paths[@]}")
+        if [ -n "$generated_changes" ]; then
+          git diff -- "${generated_paths[@]}"
+          printf '%s\n' "$generated_changes"
+          echo "Generated CRDs or deepcopy code are out of date. Please run 'make generate-crd CMD=update' and commit the changes." >&2
+          exit 1
+        fi
