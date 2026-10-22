@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/google/uuid"
 	"github.com/siderolabs/go-kmsg"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +58,7 @@ func TestKernelSource(t *testing.T) {
 	})
 	require.NoError(t, err)
 	source.reader = mockReader // inject mock reader
+	source.bootIDPath = testBootIDPath(t)
 
 	service := &logs.Service{
 		Source: source,
@@ -69,7 +71,7 @@ func TestKernelSource(t *testing.T) {
 
 	<-sink.DoneChan()
 
-	offset, err := readOffset(cursorFile)
+	offset, err := readOffset(cursorFile, uuid.MustParse(testBootID))
 	require.NoError(t, err)
 	require.Equal(t, uint64(numLogs), offset)
 }
@@ -82,7 +84,7 @@ func TestKernelSourceWithOffset(t *testing.T) {
 
 	// Simulate that we have already processed some logs
 	processed := uint64(5)
-	writeOffset(offsetFile, processed)
+	require.NoError(t, writeOffset(offsetFile, processed, uuid.MustParse(testBootID)))
 
 	// Create a channel that the mock reader will use
 	ch := make(chan kmsg.Packet)
@@ -121,6 +123,7 @@ func TestKernelSourceWithOffset(t *testing.T) {
 	})
 	require.NoError(t, err)
 	source.reader = mockReader // inject mock reader
+	source.bootIDPath = testBootIDPath(t)
 
 	service := &logs.Service{
 		Source: source,
@@ -138,7 +141,7 @@ func TestKernelSourceWithOffset(t *testing.T) {
 	// the final offset written to be `processed * 2`.
 	<-sink.DoneChan()
 
-	offset, err := readOffset(offsetFile)
+	offset, err := readOffset(offsetFile, uuid.MustParse(testBootID))
 	require.NoError(t, err)
 	require.Equal(t, uint64(numLogs), offset)
 }
@@ -207,6 +210,7 @@ func TestKernelSourceWithMultipleTargets(t *testing.T) {
 	})
 	require.NoError(t, err)
 	source.reader = mockReader // inject mock reader
+	source.bootIDPath = testBootIDPath(t)
 
 	service := &logs.Service{
 		Source: source,
@@ -219,7 +223,7 @@ func TestKernelSourceWithMultipleTargets(t *testing.T) {
 
 	<-sink.DoneChan()
 
-	offset, err := readOffset(filepath.Join(testDir, SafeFilename("DB", "B")))
+	offset, err := readOffset(filepath.Join(testDir, SafeFilename("DB", "B")), uuid.MustParse(testBootID))
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), offset)
 }
@@ -245,6 +249,7 @@ func BenchmarkKernelSource(b *testing.B) {
 		},
 	})
 	source.reader = mockReader
+	source.bootIDPath = testBootIDPath(b)
 
 	service := &logs.Service{
 		Source: source,
