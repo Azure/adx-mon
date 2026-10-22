@@ -8,6 +8,12 @@ If you want to mutate an existing CRD, you can run the command
 
 `make generate-crd CMD=update` from the root directory
 
+Commit all resulting changes, including the manifests in `kustomize/bases/` and
+`operator/manifests/crds/`, `api/v1/zz_generated.deepcopy.go`, and `tools/crdgen/PROJECT`.
+The Go workflow regenerates these files on pull requests, pushes to `main`, and
+merge queue runs. Its "Ensure CRDs are updated" step fails if regeneration modifies
+tracked files or creates untracked files in the generated output locations.
+
 # Create a new CRD
 
 Run the command `make generate-crd CRD=MY_CRD CMD=create` from the root directory
