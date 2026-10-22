@@ -36,7 +36,7 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.72.1
-	github.com/shopspring/decimal v1.5.0
+	github.com/shopspring/decimal v1.6.0
 	github.com/siderolabs/go-kmsg v0.1.6
 	github.com/stretchr/testify v1.12.1
 	github.com/tenebris-tech/tail v1.0.5
