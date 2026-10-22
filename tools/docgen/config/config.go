@@ -604,7 +604,11 @@ func boolPtr(val bool) *bool {
 	return &val
 }
 
-var HostLogDescription = "The host log config configures file and journald log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.\n\n" +
+var HostLogDescription = "The host log config configures file, journald, and kernel log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.\n\n" +
+	"### Kernel Log Checkpoints\n\n" +
+	"`kernel-target` reads the kernel message buffer and stores acknowledged sequence numbers in `kernel_*` checkpoint files under `storage-dir`. Each checkpoint includes the host boot ID from `/proc/sys/kernel/random/boot_id`. Collector restarts within the same boot resume after the acknowledged sequence; after a node reboot, the old checkpoint is ignored and collection starts from the oldest message still retained in the kernel buffer. The boot ID must be readable when checkpointing is enabled; otherwise the kernel source fails to start.\n\n" +
+	"On upgrade, legacy checkpoints containing only a sequence number are ignored because their boot cannot be identified. This can replay messages still in the kernel buffer until a new boot-aware checkpoint is acknowledged. Invalid checkpoints are also ignored with a warning, favoring replay over silently losing logs.\n\n" +
+	"On hosts using journald, a `journal-target` with `matches = [\"_TRANSPORT=kernel\"]` is an alternative to `kernel-target`. Add `journal-fields = [\"PRIORITY\"]` to retain priority as a resource field without filtering entries. This includes debug messages unless additional matches exclude them, whereas a kernel target with `priority = \"info\"` excludes debug messages.\n\n" +
 	"### Log Transforms\n\n" +
 	"Transforms are applied sequentially to log lines collected from host log sources. They are configured in the `transforms` array of a `[[host-log]]` block. Each transform has a `name` and an optional `config` map.\n\n" +
 	"Available transform types:\n\n" +
