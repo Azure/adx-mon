@@ -39,6 +39,41 @@ spec:
           spec:
             description: SummaryRuleSpec defines the desired state of SummaryRule
             properties:
+              backfill:
+                description: |-
+                  Backfill optionally specifies a historical time range to process. The controller will
+                  generate interval-sized windows from StartTime to EndTime and submit them as low-priority
+                  async operations, independent of the normal scheduling cursor.
+                properties:
+                  endTime:
+                    description: EndTime is the exclusive end of the historical range
+                      to backfill.
+                    format: date-time
+                    type: string
+                  maxInFlight:
+                    description: |-
+                      MaxInFlight limits the number of concurrent async operations for backfill windows.
+                      Defaults to 1 if unset or zero, keeping backfill as a low-priority background task.
+                      Values greater than 20 are rejected to keep historical processing throttled.
+                    maximum: 20
+                    minimum: 0
+                    type: integer
+                  requestId:
+                    description: |-
+                      RequestID is a user-chosen identifier for this backfill request. The same RequestID
+                      resumes an in-progress backfill; a new RequestID starts a fresh backfill.
+                    minLength: 1
+                    type: string
+                  startTime:
+                    description: StartTime is the inclusive start of the historical
+                      range to backfill.
+                    format: date-time
+                    type: string
+                required:
+                - endTime
+                - requestId
+                - startTime
+                type: object
               body:
                 description: Body is the KQL body of the function
                 type: string
@@ -100,39 +135,6 @@ spec:
               table:
                 description: Table is rule output destination
                 type: string
-              backfill:
-                description: Backfill optionally specifies a historical time range to
-                  process.
-                type: object
-                properties:
-                  requestId:
-                    description: RequestID is a user-chosen identifier for this backfill
-                      request. The same RequestID resumes an in-progress backfill; a
-                      new RequestID starts a fresh backfill.
-                    minLength: 1
-                    type: string
-                  startTime:
-                    description: StartTime is the inclusive start of the historical
-                      range to backfill.
-                    format: date-time
-                    type: string
-                  endTime:
-                    description: EndTime is the exclusive end of the historical range
-                      to backfill.
-                    format: date-time
-                    type: string
-                  maxInFlight:
-                    description: MaxInFlight limits the number of concurrent async
-                      operations for backfill windows. Defaults to 1 if unset or zero.
-                      Values greater than 20 are rejected to keep historical processing
-                      throttled.
-                    maximum: 20
-                    type: integer
-                    minimum: 0
-                required:
-                - requestId
-                - startTime
-                - endTime
             required:
             - body
             - database
@@ -142,6 +144,73 @@ spec:
           status:
             description: SummaryRuleStatus defines the observed state of Function
             properties:
+              backfill:
+                description: Backfill tracks the progress of a user-requested historical
+                  backfill.
+                properties:
+                  activeOperations:
+                    description: ActiveOperations are the currently in-flight async
+                      operations for this backfill.
+                    items:
+                      description: BackfillOperation tracks a single in-flight backfill
+                        async operation.
+                      properties:
+                        endTime:
+                          type: string
+                        operationId:
+                          type: string
+                        startTime:
+                          type: string
+                      required:
+                      - endTime
+                      - startTime
+                      type: object
+                    type: array
+                  completedWindows:
+                    description: CompletedWindows is the number of windows that completed
+                      successfully.
+                    type: integer
+                  message:
+                    description: Message provides human-readable detail about the
+                      current phase.
+                    type: string
+                  nextWindowStart:
+                    description: NextWindowStart is the start time of the next window
+                      to be submitted.
+                    format: date-time
+                    type: string
+                  observedGeneration:
+                    description: |-
+                      ObservedGeneration is the spec generation when this backfill was started.
+                      If the spec generation changes, the backfill is failed.
+                    format: int64
+                    type: integer
+                  phase:
+                    description: Phase is the current lifecycle phase of the backfill.
+                    type: string
+                  requestId:
+                    description: RequestID mirrors the spec.backfill.requestId that
+                      this status corresponds to.
+                    type: string
+                  retriedWindows:
+                    description: |-
+                      RetriedWindows counts how many times a window operation failed and was
+                      re-queued for retry. This is an observability counter; failed windows are
+                      never permanently skipped.
+                    type: integer
+                  submittedWindows:
+                    description: SubmittedWindows is the total number of successful
+                      submissions (including retries).
+                    type: integer
+                required:
+                - completedWindows
+                - nextWindowStart
+                - observedGeneration
+                - phase
+                - requestId
+                - retriedWindows
+                - submittedWindows
+                type: object
               conditions:
                 description: |-
                   Conditions is an array of current observed SummaryRule conditions.
@@ -202,45 +271,6 @@ spec:
                   - type
                   type: object
                 type: array
-              backfill:
-                description: Backfill tracks the progress of a user-requested historical
-                  backfill.
-                type: object
-                properties:
-                  requestId:
-                    type: string
-                  phase:
-                    type: string
-                    enum:
-                    - Pending
-                    - Running
-                    - Completed
-                    - Failed
-                  observedGeneration:
-                    type: integer
-                    format: int64
-                  nextWindowStart:
-                    type: string
-                    format: date-time
-                  submittedWindows:
-                    type: integer
-                  completedWindows:
-                    type: integer
-                  retriedWindows:
-                    type: integer
-                  activeOperations:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        operationId:
-                          type: string
-                        startTime:
-                          type: string
-                        endTime:
-                          type: string
-                  message:
-                    type: string
             type: object
         type: object
     served: true
