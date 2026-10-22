@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,6 +112,55 @@ func TestFunctionsListIncludesCriteriaMismatchesWhenRequested(t *testing.T) {
 	functions, err = store.List(ctx, ListOptions{})
 	require.NoError(t, err)
 	require.Empty(t, functions)
+}
+
+func TestFunctionsListRetriesThrottledFailures(t *testing.T) {
+	throttle := "The control command was aborted due to throttling. Retrying after some backoff might succeed."
+	tests := []struct {
+		name      string
+		status    adxmonv1.FunctionStatusEnum
+		message   string
+		reason    string
+		suspended bool
+		want      bool
+	}{
+		{name: "legacy throttle", status: adxmonv1.PermanentFailure, message: throttle, want: true},
+		{name: "legacy script throttle", status: adxmonv1.PermanentFailure, message: "The command script was aborted. Command: 'fn'. Details: '" + throttle + "'", want: true},
+		{name: "subsequent transient failure", status: adxmonv1.Failed, message: "Service unavailable", reason: "KustoExecutionRetrying", want: true},
+		{name: "syntax error", status: adxmonv1.PermanentFailure, message: "Syntax error: SYN0002"},
+		{name: "permission error", status: adxmonv1.PermanentFailure, message: "Access denied"},
+		{name: "missing database", status: adxmonv1.PermanentFailure, message: "Database not found"},
+		{name: "ambiguous truncated script", status: adxmonv1.PermanentFailure, message: ("The command script was aborted. Command: '" + strings.Repeat("x", kustoutil.MaxErrorMessageLength))[:kustoutil.MaxErrorMessageLength]},
+		{name: "suspended throttle", status: adxmonv1.PermanentFailure, message: throttle, suspended: true},
+		{name: "successful function", status: adxmonv1.Success},
+		{name: "criteria mismatch", status: adxmonv1.Failed, reason: adxmonv1.ReasonCriteriaNotMatched},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, adxmonv1.AddToScheme(scheme))
+			fn := &adxmonv1.Function{
+				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+				Spec:       adxmonv1.FunctionSpec{Suspend: new(tt.suspended)},
+				Status: adxmonv1.FunctionStatus{
+					Status:             tt.status,
+					Error:              tt.message,
+					ObservedGeneration: 1,
+				},
+			}
+			if tt.reason != "" {
+				fn.SetReconcileCondition(metav1.ConditionFalse, tt.reason, tt.message)
+			}
+			store := NewFunctions(fake.NewClientBuilder().WithScheme(scheme).WithObjects(fn).Build(), nil)
+			functions, err := store.List(t.Context(), ListOptions{})
+			require.NoError(t, err)
+			if tt.want {
+				require.Len(t, functions, 1)
+			} else {
+				require.Empty(t, functions)
+			}
+		})
+	}
 }
 
 func functionNames(functions []*adxmonv1.Function) []string {
