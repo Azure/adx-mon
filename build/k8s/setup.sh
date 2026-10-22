@@ -136,7 +136,7 @@ else
 fi
 
 # Find the managed identity client ID attached to the AKS node pools
-NODE_POOL_IDENTITY=$(az aks show --resource-group $AKS_RG --name $AKS_CLUSTER --query identityProfile.kubeletidentity.clientId -o json | jq . -r)
+NODE_POOL_IDENTITY=$(az aks show --subscription $AKS_SUB --resource-group $AKS_RG --name $AKS_CLUSTER --query identityProfile.kubeletidentity.clientId -o json | jq . -r)
 
 if interactive; then
   echo
@@ -279,6 +279,8 @@ elif [[ "$SETUP_GRAFANA" == "true" ]]; then
 fi
 
 if [[ "$CONFIRM" == "y" ]]; then
+    source "$SCRIPT_DIR/grafana.sh"
+
     if ! az extension show --name amg &> /dev/null; then
         if interactive; then
           read -p "The 'amg' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
@@ -312,32 +314,6 @@ if [[ "$CONFIRM" == "y" ]]; then
           # Create Azure Managed Grafana
           echo "The $GRAFANA instance does not exist. Creating it in $GRAFANA_RG resource group."
           az grafana create --name "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription $GRAFANA_SUB
-          
-          # Wait for Grafana instance to be fully provisioned and ready
-          echo "Waiting for Grafana instance to be ready..."
-          GRAFANA_READY=false
-          WAIT_ATTEMPTS=0
-          MAX_WAIT_ATTEMPTS=30  # 15 minutes max wait time
-          
-          while [[ "$GRAFANA_READY" != "true" && $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]]; do
-            GRAFANA_INFO=$(az grafana show --name "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription $GRAFANA_SUB -o json 2>/dev/null || echo "{}")
-            PROVISIONING_STATE=$(echo $GRAFANA_INFO | jq -r '.properties.provisioningState // "Unknown"')
-            ENDPOINT=$(echo $GRAFANA_INFO | jq -r '.properties.endpoint // ""')
-            
-            if [[ "$PROVISIONING_STATE" == "Succeeded" && -n "$ENDPOINT" && "$ENDPOINT" != "null" ]]; then
-              GRAFANA_READY=true
-              echo "Grafana instance is ready (provisioning state: $PROVISIONING_STATE)"
-            else
-              echo "Grafana instance not ready yet (provisioning state: $PROVISIONING_STATE). Waiting 30 seconds..."
-              sleep 30
-              ((WAIT_ATTEMPTS++))
-            fi
-          done
-          
-          if [[ "$GRAFANA_READY" != "true" ]]; then
-            echo "Warning: Grafana instance may not be fully ready after waiting. Proceeding anyway..."
-          fi
-          
           GRAFANA_INFO=$(az grafana show --name "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription $GRAFANA_SUB -o json)
           GRAFANA_ENDPOINT=$(echo $GRAFANA_INFO | jq -r '.properties.endpoint')
         else
@@ -371,17 +347,23 @@ if [[ "$CONFIRM" == "y" ]]; then
         fi
     fi
 
+    # Provisioning completion does not guarantee that Grafana's data-plane API is ready.
+    echo "Waiting for Grafana API to be ready..."
+    retry_grafana_command "Waiting for Grafana API" 30 30 \
+        az grafana data-source list -n "$GRAFANA" -g "$GRAFANA_RG" --subscription "$GRAFANA_SUB" -o none
+
     # Grant the grafana MSI as a reader/viewer on the kusto cluster
-    GRAFANA_IDENTITY=$(az grafana show -n "$GRAFANA" -g "$GRAFANA_RG" --query identity.principalId -o json | jq -r .)
+    GRAFANA_IDENTITY=$(az grafana show -n "$GRAFANA" -g "$GRAFANA_RG" --subscription "$GRAFANA_SUB" --query identity.principalId -o json | jq -r .)
     az kusto database add-principal --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name Metrics --value role=Viewer name=AzureManagedGrafana type=app app-id=$GRAFANA_IDENTITY
 
     # Ensure data source already doesn't exist
-    DATASOURCE_EXISTS=$(az grafana data-source show -n "$GRAFANA" -g "$GRAFANA_RG" --data-source $KUSTO_CLUSTER --query "name" -o json 2>/dev/null || echo "")
+    DATASOURCE_EXISTS=$(az grafana data-source show -n "$GRAFANA" -g "$GRAFANA_RG" --subscription "$GRAFANA_SUB" --data-source $KUSTO_CLUSTER --query "name" -o json 2>/dev/null || echo "")
      if [[ -z "$DATASOURCE_EXISTS" ]]; then
         # Add Kusto cluster as datasource
         echo "Adding Kusto $KUSTO_CLUSTER as data source to grafana"
           # Add the kusto cluster as a datasource in grafana
-          az grafana data-source create -n "$GRAFANA" -g "$GRAFANA_RG" --definition '{"name": "'$KUSTO_CLUSTER'","type": "grafana-azure-data-explorer-datasource","access": "proxy","jsonData": {"clusterUrl": "'$ADX_URL'"}}'
+          retry_grafana_command "Creating Grafana data source $KUSTO_CLUSTER" 3 10 \
+              az grafana data-source create -n "$GRAFANA" -g "$GRAFANA_RG" --subscription "$GRAFANA_SUB" --definition '{"name": "'$KUSTO_CLUSTER'","type": "grafana-azure-data-explorer-datasource","access": "proxy","jsonData": {"clusterUrl": "'$ADX_URL'"}}'
     else
         echo "The $GRAFANA instance already has a data-source $KUSTO_CLUSTER"
     fi
@@ -394,26 +376,56 @@ if [[ "$CONFIRM" == "y" ]]; then
     fi
 
     if [[ "$IMPORT_DASHBOARDS" == "y" ]]; then
-      echo "Importing dashboards to Grafana instance..."
-      for DASHBOARD in api-server cluster-info metrics-stats namespaces pods; do
-        echo "Importing dashboard: $DASHBOARD"
-        DASHBOARD_ATTEMPTS=0
-        DASHBOARD_SUCCESS=false
+      # Function to update dashboard with default template variable values
+      update_dashboard_defaults() {
+        local dashboard_file="$1"
+        local datasource_default="$2"
+        local cluster_default="$3"
+        local temp_file
+        temp_file=$(mktemp)
         
-        while [[ "$DASHBOARD_SUCCESS" != "true" && $DASHBOARD_ATTEMPTS -lt 3 ]]; do
-          if az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --definition @"$SCRIPT_DIR/dashboards/$DASHBOARD.json" --overwrite 2>/dev/null; then
-            DASHBOARD_SUCCESS=true
-            echo "Successfully imported dashboard: $DASHBOARD"
-          else
-            ((DASHBOARD_ATTEMPTS++))
-            if [[ $DASHBOARD_ATTEMPTS -lt 3 ]]; then
-              echo "Failed to import dashboard $DASHBOARD (attempt $DASHBOARD_ATTEMPTS/3). Retrying in 10 seconds..."
-              sleep 10
+        # Update the dashboard JSON with default values for Datasource and Cluster variables
+        if ! jq --arg datasource "$datasource_default" --arg cluster "$cluster_default" '
+          .templating.list |= map(
+            if .name == "Datasource" then
+              . + {
+                "current": {
+                  "selected": false,
+                  "text": $datasource,
+                  "value": $datasource
+                }
+              }
+            elif .name == "Cluster" then
+              . + {
+                "current": {
+                  "selected": false,
+                  "text": $cluster,
+                  "value": $cluster
+                }
+              }
             else
-              echo "Failed to import dashboard $DASHBOARD after 3 attempts. Skipping..."
-            fi
-          fi
-        done
+              .
+            end
+          )
+        ' "$dashboard_file" > "$temp_file"; then
+          echo "Failed to update dashboard defaults for $dashboard_file" >&2
+          rm -f "$temp_file"
+          return 1
+        fi
+        
+        echo "$temp_file"
+      }
+      
+      for DASHBOARD in api-server cluster-info metrics-stats namespaces pods; do
+         echo "Importing dashboard: $DASHBOARD with default datasource '$KUSTO_CLUSTER' and cluster '$AKS_CLUSTER'"
+         UPDATED_DASHBOARD=$(update_dashboard_defaults "$SCRIPT_DIR/dashboards/$DASHBOARD.json" "$KUSTO_CLUSTER" "$AKS_CLUSTER")
+         if retry_grafana_command "Importing Grafana dashboard $DASHBOARD" 3 10 \
+             az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription "$GRAFANA_SUB" --definition @"$UPDATED_DASHBOARD" --overwrite; then
+             rm -f "$UPDATED_DASHBOARD"
+         else
+             rm -f "$UPDATED_DASHBOARD"
+             exit 1
+         fi
       done
     else
         echo "No dashboards will be imported."

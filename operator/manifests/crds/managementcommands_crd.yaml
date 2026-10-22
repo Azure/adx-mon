@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.3
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: managementcommands.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
@@ -42,10 +42,37 @@ spec:
               body:
                 description: Body is the management command to execute
                 type: string
+              criteriaExpression:
+                description: |-
+                  CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+                  operator / ingestor cluster labels (region, environment, cloud, and any --cluster-labels key/value
+                  pairs). All labels are exposed as string variables. Example:
+
+                    criteriaExpression: "environment == 'prod' && region == 'eastus'"
+
+                  Semantics:
+                    * Empty / omitted expression => the ManagementCommand always executes when selected.
+                    * When specified, the expression must evaluate to true; false skips execution.
+                    * CEL parse, type-check, or evaluation errors surface via status and block execution until
+                      corrected.
+                type: string
               database:
                 description: |-
                   Database is the target database for a management command. Not all management commands
-                  are database specific.
+                  are database specific. When non-empty, this field takes precedence over Scope.
+                  Deprecated: For cluster-scoped commands, use Scope: Cluster instead of leaving empty.
+                type: string
+              scope:
+                description: |-
+                  Scope defines the execution scope of the management command.
+                  - "Database": Command targets the database specified in the Database field (requires Database)
+                  - "AllDatabases": Command is applied to all databases in the cluster
+                  - "Cluster": Command is cluster-scoped (e.g., cluster policies)
+                  When Database field is non-empty, it takes precedence over this field for backwards compatibility.
+                enum:
+                - Database
+                - AllDatabases
+                - Cluster
                 type: string
             required:
             - body

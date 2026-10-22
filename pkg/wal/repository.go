@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Repository is a collection of WALs.
@@ -23,25 +26,66 @@ type Repository struct {
 	index *Index
 
 	wals *partmap.Map[*WAL]
+
+	// scheduler rotates segments of all WALs in the repository.
+	scheduler *rotationScheduler
+
+	// Total size of all wals in the repository.  This is updated
+	// lazily in the background.
+	size int64
 }
 
 type RepositoryOpts struct {
-	StorageDir     string
-	SegmentMaxSize int64
-	SegmentMaxAge  time.Duration
+	StorageDir             string
+	SegmentMaxSize         int64
+	SegmentMaxAge          time.Duration
+	StartupOpenConcurrency int
 
 	MaxDiskUsage     int64
 	MaxSegmentCount  int
 	WALFlushInterval time.Duration
 	EnableWALFsync   bool
+
+	// Policy assigns an ingestion priority to each WAL prefix.  When nil, all WALs are queued.
+	Policy *ingestpolicy.Policy
+
+	// Realtime overrides the segment rotation settings for realtime WALs.
+	Realtime RotationPolicy
+
+	// RealtimeReservedDiskBytes is disk space reserved for realtime WALs.  Queued WALs reject writes once total disk
+	// usage reaches MaxDiskUsage minus this value.  It only applies when Policy has realtime tables and is less than
+	// MaxDiskUsage.
+	RealtimeReservedDiskBytes int64
+
+	// Admission owns per-destination capacity accounting for this repository.
+	Admission *Admission
+}
+
+// RotationPolicy overrides segment rotation settings.  Zero values inherit the repository settings.
+type RotationPolicy struct {
+	SegmentMaxAge    time.Duration
+	SegmentMaxSize   int64
+	WALFlushInterval time.Duration
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
-	return &Repository{
+	index := NewIndex()
+	index.Admission = opts.Admission
+	r := &Repository{
 		opts:  opts,
-		index: NewIndex(),
+		index: index,
 		wals:  partmap.NewMap[*WAL](64),
 	}
+	r.scheduler = newRotationScheduler(defaultRotationSweepInterval, r.sweepRotations)
+	return r
+}
+
+// sweepRotations rotates any WAL segments that require it.
+func (s *Repository) sweepRotations() {
+	_ = s.wals.Each(func(key string, value *WAL) error {
+		value.rotateSegmentIfNecessary()
+		return nil
+	})
 }
 
 func (s *Repository) Open(ctx context.Context) error {
@@ -66,6 +110,7 @@ func (s *Repository) Open(ctx context.Context) error {
 	}
 	defer dir.Close()
 
+	var walPaths []string
 	for {
 		entries, err := dir.ReadDir(100)
 		if err == io.EOF {
@@ -79,88 +124,149 @@ func (s *Repository) Open(ctx context.Context) error {
 			if d.IsDir() || filepath.Ext(path) != ".wal" {
 				continue
 			}
+			walPaths = append(walPaths, path)
+		}
+	}
 
-			// This block was added when we had an non-backwards compatible segment file change in the segment
-			// file format.  To simplify the migration, we just remove any segment files that are not in the
-			// expected format.  In the future, we will have a versioned segment file format to avoid this.
-			if !IsSegment(path) {
-				logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
-				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-					logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
-				}
-				continue
-			}
+	s.scheduler.Open(context.Background())
 
-			// Walk each segment on disk and Open it to trigger a repair if necessary.
-			var seg Segment
-			seg, err = Open(path)
-			if err != nil {
-				logger.Warnf("Failed to open segment file: %s %s", path, err.Error())
-			} else if err := seg.Close(); err != nil {
-				logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
-			}
+	if err := s.openStartupSegments(ctx, walPaths); err != nil {
+		return err
+	}
 
-			fileName := filepath.Base(path)
-			database, table, schema, epoch, err := ParseFilename(fileName)
-			if err != nil {
-				continue
-			}
+	go s.sampleWALs(ctx)
 
-			prefix := fmt.Sprintf("%s_%s", database, table)
-			if schema != "" {
-				prefix = fmt.Sprintf("%s_%s", prefix, schema)
-			}
+	return nil
+}
 
-			createdAt, err := flakeutil.ParseFlakeID(epoch)
-			if err != nil {
-				logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
-				continue
-			}
+func (s *Repository) openStartupSegments(ctx context.Context, walPaths []string) error {
+	if len(walPaths) == 0 {
+		return nil
+	}
 
-			fi, err := d.Info()
-			if err != nil {
-				logger.Warnf("Failed to get file info: %s %s", path, err.Error())
-				continue
-			}
-
-			// If the segment is only 8 bytes, that means only the segment magic header has been written and there
-			// is no data in the file.  We don't want to upload these to kusto so they can be removed.
-			if fi.Size() == 8 {
-				if logger.IsDebug() {
-					logger.Debugf("Removing empty segment: %s", path)
-				}
-				if err := os.Remove(path); err != nil {
-					logger.Warnf("Failed to remove empty segment: %s %s", path, err.Error())
-				}
-				continue
-			}
-
-			info := SegmentInfo{
-				Prefix:    prefix,
-				Ulid:      epoch,
-				Path:      path,
-				Size:      fi.Size(),
-				CreatedAt: createdAt,
-			}
-			s.index.Add(info)
-
-			_, ok := s.wals.Get(prefix)
-			if ok {
-				continue
-			}
-
-			wal, err := s.newWAL(ctx, prefix)
-			if err != nil {
+	workers := s.opts.StartupOpenConcurrency
+	if workers <= 1 {
+		for _, path := range walPaths {
+			if err := s.openStartupSegment(ctx, path); err != nil {
 				return err
 			}
-			s.wals.Set(prefix, wal)
 		}
+		return nil
+	}
+	if workers > len(walPaths) {
+		workers = len(walPaths)
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	jobs := make(chan string)
+
+	for i := 0; i < workers; i++ {
+		g.Go(func() error {
+			for path := range jobs {
+				if err := s.openStartupSegment(gctx, path); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+
+	g.Go(func() error {
+		defer close(jobs)
+		for _, path := range walPaths {
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			case jobs <- path:
+			}
+		}
+		return nil
+	})
+
+	return g.Wait()
+}
+
+func (s *Repository) openStartupSegment(ctx context.Context, path string) error {
+	// This block was added when we had an non-backwards compatible segment file change in the segment
+	// file format.  To simplify the migration, we just remove any segment files that are not in the
+	// expected format.  In the future, we will have a versioned segment file format to avoid this.
+	if !IsSegment(path) {
+		logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
+		}
+		return nil
+	}
+
+	// Walk each segment on disk and Open it to trigger a repair if necessary.
+	seg, err := Open(path)
+	if err != nil {
+		logger.Warnf("Failed to open segment file: %s %s", path, err.Error())
+	} else if err := seg.Close(); err != nil {
+		logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
+	}
+
+	fileName := filepath.Base(path)
+	database, table, schema, epoch, err := ParseFilename(fileName)
+	if err != nil {
+		return nil
+	}
+
+	prefix := fmt.Sprintf("%s_%s", database, table)
+	if schema != "" {
+		prefix = fmt.Sprintf("%s_%s", prefix, schema)
+	}
+
+	createdAt, err := flakeutil.ParseFlakeID(epoch)
+	if err != nil {
+		logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
+		return nil
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		logger.Warnf("Failed to get file info: %s %s", path, err.Error())
+		return nil
+	}
+
+	// If the segment is only 8 bytes, that means only the segment magic header has been written and there
+	// is no data in the file.  We don't want to upload these to kusto so they can be removed.
+	if fi.Size() == 8 {
+		if logger.IsDebug() {
+			logger.Debugf("Removing empty segment: %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			logger.Warnf("Failed to remove empty segment: %s %s", path, err.Error())
+		}
+		return nil
+	}
+
+	info := SegmentInfo{
+		Prefix:    prefix,
+		Ulid:      epoch,
+		Path:      path,
+		Size:      fi.Size(),
+		CreatedAt: createdAt,
+		Priority:  s.priority(prefix),
+	}
+	s.index.Add(info)
+	if d, err := DestinationFromPrefix(prefix); err == nil {
+		s.opts.Admission.Restore(path, d, fi.Size())
+	}
+
+	if _, err := s.wals.GetOrCreate(prefix, func() (*WAL, error) {
+		return s.newWAL(ctx, prefix)
+	}); err != nil {
+		return err
 	}
 
 	return nil
 }
 
 func (s *Repository) Close() error {
+	// Stop background rotations before closing WALs so segments are not rotated while shutting down.
+	s.scheduler.Close()
+
 	if err := s.wals.Each(func(key string, value *WAL) error {
 		wal := value
 		return wal.Close()
@@ -172,16 +278,7 @@ func (s *Repository) Close() error {
 }
 
 func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
-	walOpts := WALOpts{
-		Prefix:           prefix,
-		StorageDir:       s.opts.StorageDir,
-		SegmentMaxSize:   s.opts.SegmentMaxSize,
-		SegmentMaxAge:    s.opts.SegmentMaxAge,
-		MaxDiskUsage:     s.opts.MaxDiskUsage,
-		Index:            s.index,
-		WALFlushInterval: s.opts.WALFlushInterval,
-		EnableWALFsync:   s.opts.EnableWALFsync,
-	}
+	walOpts := s.walOpts(prefix)
 
 	wal, err := NewWAL(walOpts)
 	if err != nil {
@@ -193,6 +290,60 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	}
 
 	return wal, nil
+}
+
+// walOpts returns the options for the WAL with the given prefix based on its ingestion priority.
+func (s *Repository) walOpts(prefix string) WALOpts {
+	opts := WALOpts{
+		Prefix:           prefix,
+		StorageDir:       s.opts.StorageDir,
+		SegmentMaxSize:   s.opts.SegmentMaxSize,
+		SegmentMaxAge:    s.opts.SegmentMaxAge,
+		Index:            s.index,
+		WALFlushInterval: s.opts.WALFlushInterval,
+		EnableWALFsync:   s.opts.EnableWALFsync,
+		scheduler:        s.scheduler,
+		Admission:        s.opts.Admission,
+	}
+
+	opts.Priority = s.priority(prefix)
+	opts.MaxDiskUsage = s.MaxDiskUsage(opts.Priority)
+	if opts.Priority == ingestpolicy.PriorityRealtime {
+		rt := s.opts.Realtime
+		if rt.SegmentMaxAge > 0 {
+			opts.SegmentMaxAge = rt.SegmentMaxAge
+		}
+		if rt.SegmentMaxSize > 0 {
+			opts.SegmentMaxSize = rt.SegmentMaxSize
+		}
+		if rt.WALFlushInterval > 0 {
+			opts.WALFlushInterval = rt.WALFlushInterval
+		}
+	}
+	return opts
+}
+
+// MaxDiskUsage returns the total disk usage at which writes with the given priority are rejected.  Queued writes are
+// limited to MaxDiskUsage minus the realtime reservation so realtime writes can continue when queued data backs up.
+// A value of 0 means no limit.
+func (s *Repository) MaxDiskUsage(p ingestpolicy.Priority) int64 {
+	max, reserved := s.opts.MaxDiskUsage, s.opts.RealtimeReservedDiskBytes
+	if p == ingestpolicy.PriorityRealtime || max <= 0 || reserved <= 0 || reserved >= max || !s.opts.Policy.HasRealtime() {
+		return max
+	}
+	return max - reserved
+}
+
+// priority returns the ingestion priority of the WAL prefix.
+func (s *Repository) priority(prefix string) ingestpolicy.Priority {
+	if !s.opts.Policy.HasRealtime() {
+		return ingestpolicy.PriorityQueued
+	}
+	database, table, err := ParsePrefix(prefix)
+	if err != nil {
+		return ingestpolicy.PriorityQueued
+	}
+	return s.opts.Policy.Priority(database, table)
 }
 
 func (s *Repository) Get(ctx context.Context, key []byte) (*WAL, error) {
@@ -241,6 +392,8 @@ func (s *Repository) Index() *Index {
 	return s.index
 }
 
+func (s *Repository) Admission() *Admission { return s.opts.Admission }
+
 func (s *Repository) RemoveSegment(si SegmentInfo) {
 	s.index.Remove(si)
 }
@@ -268,4 +421,29 @@ func (s *Repository) WriteDebug(w io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(w, "\nWAL: Disk Usage: %d, Segments: %d\n", walsSize, count)
 	return tw.Flush()
+}
+
+func (s *Repository) sampleWALs(ctx context.Context) {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+
+		var sz int64
+		if err := s.wals.Each(func(key string, value *WAL) error {
+			sz += int64(value.Size())
+			return nil
+		}); err != nil {
+			logger.Errorf("Failed to sample WALs: %s", err.Error())
+		}
+		atomic.StoreInt64(&s.size, sz)
+	}
+}
+
+func (s *Repository) Size() int64 {
+	return atomic.LoadInt64(&s.size)
 }

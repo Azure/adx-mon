@@ -1,0 +1,9 @@
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY vendor ./vendor
+COPY tools/dev/azure-test-env/workload ./workload
+RUN CGO_ENABLED=0 go build -mod=vendor -o /workload ./workload
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /workload /workload
+ENTRYPOINT ["/workload"]

@@ -14,10 +14,12 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	ingestormetrics "github.com/Azure/adx-mon/ingestor/metrics"
 	ingestorstorage "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/debug"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/reader"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -51,14 +53,14 @@ type Service struct {
 	// database is a map of known DB names used for validating requests.
 	databases map[string]struct{}
 
-	uploader    adx.Uploader
+	uploader    Uploader
 	replicator  cluster.Replicator
 	coordinator cluster.Coordinator
 	batcher     cluster.Batcher
 	closeFn     context.CancelFunc
 
 	store   storage.Store
-	metrics metrics.Service
+	metrics ingestormetrics.Service
 
 	scheduler *scheduler.Periodic
 
@@ -68,7 +70,7 @@ type Service struct {
 
 type ServiceOpts struct {
 	StorageDir     string
-	Uploader       adx.Uploader
+	Uploader       Uploader
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
 
@@ -76,10 +78,10 @@ type ServiceOpts struct {
 	K8sCtrlCli client.Client
 
 	// MetricsKustoCli is the Kusto client connected to the metrics kusto cluster.
-	MetricsKustoCli []metrics.StatementExecutor
+	MetricsKustoCli []ingestormetrics.StatementExecutor
 
 	// LogsKustoCli is the Kusto client connected to the logs kusto cluster.
-	LogsKustoCli []metrics.StatementExecutor
+	LogsKustoCli []ingestormetrics.StatementExecutor
 
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
@@ -109,7 +111,15 @@ type ServiceOpts struct {
 	MaxSegmentCount int64
 
 	// MaxDiskUsage is the maximum disk usage allowed before signaling back-pressure.
-	MaxDiskUsage int64
+	MaxDiskUsage      int64
+	MaxTableDiskUsage int64
+	// MaxIntakeMemory bounds the bytes buffered across concurrent transfer
+	// requests. Zero disables the ceiling.
+	MaxIntakeMemory      int64
+	MaxTableSegmentCount int64
+	DisableTableLimits   bool
+	EnforceTableLimits   bool
+	TableLimits          []wal.TableLimit
 
 	// AllowedDatabases is the distinct set of database names that are allowed to be written to.
 	AllowedDatabase []string
@@ -127,6 +137,9 @@ type ServiceOpts struct {
 	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
 	MaxTransferConcurrency int
 
+	// ConcurrentUploads is the maximum number of concurrent uploads.
+	ConcurrentUploads int
+
 	// EnableWALFsync enables fsync of segments before closing the segment.
 	EnableWALFsync bool
 
@@ -141,22 +154,93 @@ type ServiceOpts struct {
 
 	// SlowRequestThreshold is the threshold for logging slow requests.
 	SlowRequestThreshold float64
+
+	ClusterLabels map[string]string
+
+	StorageBackend storage.Backend
+
+	// Realtime configures realtime ingestion.  When nil or without realtime tables, all tables are queued.
+	Realtime *RealtimeOpts
+
+	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.
+	QueuedReservedWorkersPercent int
+
+	// PeerListeners are called with the ingestor's peer count and rank when the service opens and when they change.
+	PeerListeners []func(cluster.PeerInfo)
+}
+
+// RealtimeOpts configures realtime ingestion in the ingestor.
+type RealtimeOpts struct {
+	// Policy assigns ingestion priorities to tables.
+	Policy *ingestpolicy.Policy
+
+	// MaxSegmentAge is the max age of realtime WAL segments before they are rotated.
+	MaxSegmentAge time.Duration
+
+	// MaxBatchLatency is the max time a closed realtime segment waits to be batched.
+	MaxBatchLatency time.Duration
+
+	// MaxBatchBytes is the max size of a realtime batch in WAL bytes.
+	MaxBatchBytes int64
+
+	// ReservedDiskBytes is disk space reserved for realtime segments.
+	ReservedDiskBytes int64
+}
+
+// enabled returns true if realtime tables are configured.
+func (o *RealtimeOpts) enabled() bool {
+	return o != nil && o.Policy.HasRealtime()
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
-	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     opts.StorageDir,
-		SegmentMaxSize: opts.MaxSegmentSize,
-		SegmentMaxAge:  opts.MaxSegmentAge,
-		EnableWALFsync: opts.EnableWALFsync,
-	})
+	if opts.StorageBackend == "" {
+		opts.StorageBackend = storage.BackendADX
+	}
+
+	budgetOpts, err := wal.ResolveAdmissionWithEnforcement(wal.Usage{Bytes: opts.MaxDiskUsage, Segments: opts.MaxSegmentCount}, opts.MaxTableDiskUsage, opts.MaxTableSegmentCount, opts.DisableTableLimits, opts.EnforceTableLimits, opts.TableLimits)
+	if err != nil {
+		return nil, err
+	}
+	// Transfers are buffered in full before admission, so a ceiling below the
+	// largest transfer would reject that transfer on every retry.
+	if opts.MaxIntakeMemory > 0 && opts.MaxTransferSize > opts.MaxIntakeMemory {
+		return nil, fmt.Errorf("max intake memory (%d) must be at least max transfer size (%d)", opts.MaxIntakeMemory, opts.MaxTransferSize)
+	}
+	if opts.Realtime.enabled() {
+		// Admission replaces the repository's disk checks, so it must also
+		// hold back the space reserved for realtime tables.
+		budgetOpts.Policy = opts.Realtime.Policy
+		budgetOpts.RealtimeReservedBytes = opts.Realtime.ReservedDiskBytes
+	}
+
+	storeOpts := storage.StoreOpts{
+		StorageDir:             opts.StorageDir,
+		SegmentMaxSize:         opts.MaxSegmentSize,
+		SegmentMaxAge:          opts.MaxSegmentAge,
+		EnableWALFsync:         opts.EnableWALFsync,
+		MaxDiskUsage:           opts.MaxDiskUsage,
+		MaxIntakeMemory:        opts.MaxIntakeMemory,
+		Admission:              wal.NewAdmission(budgetOpts),
+		MetricComponent:        "ingestor",
+		StartupOpenConcurrency: opts.ConcurrentUploads,
+	}
+	var realtimeBatch cluster.RealtimeBatchOpts
+	if opts.Realtime.enabled() {
+		storeOpts.Policy = opts.Realtime.Policy
+		storeOpts.Realtime = wal.RotationPolicy{SegmentMaxAge: opts.Realtime.MaxSegmentAge}
+		storeOpts.RealtimeReservedDiskBytes = opts.Realtime.ReservedDiskBytes
+		realtimeBatch = cluster.RealtimeBatchOpts{
+			MaxBatchLatency: opts.Realtime.MaxBatchLatency,
+			MaxBatchBytes:   opts.Realtime.MaxBatchBytes,
+		}
+	}
+	store := storage.NewLocalStore(storeOpts)
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
-		WriteTimeSeriesFn: store.WriteTimeSeries,
-		K8sCli:            opts.K8sCli,
-		Hostname:          opts.Hostname,
-		Namespace:         opts.Namespace,
-		PartitionSize:     opts.PartitionSize,
+		K8sCli:        opts.K8sCli,
+		Hostname:      opts.Hostname,
+		Namespace:     opts.Namespace,
+		PartitionSize: opts.PartitionSize,
 	})
 	if err != nil {
 		return nil, err
@@ -169,41 +253,60 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Hostname:               opts.Hostname,
-		Partitioner:            coord,
-		InsecureSkipVerify:     opts.InsecureSkipVerify,
-		Health:                 health,
-		SegmentRemover:         store,
-		MaxTransferConcurrency: opts.MaxTransferConcurrency,
-		DisableGzip:            true,
+		Hostname:                     opts.Hostname,
+		Partitioner:                  coord,
+		InsecureSkipVerify:           opts.InsecureSkipVerify,
+		Health:                       health,
+		SegmentRemover:               store,
+		MaxTransferConcurrency:       opts.MaxTransferConcurrency,
+		DisableGzip:                  true,
+		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      opts.MaxSegmentAge,
-		MaxTransferSize:    opts.MaxTransferSize,
-		MaxTransferAge:     opts.MaxTransferAge,
-		MaxBatchSegments:   opts.MaxBatchSegments,
-		Partitioner:        coord,
-		Segmenter:          store.Index(),
-		UploadQueue:        opts.Uploader.UploadQueue(),
-		TransferQueue:      repl.TransferQueue(),
-		PeerHealthReporter: health,
-		TransfersDisabled:  opts.DisablePeerTransfer,
+	// Create ingestor-specific WAL segment metrics lazily to avoid exposing collector metrics
+	ingestorSegmentsTotal, ingestorSegmentsSizeBytes, ingestorSegmentsMaxAge := metrics.NewIngestorSegmentMetrics()
+
+	batcher, err := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:              opts.StorageDir,
+		MaxSegmentAge:           opts.MaxSegmentAge,
+		MaxTransferSize:         opts.MaxTransferSize,
+		MaxTransferAge:          opts.MaxTransferAge,
+		MaxBatchSegments:        opts.MaxBatchSegments,
+		MaxTableBatches:         max(10, opts.ConcurrentUploads*2, opts.MaxTransferConcurrency*2),
+		Partitioner:             coord,
+		Segmenter:               store.Index(),
+		UploadQueue:             opts.Uploader.UploadQueue(),
+		RealtimeUploadQueue:     realtimeUploadQueue(opts.Uploader),
+		TransferQueue:           repl.TransferQueue(),
+		RealtimeTransferQueue:   repl.RealtimeTransferQueue(),
+		Realtime:                realtimeBatch,
+		PeerHealthReporter:      health,
+		TransfersDisabled:       opts.DisablePeerTransfer,
+		SegmentsCountMetric:     ingestorSegmentsTotal,
+		SegmentsSizeBytesMetric: ingestorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    ingestorSegmentsMaxAge,
+
+		SegmentsSizeByPriorityMetric: metrics.NewIngestorSegmentSizeByPriorityMetric(),
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create batcher: %w", err)
+	}
 
-	health.QueueSizer = batcher
+	health.QueueSizer = &queueSizerAdapter{
+		store:   store,
+		batcher: batcher,
+	}
 
-	allKustoCli := make([]metrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
+	allKustoCli := make([]ingestormetrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
 	allKustoCli = append(allKustoCli, opts.MetricsKustoCli...)
 	allKustoCli = append(allKustoCli, opts.LogsKustoCli...)
 
-	metricsSvc := metrics.NewService(metrics.ServiceOpts{
-		Hostname:         opts.Hostname,
+	metricsSvc := ingestormetrics.NewService(ingestormetrics.ServiceOpts{
 		Elector:          coord,
+		Region:           opts.Region,
 		MetricsKustoCli:  opts.MetricsKustoCli,
 		KustoCli:         allKustoCli,
 		PeerHealthReport: health,
@@ -251,6 +354,11 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
+	for _, listener := range s.opts.PeerListeners {
+		s.coordinator.SubscribePeers(listener)
+		listener(s.coordinator.Peers())
+	}
+
 	if err := s.batcher.Open(svcCtx); err != nil {
 		return err
 	}
@@ -272,45 +380,48 @@ func (s *Service) Open(ctx context.Context) error {
 		return nil
 	})
 
-	fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
-	crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
-	for _, v := range s.opts.MetricsKustoCli {
-		t := adx.NewDropUnusedTablesTask(v)
-		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
-			return t.Run(ctx)
-		})
+	if s.opts.StorageBackend == storage.BackendADX {
+		fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
+		crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
+		functionClients := make([]adx.StatementExecutor, 0, len(s.opts.MetricsKustoCli)+len(s.opts.LogsKustoCli))
+		for _, client := range s.opts.MetricsKustoCli {
+			functionClients = append(functionClients, client)
+		}
+		for _, client := range s.opts.LogsKustoCli {
+			functionClients = append(functionClients, client)
+		}
+		functions := adx.NewSyncFunctionsTask(fnStore, functionClients, s.opts.ClusterLabels)
+		s.scheduler.ScheduleEvery(time.Minute, "sync-functions", functions.Run)
 
-		f := adx.NewSyncFunctionsTask(fnStore, v)
-		s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
-			return f.Run(ctx)
-		})
+		for _, v := range s.opts.MetricsKustoCli {
+			t := adx.NewDropUnusedTablesTask(v)
+			s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
+				return t.Run(ctx)
+			})
 
-		m := adx.NewManagementCommandsTask(crdStore, v)
-		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
-			return m.Run(ctx)
-		})
+			m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
+				return m.Run(ctx)
+			})
 
-		sr := adx.NewSummaryRuleTask(crdStore, v)
-		s.scheduler.ScheduleEvery(10*time.Minute, "summary-rules", func(ctx context.Context) error {
-			return sr.Run(ctx)
-		})
-	}
+			sr := adx.NewSummaryRuleTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
+				return sr.Run(ctx)
+			})
+		}
 
-	for _, v := range s.opts.LogsKustoCli {
-		f := adx.NewSyncFunctionsTask(fnStore, v)
-		s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
-			return f.Run(ctx)
-		})
+		for _, v := range s.opts.LogsKustoCli {
+			m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
+				return m.Run(ctx)
+			})
 
-		m := adx.NewManagementCommandsTask(crdStore, v)
-		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
-			return m.Run(ctx)
-		})
+			sr := adx.NewSummaryRuleTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
+				return sr.Run(ctx)
+			})
+		}
 
-		sr := adx.NewSummaryRuleTask(crdStore, v)
-		s.scheduler.ScheduleEvery(10*time.Minute, "summary-rules", func(ctx context.Context) error {
-			return sr.Run(ctx)
-		})
 	}
 
 	t := adx.NewAuditDiskSpaceTask(s.batcher, s.opts.StorageDir)
@@ -382,6 +493,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing filename", http.StatusBadRequest)
 		return
 	}
+	requestId := r.Header.Get("X-Request-ID")
 
 	xff := r.Header.Get("X-Forwarded-For")
 	// If the header is present, split it by comma and take the first IP address
@@ -402,10 +514,10 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		metrics.RequestsBytesReceived.Add(float64(cr.Count()))
 		dur := time.Since(start)
 		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
-			logger.Warnf("Slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, cr.Count(), filename)
+			logger.Warnf("Slow request: requestId=%s path=/transfer duration=%s from=%s size=%d file=%s", requestId, dur.String(), originalIP, cr.Count(), filename)
 		}
 		if err := body.Close(); err != nil {
-			logger.Errorf("Close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
+			logger.Errorf("Close http body: requestId=%s %s, path=/transfer duration=%s from=%s", requestId, err.Error(), dur.String(), originalIP)
 		}
 	}()
 
@@ -420,6 +532,11 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.health.IsHealthy() {
+		r.Close = true
+		w.Header().Set("Connection", "close")
+
+		w.Header().Set(cluster.OverloadScopeHeader, "instance")
+		w.Header().Set("Retry-After", "5")
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
@@ -429,7 +546,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	// Check for possible traversal attacks.
 	f := s.validateFileName(filename)
 	if f == "" {
-		logger.Errorf("Transfer requested with an invalid filename %q", filename)
+		logger.Errorf("Failed to import: invalid filename %s from=%s requestId=%s", filename, originalIP, requestId)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "Filename is invalid", http.StatusBadRequest)
 		return
@@ -439,7 +556,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		gzipReader, err := gzip.NewReader(body)
 		if err != nil {
-			logger.Errorf("Failed to create gzip reader: %s", err.Error())
+			logger.Errorf("Failed to import: create gzip reader: %s from=%s requestId=%s", err.Error(), originalIP, requestId)
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 			http.Error(w, "Invalid gzip encoding", http.StatusBadRequest)
 			return
@@ -449,7 +566,30 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n, err := s.store.Import(f, body)
-	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+	var oversized *wal.SegmentTooLargeError
+	if errors.As(err, &oversized) {
+		// Permanent for this payload: tell the sender how much this destination
+		// can accept so it can split rather than retry the same batch forever.
+		w.Header().Set(cluster.MaxTransferBytesHeader, strconv.FormatInt(oversized.Limit, 10))
+		m.WithLabelValues(strconv.Itoa(http.StatusRequestEntityTooLarge)).Inc()
+		http.Error(w, oversized.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
+	var quota *wal.TableOverloadedError
+	if errors.As(err, &quota) {
+		w.Header().Set(cluster.OverloadScopeHeader, "table")
+		w.Header().Set(cluster.OverloadReasonHeader, quota.Reason)
+		w.Header().Set("Retry-After", strconv.Itoa(int(quota.RetryAfter.Seconds())))
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, quota.Error(), http.StatusTooManyRequests)
+		return
+	}
+	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) || errors.Is(err, storage.ErrIntakeMemoryExhausted) {
+		w.Header().Set(cluster.OverloadScopeHeader, "instance")
+		w.Header().Set("Retry-After", "5")
+		r.Close = true
+		w.Header().Set("Connection", "close")
+
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
@@ -457,12 +597,15 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
 	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
-		logger.Errorf("Transfer requested with checksum error %q from=%s", filename, originalIP)
+		logger.Errorf("Failed to import checksum error: %s from=%s requestId=%s", filename, originalIP, requestId)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "Block checksum verification failed", http.StatusBadRequest)
 		return
 	} else if err != nil {
-		logger.Errorf("Failed to import %s: %s from=%s", filename, err.Error(), originalIP)
+		r.Close = true
+		w.Header().Set("Connection", "close")
+
+		logger.Errorf("Failed to import %s: %s from=%s requestId=%s", filename, err.Error(), originalIP, requestId)
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -476,7 +619,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
-	if err := s.metrics.Close(); err != nil {
+	if err := s.DisableWrites(); err != nil {
 		return err
 	}
 
@@ -487,33 +630,80 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// stallTimeout is how long the drain waits without any progress before giving
+// up. A destination that cannot drain must not hold shutdown open for the whole
+// context deadline.
+var stallTimeout = 30 * time.Second
+
 func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
-	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
-	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+	logger.Infof("Waiting for upload queue to drain, %d batches remaining", s.uploadQueueLen())
+	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", s.transferQueueLen())
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
+	remaining := s.uploadQueueLen() + s.transferQueueLen()
+	lastProgress := time.Now()
 	for {
+		if remaining == 0 {
+			return nil
+		}
 		select {
 		case <-t.C:
-			if len(s.uploader.UploadQueue()) == 0 && len(s.replicator.TransferQueue()) == 0 {
-				return nil
+			if n := s.uploadQueueLen(); n != 0 {
+				logger.Infof("Waiting for upload queue to drain, %d batches remaining", n)
+			}
+			if n := s.transferQueueLen(); n != 0 {
+				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", n)
 			}
 
-			if len(s.uploader.UploadQueue()) != 0 {
-				logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+			current := s.uploadQueueLen() + s.transferQueueLen()
+			if current == 0 {
+				return nil
 			}
-			if len(s.replicator.TransferQueue()) != 0 {
-				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+			if current < remaining {
+				remaining = current
+				lastProgress = time.Now()
+				continue
+			}
+			remaining = current
+			if time.Since(lastProgress) >= stallTimeout {
+				// A destination that cannot drain must not hold shutdown open
+				// for the whole deadline. Remaining work stays on disk and
+				// resumes after restart.
+				logger.Warnf("Backlog stopped draining with %d batches remaining; continuing shutdown", remaining)
+				return nil
 			}
 		case <-ctx.Done():
 			return fmt.Errorf("timed out to upload segments")
 		}
 	}
+}
+
+// realtimeUploader is implemented by uploaders that accept realtime batches on a separate queue.
+type realtimeUploader interface {
+	RealtimeUploadQueue() chan *cluster.Batch
+}
+
+// realtimeUploadQueue returns the realtime upload queue of u, or nil if u does not have one.
+func realtimeUploadQueue(u Uploader) chan *cluster.Batch {
+	if ru, ok := u.(realtimeUploader); ok {
+		return ru.RealtimeUploadQueue()
+	}
+	return nil
+}
+
+// uploadQueueLen returns the number of batches waiting to be uploaded.
+func (s *Service) uploadQueueLen() int {
+	return len(s.uploader.UploadQueue()) + len(realtimeUploadQueue(s.uploader))
+}
+
+// transferQueueLen returns the number of batches waiting to be transferred to peers.
+func (s *Service) transferQueueLen() int {
+	return len(s.replicator.TransferQueue()) + len(s.replicator.RealtimeTransferQueue())
 }
 
 func (s *Service) DisableWrites() error {
@@ -546,4 +736,32 @@ func (s *Service) validateFileName(filename string) string {
 	}
 
 	return wal.Filename(db, table, schema, epoch)
+}
+
+// queueSizerAdapter is an adapter that implements the cluster.QueueSizer interface by wrapping the
+// storage.LocalStore and cluster.Batcher interfaces. It provides methods to get the sizes of the transfer
+// and upload queues, the total number of segments, the size of segments, and the maximum age of segments.
+type queueSizerAdapter struct {
+	store   *storage.LocalStore
+	batcher cluster.Batcher
+}
+
+func (q *queueSizerAdapter) TransferQueueSize() int {
+	return q.batcher.TransferQueueSize()
+}
+
+func (q *queueSizerAdapter) UploadQueueSize() int {
+	return q.batcher.UploadQueueSize()
+}
+
+func (q *queueSizerAdapter) SegmentsTotal() int64 {
+	return q.store.SegmentCount()
+}
+
+func (q *queueSizerAdapter) SegmentsSize() int64 {
+	return q.store.Size()
+}
+
+func (q *queueSizerAdapter) MaxSegmentAge() time.Duration {
+	return q.store.Index().OldestSegmentAge()
 }

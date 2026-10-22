@@ -56,12 +56,12 @@ func lintMain(ctx *cli.Context) error {
 		if len(parts) != 2 {
 			return cli.Exit("Invalid tag format, expected <key>=<value>", 1)
 		}
-		tags[strings.ToLower(parts[0])] = strings.ToLower(parts[1])
+		tags[parts[0]] = parts[1]
 	}
 
 	// Always add region and cloud tags which are required params for alerter currently.
-	tags["region"] = strings.ToLower(ctx.String("region"))
-	tags["cloud"] = strings.ToLower(ctx.String("cloud"))
+	tags["region"] = ctx.String("region")
+	tags["cloud"] = ctx.String("cloud")
 
 	for k, v := range tags {
 		logger.Infof("Using tag %s=%s", k, v)

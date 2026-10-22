@@ -24,3 +24,17 @@ type Sink interface {
 	Close() error
 	Name() string
 }
+
+// DurableSink is implemented by sinks whose acceptance determines the fate of
+// the data. A failure from a sink that is not durable must not make a producer
+// resend records that a durable sink already stored.
+type DurableSink interface {
+	Sink
+	Durable() bool
+}
+
+// IsDurable reports whether a sink owns the durability of the data it receives.
+func IsDurable(s Sink) bool {
+	d, ok := s.(DurableSink)
+	return ok && d.Durable()
+}

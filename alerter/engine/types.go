@@ -2,7 +2,49 @@ package engine
 
 import (
 	"math"
+
+	"github.com/Azure/adx-mon/alerter/alert"
 )
+
+const maxThrottledNotificationDetails = 15
+
+type ThrottledNotificationsError struct {
+	Notifications []AlertResult
+	Total         int
+}
+
+func (err *ThrottledNotificationsError) Error() string {
+	return alert.ErrTooManyRequests.Error()
+}
+
+func (err *ThrottledNotificationsError) Unwrap() error {
+	return alert.ErrTooManyRequests
+}
+
+func (err *ThrottledNotificationsError) Add(notification AlertResult) {
+	err.Total++
+	if len(err.Notifications) < maxThrottledNotificationDetails {
+		err.Notifications = append(err.Notifications, AlertResult{Title: notification.Title, Severity: notification.Severity})
+	}
+}
+
+func (err *ThrottledNotificationsError) merge(other *ThrottledNotificationsError) {
+	err.Total += other.Total
+	remaining := maxThrottledNotificationDetails - len(err.Notifications)
+	err.Notifications = append(err.Notifications, other.Notifications[:min(remaining, len(other.Notifications))]...)
+}
+
+// AlertResult is the delivery-neutral result of converting an alert query row.
+type AlertResult struct {
+	Destination   string
+	Title         string
+	Summary       string
+	Description   string
+	Severity      int64
+	Source        string
+	CorrelationID string
+	CustomFields  map[string]string
+}
 
 type Notification struct {
 	// Title maps to the Title Notification field.

@@ -65,11 +65,12 @@ func TestFunctions(t *testing.T) {
 	})
 
 	t.Run("List Functions", func(t *testing.T) {
-		fns, err := functionStore.List(ctx)
+		fns, err := functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Len(t, fns, 1)
 		require.Equal(t, int64(1), fns[0].GetGeneration())
 		require.Equal(t, int64(0), fns[0].Status.ObservedGeneration)
+		require.False(t, controllerutil.ContainsFinalizer(fns[0], storage.FinalizerName))
 	})
 
 	t.Run("Does not included suspended", func(t *testing.T) {
@@ -80,7 +81,7 @@ func TestFunctions(t *testing.T) {
 		*fn.Spec.Suspend = true
 		require.NoError(t, ctrlCli.Update(ctx, fn))
 
-		fns, err := functionStore.List(ctx)
+		fns, err := functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Empty(t, fns)
 
@@ -103,7 +104,7 @@ func TestFunctions(t *testing.T) {
 		require.False(t, fn.Status.LastTimeReconciled.IsZero())
 		require.Empty(t, fn.Status.Error)
 
-		fns, err := functionStore.List(ctx)
+		fns, err := functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Empty(t, fns) // because the generation is up to date
 	})
@@ -126,19 +127,18 @@ func TestFunctions(t *testing.T) {
 		coord := &elector{isLeader: true}
 		functionStore := storage.NewFunctions(ctrlCli, coord)
 
-		// Update the function to ensure the generation is updated
 		fn := &adxmonv1.Function{}
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
 		fn.Spec.Database = "some-other-database"
 		require.NoError(t, ctrlCli.Update(ctx, fn))
 
-		fns, err := functionStore.List(ctx)
+		fns, err := functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Len(t, fns, 1)
 
 		coord.isLeader = false
-		fns, err = functionStore.List(ctx)
-		require.NoError(t, err)
+		fns, err = functionStore.List(ctx, storage.ListOptions{})
+		require.ErrorIs(t, err, storage.ErrNotLeader)
 		require.Empty(t, fns)
 	})
 
@@ -168,7 +168,7 @@ func TestFunctions(t *testing.T) {
 		}
 		require.NoError(t, functionStore.UpdateStatus(ctx, fn))
 
-		fns, err := functionStore.List(ctx)
+		fns, err := functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Empty(t, fns) // because the generation is up to date
 	})
@@ -177,17 +177,20 @@ func TestFunctions(t *testing.T) {
 		fn := &adxmonv1.Function{}
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
 
-		require.True(t, controllerutil.ContainsFinalizer(fn, storage.FinalizerName))
+		require.False(t, controllerutil.ContainsFinalizer(fn, storage.FinalizerName))
+		controllerutil.AddFinalizer(fn, storage.FinalizerName)
+		require.NoError(t, ctrlCli.Update(ctx, fn))
+
 		require.NoError(t, ctrlCli.Delete(ctx, fn))
 
-		fns, err := functionStore.List(ctx)
+		fns, err := functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Len(t, fns, 1)
 
 		fns[0].Status.Status = adxmonv1.Success
 		require.NoError(t, functionStore.UpdateStatus(ctx, fns[0]))
 
-		fns, err = functionStore.List(ctx)
+		fns, err = functionStore.List(ctx, storage.ListOptions{})
 		require.NoError(t, err)
 		require.Empty(t, fns)
 	})

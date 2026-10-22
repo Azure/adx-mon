@@ -46,7 +46,23 @@ func KustoQueryLinks(preText, query, endpoint, database string) (string, error) 
 	link += fmt.Sprintf(`<a href="%s%s?query=%s&saw=1">[Desktop (SAW)]</a>`, endpoint, database, url)
 
 	escapedQuery := html.EscapeString(query) // Escape html within the kusto query since we are rendering it within html tags
-	summary := fmt.Sprintf("%s<br/><br/>%s</br><pre>%s</pre>", preText, link, escapedQuery)
+	summary := fmt.Sprintf("%s<br/><br/>%s<br/><details><summary>Click here to show query</summary><pre>%s</pre></details>", preText, link, escapedQuery)
 	summary = strings.TrimSpace(summary)
 	return summary, nil
+}
+
+func throttledNotificationSummary(throttled *ThrottledNotificationsError) string {
+	var summary strings.Builder
+	summary.WriteString("This alert has been throttled by ADX-Mon due to too many notifications. Please reduce the number of notifications for this alert.")
+	if len(throttled.Notifications) > 0 {
+		summary.WriteString("<br/><br/>Alerts suppressed by throttling:<br/><table><thead><tr><th>Severity</th><th>Title</th></tr></thead><tbody>")
+		for _, notification := range throttled.Notifications {
+			fmt.Fprintf(&summary, "<tr><td>%d</td><td>%s</td></tr>", clampInt64ToInt(notification.Severity), html.EscapeString(notification.Title))
+		}
+		summary.WriteString("</tbody></table>")
+	}
+	if omitted := throttled.Total - len(throttled.Notifications); omitted > 0 {
+		fmt.Fprintf(&summary, "<br/>%d additional suppressed alerts are not shown. Use the query below to view all results.", omitted)
+	}
+	return summary.String()
 }

@@ -6,34 +6,134 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/gzip"
 )
 
-var (
-	ErrPeerOverloaded = fmt.Errorf("peer overloaded")
-	ErrSegmentExists  = fmt.Errorf("segment already exists")
-	ErrSegmentLocked  = fmt.Errorf("segment is locked")
-)
+// gzipWriterPool reuses *gzip.Writer instances across Client.Write invocations.
+// gzip.NewWriter allocates the underlying flate encoder state (~256KiB of hash
+// tables) on every call, which is one of the largest allocators in the
+// collector. Reset(w) is the documented reuse contract for gzip.Writer.
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(io.Discard) },
+}
+
+// PeerOverloadedError represents a peer overloaded error with optional requestId.
+type PeerOverloadedError struct {
+	requestId string
+}
+
+func (e *PeerOverloadedError) Error() string {
+	msg := "peer overloaded"
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
+}
+func (e *PeerOverloadedError) Is(target error) bool {
+	_, ok := target.(*PeerOverloadedError)
+	return ok
+}
+func (e *PeerOverloadedError) WithRequestId(id string) error {
+	return &PeerOverloadedError{requestId: id}
+}
+
+var ErrPeerOverloaded error = &PeerOverloadedError{}
+
+const OverloadScopeHeader = "X-Adxmon-Overload-Scope"
+const OverloadReasonHeader = "X-Adxmon-Overload-Reason"
+
+// MaxTransferBytesHeader advertises how many bytes a destination can accept, so
+// a sender holding an oversized batch can split instead of retrying it.
+const MaxTransferBytesHeader = "X-Adxmon-Max-Transfer-Bytes"
+
+func retryDelay(value string) time.Duration {
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 5 * time.Second
+	}
+	if seconds > 300 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// SegmentExistsError represents a segment already exists error with optional requestId.
+type SegmentExistsError struct {
+	requestId string
+}
+
+func (e *SegmentExistsError) Error() string {
+	msg := "segment already exists"
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
+}
+func (e *SegmentExistsError) Is(target error) bool {
+	_, ok := target.(*SegmentExistsError)
+	return ok
+}
+func (e *SegmentExistsError) WithRequestId(id string) error {
+	return &SegmentExistsError{requestId: id}
+}
+
+var ErrSegmentExists error = &SegmentExistsError{}
+
+// SegmentLockedError represents a segment locked error with optional requestId.
+type SegmentLockedError struct {
+	requestId string
+}
+
+func (e *SegmentLockedError) Error() string {
+	msg := "segment is locked"
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
+}
+func (e *SegmentLockedError) Is(target error) bool {
+	_, ok := target.(*SegmentLockedError)
+	return ok
+}
+func (e *SegmentLockedError) WithRequestId(id string) error {
+	return &SegmentLockedError{requestId: id}
+}
+
+var ErrSegmentLocked error = &SegmentLockedError{}
 
 type ErrBadRequest struct {
-	Msg string
+	Msg       string
+	requestId string
 }
 
-func (e ErrBadRequest) Error() string {
-	return fmt.Sprintf("bad request: %s", e.Msg)
+func (e *ErrBadRequest) Error() string {
+	msg := fmt.Sprintf("bad request: %s", e.Msg)
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
 }
-func (e ErrBadRequest) Is(target error) bool {
-	return target == ErrBadRequest{}
+func (e *ErrBadRequest) Is(target error) bool {
+	_, ok := target.(*ErrBadRequest)
+	return ok
+}
+func (e *ErrBadRequest) WithRequestId(id string) error {
+	return &ErrBadRequest{Msg: e.Msg, requestId: id}
 }
 
 type Client struct {
 	httpClient *http.Client
 	opts       ClientOpts
+	idGen      *flake.Flake
 }
 
 type ClientOpts struct {
@@ -123,9 +223,16 @@ func NewClient(opts ClientOpts) (*Client, error) {
 			DisableKeepAlives:     opts.DisableKeepAlives,
 		})
 
+	idGen, err := flake.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ID generator: %w", err)
+	}
+
 	return &Client{
 		httpClient: httpClient,
 		opts:       opts,
+
+		idGen: idGen,
 	}, nil
 }
 
@@ -133,18 +240,29 @@ func NewClient(opts ClientOpts) (*Client, error) {
 // merged into the first file at the destination.  This ensures we transfer the full batch
 // atomimcally.
 func (c *Client) Write(ctx context.Context, endpoint string, filename string, body io.Reader) error {
+	rid := c.idGen.NextId()
+	requestId := rid.String()
 
 	br := bufio.NewReaderSize(body, 4*1024)
 	// Send the body with gzip compression unless the client has that option disabled.
 	if !c.opts.DisableGzip {
 		gzipReader, gzipWriter := io.Pipe()
+		// If the request fails before the transport drains the pipe, closing the
+		// reader unblocks the compressor goroutine instead of leaking it.
+		defer gzipReader.Close()
 		go func() {
 			defer gzipWriter.Close()
-			gzipCompressor := gzip.NewWriter(gzipWriter)
-			defer gzipCompressor.Close()
+			gzipCompressor := gzipWriterPool.Get().(*gzip.Writer)
+			gzipCompressor.Reset(gzipWriter)
+			defer func() {
+				// Close flushes the trailer; Reset on the next Get re-initializes
+				// header state, so it is safe to return the writer to the pool here.
+				gzipCompressor.Close()
+				gzipWriterPool.Put(gzipCompressor)
+			}()
 			if _, err := io.Copy(gzipCompressor, body); err != nil {
 				if err := gzipWriter.CloseWithError(err); err != nil {
-					logger.Errorf("failed to close gzip writer: %v", err)
+					logger.Errorf("failed to close gzip writer: %s requestId=%s", err, requestId)
 				}
 			}
 		}()
@@ -165,10 +283,11 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 	req.Header.Set("Content-Type", "text/csv")
 	req.Header.Set("User-Agent", "adx-mon")
+	req.Header.Set("X-Request-ID", requestId)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("http post: %w", err)
+		return fmt.Errorf("http post: %w requestId=%s", err, requestId)
 	}
 	defer func() {
 		io.Copy(io.Discard, resp.Body)
@@ -178,26 +297,51 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 	if resp.StatusCode != 202 {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("read resp: %w", err)
+			return fmt.Errorf("read resp: %w requestId=%s", err, requestId)
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			if resp.Header.Get(OverloadScopeHeader) == "table" {
+				d, err := wal.DestinationFromFilename(filename)
+				if err != nil {
+					return fmt.Errorf("invalid throttled destination: %w", err)
+				}
+				return &wal.TableOverloadedError{Destination: d, Reason: resp.Header.Get(OverloadReasonHeader), RetryAfter: retryDelay(resp.Header.Get("Retry-After"))}
+			}
+			if perr, ok := ErrPeerOverloaded.(*PeerOverloadedError); ok {
+				return perr.WithRequestId(requestId)
+			}
 			return ErrPeerOverloaded
 		}
 
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			d, derr := wal.DestinationFromFilename(filename)
+			if derr != nil {
+				return fmt.Errorf("invalid oversized destination: %w", derr)
+			}
+			limit, _ := strconv.ParseInt(resp.Header.Get(MaxTransferBytesHeader), 10, 64)
+			return &wal.SegmentTooLargeError{Destination: d, Limit: limit}
+		}
+
 		if resp.StatusCode == http.StatusConflict {
+			if serr, ok := ErrSegmentExists.(*SegmentExistsError); ok {
+				return serr.WithRequestId(requestId)
+			}
 			return ErrSegmentExists
 		}
 
 		if resp.StatusCode == http.StatusLocked {
+			if lerr, ok := ErrSegmentLocked.(*SegmentLockedError); ok {
+				return lerr.WithRequestId(requestId)
+			}
 			return ErrSegmentLocked
 		}
 
 		if resp.StatusCode == http.StatusBadRequest {
-			return &ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", strings.TrimSpace(string(body)))}
+			return (&ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", strings.TrimSpace(string(body)))}).WithRequestId(requestId)
 		}
 
-		return fmt.Errorf("write failed: %s", strings.TrimSpace(string(body)))
+		return fmt.Errorf("write failed: %s requestId=%s", strings.TrimSpace(string(body)), requestId)
 	}
 	return nil
 }

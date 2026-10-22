@@ -7,16 +7,24 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/siderolabs/go-kmsg"
 )
 
 var (
 	homedir         string
 	validColumnName = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
+)
+
+const (
+	DefaultRequestTimeoutSeconds = 15
+	MaxRequestTimeoutSeconds     = 5 * 60
 )
 
 func init() {
@@ -39,6 +47,7 @@ var DefaultConfig = Config{
 	WALFlushIntervalMilliSeconds: 100,
 	ListenAddr:                   ":8080",
 	StorageDir:                   homedir,
+	StorageBackend:               "adx",
 	PrometheusScrape: &PrometheusScrape{
 		StaticScrapeTarget:    []*ScrapeTarget{},
 		ScrapeIntervalSeconds: 30,
@@ -69,21 +78,29 @@ var DefaultConfig = Config{
 }
 
 type Config struct {
-	Endpoint           string `toml:"endpoint,omitempty" comment:"Ingestor URL to send collected telemetry."`
-	Kubeconfig         string `toml:"kube-config,omitempty" comment:"Path to kubernetes client config"`
-	InsecureSkipVerify bool   `toml:"insecure-skip-verify,omitempty" comment:"Skip TLS verification."`
-	ListenAddr         string `toml:"listen-addr,omitempty" comment:"Address to listen on for endpoints."`
-	Region             string `toml:"region,omitempty" comment:"Region is a location identifier."`
-	TLSKeyFile         string `toml:"tls-key-file,omitempty" comment:"Optional path to the TLS key file."`
-	TLSCertFile        string `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
+	Endpoint           string            `toml:"endpoint,omitempty" comment:"Ingestor URL to send collected telemetry."`
+	Kubeconfig         string            `toml:"kube-config,omitempty" comment:"Path to kubernetes client config file. If not set, in-cluster config is used for node metadata and pod discovery."`
+	KubeletDiscovery   *KubeletDiscovery `toml:"kubelet-discovery,omitempty" comment:"Optional: Kubelet-based pod discovery configuration.\nWhen present, uses kubelet polling instead of Kubernetes API watch.\nReduces API server load."`
+	InsecureSkipVerify bool              `toml:"insecure-skip-verify,omitempty" comment:"Skip TLS verification."`
+	ListenAddr         string            `toml:"listen-addr,omitempty" comment:"Address to listen on for endpoints."`
+	Region             string            `toml:"region,omitempty" comment:"Region is a location identifier."`
+	TLSKeyFile         string            `toml:"tls-key-file,omitempty" comment:"Optional path to the TLS key file."`
+	TLSCertFile        string            `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
+	StorageBackend     string            `toml:"storage-backend,omitempty" comment:"Storage backend used for WAL segments. Valid values: adx, clickhouse."`
 
-	MaxConnections               int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
-	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
-	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
-	MaxSegmentSize               int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
-	MaxDiskUsage                 int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
-	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
-	MaxTransferConcurrency       int   `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
+	MaxConnections               int              `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
+	MaxBatchSize                 int              `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
+	MaxSegmentAgeSeconds         int              `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
+	MaxSegmentSize               int64            `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
+	MaxSegmentCount              int64            `toml:"max-segment-count,omitempty" comment:"Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive."`
+	MaxDiskUsage                 int64            `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
+	MaxTableDiskUsage            int64            `toml:"max-table-disk-usage,omitempty" comment:"Maximum WAL bytes per normalized database/table. Defaults to 10% of max-disk-usage."`
+	MaxTableSegmentCount         int64            `toml:"max-table-segment-count,omitempty" comment:"Maximum active and closed WAL files per table. Defaults to 10% of max-segment-count."`
+	DisableTableLimits           bool             `toml:"disable-table-limits,omitempty" comment:"Disable default table quotas; explicit table-limits still apply."`
+	EnforceTableLimits           bool             `toml:"enforce-table-limits,omitempty" comment:"Reject writes that exceed a table budget. When false (default) budgets are only measured and reported so limits can be sized from real traffic."`
+	TableLimits                  []wal.TableLimit `toml:"table-limits,omitempty" comment:"Overrides for normalized database/table backlog budgets."`
+	WALFlushIntervalMilliSeconds int              `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
+	MaxTransferConcurrency       int              `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
 
 	StorageDir  string `toml:"storage-dir,omitempty" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof,omitempty" comment:"Enable pprof endpoints."`
@@ -111,6 +128,9 @@ type Config struct {
 	OtelMetric            []*OtelMetric            `toml:"otel-metric,omitempty" comment:"Defines an OpenTelemetry metric endpoint. Accepts OTLP/HTTP and/or OTLP/gRPC."`
 	HostLog               []*HostLog               `toml:"host-log,omitempty" comment:"Defines a host log scraper."`
 	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.\nExporters are declared here and referenced by name in each collection source."`
+	MetadataWatch         *MetadataWatch           `toml:"metadata-watch,omitempty" comment:"Optional configuration for watching dynamic metadata to add to logs and metrics."`
+	AddMetadataLabels     *AddMetadataLabels       `toml:"add-metadata-labels,omitempty" comment:"Optional global configuration for adding dynamic metadata as labels to all logs and metrics."`
+	Realtime              *Realtime                `toml:"realtime,omitempty" comment:"Optional configuration for realtime ingestion of selected tables.\nRealtime tables are rotated and transferred ahead of queued tables and the ingestor uploads them with streaming ingestion."`
 }
 
 type PrometheusScrape struct {
@@ -121,12 +141,13 @@ type PrometheusScrape struct {
 	DisableMetricsForwarding bool            `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 	DisableDiscovery         bool            `toml:"disable-discovery" comment:"Disable discovery of kubernetes pod targets."`
 
-	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
-	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>."`
-	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
-	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+	DefaultDropMetrics        *bool              `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string  `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string  `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>."`
+	DropMetrics               []string           `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	KeepMetrics               []string           `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher     `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+	AddMetadataLabels         *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to metrics scraped from this source."`
 
 	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
@@ -145,6 +166,31 @@ func (s *PrometheusScrape) Validate() error {
 	if s.ScrapeIntervalSeconds <= 0 {
 		return errors.New("prom-scrape.scrape-interval must be greater than 0")
 	}
+	return nil
+}
+
+type KubeletDiscovery struct {
+	Host           string `toml:"host,omitempty" comment:"Kubelet host address. Defaults to node name from NODE_NAME env var, or '127.0.0.1' if not set"`
+	Port           int    `toml:"port,omitempty" comment:"Kubelet port. Defaults to 10250"`
+	PollInterval   int    `toml:"poll-interval,omitempty" comment:"How often to poll the kubelet for pod updates (seconds). Defaults to 10"`
+	RequestTimeout int    `toml:"request-timeout,omitempty" comment:"Request timeout for kubelet API calls (seconds). Defaults to 9"`
+	TokenPath      string `toml:"token-path,omitempty" comment:"Path to service account token. Defaults to /var/run/secrets/kubernetes.io/serviceaccount/token"`
+	CAPath         string `toml:"ca-path,omitempty" comment:"Path to CA certificate for TLS verification. Defaults to /var/run/secrets/kubernetes.io/serviceaccount/ca.crt"`
+}
+
+func (k *KubeletDiscovery) Validate() error {
+	if k.Port < 0 || k.Port > 65535 {
+		return errors.New("kubelet-discovery.port must be between 0 and 65535")
+	}
+
+	if k.PollInterval != 0 && k.PollInterval < 1 {
+		return errors.New("kubelet-discovery.poll-interval must be at least 1 second")
+	}
+
+	if k.RequestTimeout != 0 && k.RequestTimeout < 1 {
+		return errors.New("kubelet-discovery.request-timeout must be at least 1 second")
+	}
+
 	return nil
 }
 
@@ -193,19 +239,24 @@ func (t *ScrapeTarget) Validate() error {
 type PrometheusRemoteWrite struct {
 	Database                 string `toml:"database" comment:"Database to store metrics in."`
 	Path                     string `toml:"path" comment:"The path to listen on for prometheus remote write requests.  Defaults to /receive."`
+	RequestTimeoutSeconds    int    `toml:"request-timeout-seconds,omitempty" comment:"Maximum duration in seconds for a remote write request. Defaults to 15 and cannot exceed 300."`
 	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
-	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
-	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>."`
-	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
-	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+	DefaultDropMetrics        *bool              `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string  `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string  `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>."`
+	DropMetrics               []string           `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	KeepMetrics               []string           `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher     `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+	AddMetadataLabels         *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to metrics received on this endpoint."`
 
 	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
 
 func (w *PrometheusRemoteWrite) Validate() error {
+	if _, err := w.RequestTimeout(); err != nil {
+		return err
+	}
 	if w.Path == "" {
 		return errors.New("prometheus-remote-write.path must be set")
 	}
@@ -245,14 +296,23 @@ func (w *PrometheusRemoteWrite) Validate() error {
 	return nil
 }
 
+func (w *PrometheusRemoteWrite) RequestTimeout() (time.Duration, error) {
+	return defaultRequestTimeout(w.RequestTimeoutSeconds, "prometheus-remote-write")
+}
+
 type OtelLog struct {
-	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
-	Transforms     []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
-	Exporters      []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
+	RequestTimeoutSeconds int                `toml:"request-timeout-seconds,omitempty" comment:"Maximum duration in seconds for an OTLP/HTTP logs request. Defaults to 15 and cannot exceed 300."`
+	AddAttributes         map[string]string  `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	AddMetadataLabels     *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to logs received on this endpoint."`
+	LiftAttributes        []string           `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	Transforms            []*LogTransform    `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	Exporters             []string           `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *OtelLog) Validate() error {
+	if _, err := w.RequestTimeout(); err != nil {
+		return err
+	}
 	for k, v := range w.AddAttributes {
 		if k == "" {
 			return errors.New("otel-log.add-attributes key must be set")
@@ -263,6 +323,9 @@ func (w *OtelLog) Validate() error {
 	}
 
 	for _, v := range w.Transforms {
+		if v == nil {
+			return errors.New("otel-log.transforms entry must not be nil")
+		}
 		if !transforms.IsValidTransformType(v.Name) {
 			return fmt.Errorf("otel-log.transforms %s is not a valid transform", v.Name)
 		}
@@ -271,23 +334,32 @@ func (w *OtelLog) Validate() error {
 	return nil
 }
 
+func (w *OtelLog) RequestTimeout() (time.Duration, error) {
+	return defaultRequestTimeout(w.RequestTimeoutSeconds, "otel-log")
+}
+
 type OtelMetric struct {
 	Database                 string `toml:"database" comment:"Database to store metrics in."`
 	Path                     string `toml:"path" comment:"The path to listen on for OTLP/HTTP requests."`
 	GrpcPort                 int    `toml:"grpc-port" comment:"The port to listen on for OTLP/gRPC requests."`
+	RequestTimeoutSeconds    int    `toml:"request-timeout-seconds,omitempty" comment:"Maximum duration in seconds for an OTLP metrics request. Defaults to 15 and cannot exceed 300."`
 	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
-	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
-	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
-	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
-	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+	DefaultDropMetrics        *bool              `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string  `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string  `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropMetrics               []string           `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	KeepMetrics               []string           `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher     `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+	AddMetadataLabels         *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to metrics received on this endpoint."`
 
 	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
 
 func (w *OtelMetric) Validate() error {
+	if _, err := w.RequestTimeout(); err != nil {
+		return err
+	}
 	if w.Database == "" {
 		return errors.New("otel-metric.database must be set")
 	}
@@ -333,15 +405,33 @@ func (w *OtelMetric) Validate() error {
 	return nil
 }
 
+func (w *OtelMetric) RequestTimeout() (time.Duration, error) {
+	return defaultRequestTimeout(w.RequestTimeoutSeconds, "otel-metric")
+}
+
+func defaultRequestTimeout(timeoutSeconds int, endpoint string) (time.Duration, error) {
+	if timeoutSeconds < 0 {
+		return 0, fmt.Errorf("%s.request-timeout-seconds must be greater than 0", endpoint)
+	}
+	if timeoutSeconds > MaxRequestTimeoutSeconds {
+		return 0, fmt.Errorf("%s.request-timeout-seconds must not exceed %d", endpoint, MaxRequestTimeoutSeconds)
+	}
+	if timeoutSeconds == 0 {
+		timeoutSeconds = DefaultRequestTimeoutSeconds
+	}
+	return time.Duration(timeoutSeconds) * time.Second, nil
+}
+
 type HostLog struct {
-	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
-	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
-	StaticPodTargets     []*PodTarget      `toml:"static-pod-target" comment:"Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver."`
-	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
-	KernelTargets        []*KernelTarget   `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
-	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
-	Exporters            []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
+	DisableKubeDiscovery bool               `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
+	AddAttributes        map[string]string  `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	AddMetadataLabels    *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to logs collected from this source."`
+	StaticFileTargets    []*TailTarget      `toml:"file-target" comment:"Defines a tail file target."`
+	StaticPodTargets     []*PodTarget       `toml:"static-pod-target" comment:"Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver."`
+	JournalTargets       []*JournalTarget   `toml:"journal-target" comment:"Defines a journal target to scrape."`
+	KernelTargets        []*KernelTarget    `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
+	Transforms           []*LogTransform    `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	Exporters            []string           `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *HostLog) Validate() error {
@@ -399,6 +489,9 @@ func (w *HostLog) Validate() error {
 	}
 
 	for _, v := range w.Transforms {
+		if v == nil {
+			return errors.New("host-log.transforms entry must not be nil")
+		}
 		if !transforms.IsValidTransformType(v.Name) {
 			return fmt.Errorf("host-log.transforms %s is not a valid transform", v.Name)
 		}
@@ -413,6 +506,7 @@ type JournalTarget struct {
 	Table         string   `toml:"table" comment:"Table to store logs in."`
 	Parsers       []string `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
 	JournalFields []string `toml:"journal-fields" comment:"Optional journal metadata fields http://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html"`
+	JournalPath   string   `toml:"journal-path" comment:"Optional directory to read journal files from. When unset, the local system journal is opened, which only exposes the journal matching the current machine ID. Set this to read a journal belonging to another machine ID, such as a host journal bind-mounted into a container."`
 }
 
 func (j *JournalTarget) Validate() error {
@@ -460,7 +554,7 @@ func (j *JournalTarget) Validate() error {
 
 type TailTarget struct {
 	FilePath string           `toml:"file-path" comment:"The path to the file to tail."`
-	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, plain."`
+	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, cri, kubernetes, plain, or unset."`
 	Database string           `toml:"database" comment:"Database to store logs in."`
 	Table    string           `toml:"table" comment:"Table to store logs in."`
 	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
@@ -509,8 +603,50 @@ type LogTransform struct {
 }
 
 func (c *Config) Validate() error {
+	disk := c.MaxDiskUsage
+	if disk <= 0 {
+		disk = 10 * 1024 * 1024 * 1024
+	}
+	segments := c.MaxSegmentCount
+	if segments <= 0 {
+		segments = 10000
+	}
+	if _, err := wal.ResolveAdmission(wal.Usage{Bytes: disk, Segments: segments}, c.MaxTableDiskUsage, c.MaxTableSegmentCount, c.DisableTableLimits, c.TableLimits); err != nil {
+		return err
+	}
+	backend := c.StorageBackend
+	if backend == "" {
+		backend = DefaultConfig.StorageBackend
+	}
+
+	if _, err := storage.ParseBackend(backend); err != nil {
+		return err
+	}
+
+	if c.StorageBackend == "" {
+		c.StorageBackend = backend
+	}
+
+	if c.KubeletDiscovery != nil {
+		if err := c.KubeletDiscovery.Validate(); err != nil {
+			return err
+		}
+	}
+
 	if c.Exporters != nil {
 		if err := c.Exporters.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.MetadataWatch != nil {
+		if err := c.MetadataWatch.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.AddMetadataLabels != nil {
+		if err := c.AddMetadataLabels.Validate(c); err != nil {
 			return err
 		}
 	}
@@ -549,6 +685,12 @@ func (c *Config) Validate() error {
 			return err
 		}
 
+		if v.AddMetadataLabels != nil {
+			if err := v.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("prometheus-remote-write[%s].add-metadata-labels: %w", v.Path, err)
+			}
+		}
+
 		if _, ok := existingPaths[v.Path]; ok {
 			return fmt.Errorf("prometheus-remote-write.path %s is already defined", v.Path)
 		}
@@ -566,6 +708,12 @@ func (c *Config) Validate() error {
 			return err
 		}
 
+		if c.OtelLog.AddMetadataLabels != nil {
+			if err := c.OtelLog.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("otel-log.add-metadata-labels: %w", err)
+			}
+		}
+
 		for _, exporterName := range c.OtelLog.Exporters {
 			if !HasLogsExporter(exporterName, c.Exporters) {
 				return fmt.Errorf("otel-log.exporters %q not found", exporterName)
@@ -577,6 +725,12 @@ func (c *Config) Validate() error {
 	for i, v := range c.HostLog {
 		if err := v.Validate(); err != nil {
 			return err
+		}
+
+		if v.AddMetadataLabels != nil {
+			if err := v.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("host-log[%d].add-metadata-labels: %w", i, err)
+			}
 		}
 		if !v.DisableKubeDiscovery {
 			if tailScrapingFromKube {
@@ -595,6 +749,12 @@ func (c *Config) Validate() error {
 	for i, v := range c.OtelMetric {
 		if err := v.Validate(); err != nil {
 			return err
+		}
+
+		if v.AddMetadataLabels != nil {
+			if err := v.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("otel-metric[%d].add-metadata-labels: %w", i, err)
+			}
 		}
 
 		if v.Path != "" {
@@ -616,6 +776,12 @@ func (c *Config) Validate() error {
 			return err
 		}
 
+		if c.PrometheusScrape.AddMetadataLabels != nil {
+			if err := c.PrometheusScrape.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("prometheus-scrape.add-metadata-labels: %w", err)
+			}
+		}
+
 		for _, exporterName := range c.PrometheusScrape.Exporters {
 			if !HasMetricsExporter(exporterName, c.Exporters) {
 				return fmt.Errorf("prometheus-scrape.exporters %q not found", exporterName)
@@ -627,6 +793,20 @@ func (c *Config) Validate() error {
 		c.WALFlushIntervalMilliSeconds = DefaultConfig.WALFlushIntervalMilliSeconds
 	} else if c.WALFlushIntervalMilliSeconds < 0 {
 		return errors.New("wal-flush-interval must be greater than 0")
+	}
+
+	if c.Realtime != nil {
+		if c.StorageBackend != string(storage.BackendADX) {
+			return fmt.Errorf("realtime is only supported with storage-backend %q", storage.BackendADX)
+		}
+
+		maxDiskUsage := c.MaxDiskUsage
+		if maxDiskUsage <= 0 {
+			maxDiskUsage = DefaultMaxDiskUsage
+		}
+		if err := c.Realtime.Validate(maxDiskUsage); err != nil {
+			return err
+		}
 	}
 
 	return nil

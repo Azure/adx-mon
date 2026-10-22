@@ -8,24 +8,29 @@ on:
 env:
   GOPROXY: https://proxy.golang.org/
 
+permissions: {}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    permissions: read-all
+    permissions:
+      contents: read
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: 1.22
+        go-version: 1.26
 
     - name: Update apt
       run: sudo apt update
 
     - name: Install dependencies
-      run: sudo apt install -y libsystemd-dev # for collector journal input
+      run: sudo apt install -y libsystemd-dev systemd-journal-remote # for collector journal input and test fixtures
 
     - name: Test
       run: ENABLE_ASSERTIONS=true INTEGRATION=1 ROLLBACK=1 go test -race -mod=vendor -v -timeout=120m ./...

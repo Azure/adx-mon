@@ -9,25 +9,40 @@ on:
   pull_request:
     branches: [ "main" ]
     types: [opened, review_requested, synchronize, reopened]
+  merge_group:
+
+permissions: {}
 
 jobs:
 
   build:
-    permissions: read-all
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: 1.22
+        go-version: 1.26
 
     - name: Update apt
       run: sudo apt update
 
     - name: Install dependencies
-      run: sudo apt install -y libsystemd-dev # for collector journal input
+      run: sudo apt install -y libsystemd-dev systemd-journal-remote # for collector journal input and test fixtures
+
+    - name: Check gofmt
+      run: |
+        unformatted=$(find . -type d -name vendor -prune -o -type f -name '*.go' -print0 | xargs -0 gofmt -l)
+        if [ -n "$unformatted" ]; then
+          echo "The following files are not gofmt'd:"
+          echo "$unformatted"
+          exit 1
+        fi
 
     - name: Build
       run: go build -mod=vendor -v ./...
@@ -37,11 +52,14 @@ jobs:
 
     - name: Ensure docs are updated
       run: |
-        go run tools/docgen/config/config.go
+        make gendocs
         if ! git diff --exit-code -- docs/config.md; then
-          echo "docs/config.md is not up to date. Please run 'go run tools/docgen/config/config.go' and commit the changes." >&2
+          echo "docs/config.md is not up to date. Please run 'make gendocs' and commit the changes." >&2
           exit 1
         fi
+
+    - name: Test Grafana setup retries
+      run: bash build/scripts/test-grafana-setup.sh
 
     - name: Ensure k8s bundle is updated
       run: |

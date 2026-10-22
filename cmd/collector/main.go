@@ -11,8 +11,13 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
+	"github.com/urfave/cli/v2"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/Azure/adx-mon/cmd/collector/config"
 	"github.com/Azure/adx-mon/collector"
@@ -26,19 +31,17 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/collector/metadata"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/pelletier/go-toml/v2"
-	"github.com/urfave/cli/v2"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
@@ -48,7 +51,14 @@ func main() {
 		UsageText: ``,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
+			&cli.StringFlag{Name: "host-ip", Usage: "Host IP config variable override"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
+			&cli.StringFlag{
+				Name:        "storage-backend",
+				Usage:       "Override storage backend (adx or clickhouse)",
+				EnvVars:     []string{"COLLECTOR_STORAGE_BACKEND"},
+				DefaultText: string(storage.BackendADX),
+			},
 		},
 
 		Commands: []*cli.Command{
@@ -114,10 +124,25 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg = fileConfig
+	backendOverride := ctx.String("storage-backend")
+	if ctx.IsSet("storage-backend") {
+		if backendOverride == "" {
+			return fmt.Errorf("storage-backend cannot be empty")
+		}
+		cfg.StorageBackend = backendOverride
+	} else if cfg.StorageBackend == "" {
+		cfg.StorageBackend = config.DefaultConfig.StorageBackend
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+
+	backend, err := storage.ParseBackend(cfg.StorageBackend)
+	if err != nil {
+		return err
+	}
+	logger.Infof("Collector storage backend: %s", backend)
 
 	hostname := ctx.String("hostname")
 	if hostname == "" {
@@ -129,6 +154,18 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
+	if hostIP := ctx.String("host-ip"); hostIP != "" {
+		cfg.ReplaceVariable("$(HOSTIP)", hostIP)
+	}
+	var kubeNode *metadata.KubeNode
+	if cfg.MetadataWatch != nil && cfg.MetadataWatch.KubernetesNode != nil {
+		client, err := getKubeClient(cfg.Kubeconfig)
+		if err != nil {
+			return fmt.Errorf("failed to build kubernetes client for metadata watch: %w", err)
+		}
+
+		kubeNode = metadata.NewKubeNode(client, hostname)
+	}
 
 	var endpoint string
 	if cfg.Endpoint != "" {
@@ -152,7 +189,7 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 	sort.Slice(cfg.LiftLabels, func(i, j int) bool {
-		return cfg.LiftLabels[i].Name < cfg.LiftLabels[j].Name
+		return strings.ToLower(cfg.LiftLabels[i].Name) < strings.ToLower(cfg.LiftLabels[j].Name)
 	})
 
 	defaultMapping := schema.DefaultMetricsMapping
@@ -170,10 +207,10 @@ func realMain(ctx *cli.Context) error {
 	schema.DefaultMetricsMapping = defaultMapping
 
 	metricExporterCache := make(map[string]remote.RemoteWriteClient)
-	var informer *k8s.PodInformer
+	var informer k8s.PodInformerInterface = nil
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
-		informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
+		informer, err = getInformer(ctx.Context, &cfg, hostname, informer)
 		if err != nil {
 			return fmt.Errorf("failed to get informer for prometheus scrape: %w", err)
 		}
@@ -280,6 +317,8 @@ func realMain(ctx *cli.Context) error {
 			MaxBatchSize:              cfg.MaxBatchSize,
 			RemoteClients:             remoteClients,
 		}
+
+		scraperOpts.DynamicLabeler = newMetricLabeler(kubeNode, cfg.AddMetadataLabels, cfg.PrometheusScrape.AddMetadataLabels)
 	}
 
 	// Add the global add attributes to the log config
@@ -309,12 +348,23 @@ func realMain(ctx *cli.Context) error {
 		liftAttributes = unionSlice(liftAttributes, cfg.OtelLog.LiftAttributes)
 	}
 
+	realtime, queuedReservedWorkersPercent, err := realtimeOpts(cfg.Realtime)
+	if err != nil {
+		return err
+	}
+	if realtime.Policy.HasRealtime() {
+		logger.Infof("Realtime ingestion configured for tables: %v", realtime.Policy.RealtimeTables())
+	}
+
 	opts := &collector.ServiceOpts{
 		EnablePprof:            cfg.EnablePprof,
 		Scraper:                scraperOpts,
+		PodInformer:            informer,
 		ListenAddr:             cfg.ListenAddr,
 		NodeName:               hostname,
 		Endpoint:               endpoint,
+		StorageBackend:         backend,
+		KubeNode:               kubeNode,
 		DisableGzip:            cfg.DisableGzip,
 		LiftLabels:             sortedLiftedLabels,
 		AddAttributes:          addAttributes,
@@ -327,14 +377,27 @@ func realMain(ctx *cli.Context) error {
 		MaxBatchSize:           cfg.MaxBatchSize,
 		MaxSegmentAge:          time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
 		MaxSegmentSize:         cfg.MaxSegmentSize,
+		MaxSegmentCount:        cfg.MaxSegmentCount,
 		MaxDiskUsage:           cfg.MaxDiskUsage,
+		MaxTableDiskUsage:      cfg.MaxTableDiskUsage,
+		MaxTableSegmentCount:   cfg.MaxTableSegmentCount,
+		DisableTableLimits:     cfg.DisableTableLimits,
+		EnforceTableLimits:     cfg.EnforceTableLimits,
+		TableLimits:            cfg.TableLimits,
 		MaxTransferConcurrency: cfg.MaxTransferConcurrency,
 		WALFlushInterval:       time.Duration(cfg.WALFlushIntervalMilliSeconds) * time.Millisecond,
 		Region:                 cfg.Region,
 		StorageDir:             cfg.StorageDir,
+
+		Realtime:                     realtime,
+		QueuedReservedWorkersPercent: queuedReservedWorkersPercent,
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {
+		requestTimeout, err := v.RequestTimeout()
+		if err != nil {
+			return err
+		}
 		// Add this pods identity for all metrics received
 		addLabels := mergeMaps(cfg.AddLabels, map[string]string{
 			"adxmon_namespace": k8s.Instance.Namespace,
@@ -413,21 +476,27 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.PrometheusRemoteWriteHandlerOpts{
-			Path: v.Path,
+			Path:           v.Path,
+			RequestTimeout: requestTimeout,
 			MetricOpts: collector.MetricsHandlerOpts{
-				DefaultDropMetrics:       defaultDropMetrics,
+				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
 				DropMetrics:              dropMetrics,
 				DropLabels:               dropLabels,
 				KeepMetrics:              keepMetrics,
 				KeepMetricsLabelValues:   keepMetricLabelValues,
 				DisableMetricsForwarding: disableMetricsForwarding,
+				DefaultDropMetrics:       defaultDropMetrics,
 				RemoteWriteClients:       remoteWriteClients,
 			},
 		})
 	}
 
 	for _, v := range cfg.OtelMetric {
+		requestTimeout, err := v.RequestTimeout()
+		if err != nil {
+			return err
+		}
 		// Add this pods identity for all metrics received
 		addLabels := mergeMaps(cfg.AddLabels, v.AddLabels, map[string]string{
 			"adxmon_namespace": k8s.Instance.Namespace,
@@ -506,10 +575,12 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		opts.OtlpMetricsHandlers = append(opts.OtlpMetricsHandlers, collector.OtlpMetricsHandlerOpts{
-			Path:     v.Path,
-			GrpcPort: v.GrpcPort,
+			Path:           v.Path,
+			GrpcPort:       v.GrpcPort,
+			RequestTimeout: requestTimeout,
 			MetricOpts: collector.MetricsHandlerOpts{
 				DefaultDropMetrics:       defaultDropMetrics,
+				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
 				DropMetrics:              dropMetrics,
 				DropLabels:               dropLabels,
@@ -523,6 +594,10 @@ func realMain(ctx *cli.Context) error {
 
 	if cfg.OtelLog != nil {
 		v := cfg.OtelLog
+		requestTimeout, err := v.RequestTimeout()
+		if err != nil {
+			return err
+		}
 		addAttributes := mergeMaps(cfg.AddAttributes, v.AddAttributes)
 
 		createHttpFunc := func(store storage.Store, health *cluster.Health) (*logs.Service, *http.HttpHandler, error) {
@@ -537,9 +612,12 @@ func realMain(ctx *cli.Context) error {
 				}
 			}
 
-			if len(addAttributes) > 0 {
+			dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				}))
 			}
 
@@ -562,6 +640,7 @@ func realMain(ctx *cli.Context) error {
 			logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
 				WorkerCreator: engine.WorkerCreator(transformers, sinks),
 				HealthChecker: health,
+				ProcessBatch:  engine.WorkerCreator(transformers, sinks)("otlp-logs", nil).ProcessBatch,
 			})
 
 			workerSvc := &logs.Service{
@@ -572,6 +651,7 @@ func realMain(ctx *cli.Context) error {
 			httpHandler := &http.HttpHandler{
 				Path:    "/v1/logs",
 				Handler: logsSvc.Handler,
+				Timeout: requestTimeout,
 			}
 			return workerSvc, httpHandler, nil
 		}
@@ -583,8 +663,12 @@ func realMain(ctx *cli.Context) error {
 
 	for _, v := range cfg.HostLog {
 		tailSourceConfig := tail.TailSourceConfig{}
+		if realtime.Policy.HasRealtime() {
+			tailSourceConfig.RealtimePolicy = realtime.Policy
+			tailSourceConfig.RealtimeBatchWait = realtime.LogBatchWait
+		}
 		if !v.DisableKubeDiscovery {
-			informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
+			informer, err = getInformer(ctx.Context, &cfg, hostname, informer)
 			if err != nil {
 				return fmt.Errorf("failed to get informer for tail: %w", err)
 			}
@@ -634,9 +718,12 @@ func realMain(ctx *cli.Context) error {
 				transformers = append(transformers, transform)
 			}
 
-			if len(addAttributes) > 0 {
+			dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				}))
 			}
 
@@ -700,8 +787,10 @@ func realMain(ctx *cli.Context) error {
 					}
 					transformers = append(transformers, transform)
 				}
+				dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 				attributeTransform := addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				})
 				transformers = append(transformers, attributeTransform)
 
@@ -759,9 +848,12 @@ func realMain(ctx *cli.Context) error {
 					transformers = append(transformers, transform)
 				}
 
-				if len(addAttributes) > 0 {
+				dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+				if len(addAttributes) > 0 || dynamicLabeler != nil {
 					transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 						ResourceValues: addAttributes,
+						DynamicLabeler: dynamicLabeler,
 					}))
 				}
 
@@ -782,6 +874,7 @@ func realMain(ctx *cli.Context) error {
 						Table:          target.Table,
 						LogLineParsers: parsers,
 						JournalFields:  target.JournalFields,
+						JournalPath:    target.JournalPath,
 					})
 				}
 
@@ -827,8 +920,8 @@ func realMain(ctx *cli.Context) error {
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
+	// Block until svc.Close() has drained, so the process does not exit mid-flush.
+	service.WaitForShutdown(sc, func(sig os.Signal) {
 		cancel()
 
 		logger.Infof("Received signal %s, exiting...", sig.String())
@@ -837,8 +930,7 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Error(err.Error())
 		}
-	}()
-	<-svcCtx.Done()
+	})
 	return nil
 }
 
@@ -871,20 +963,111 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
-	if informer != nil {
-		return informer, nil
+func newLogLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.LogLabeler {
+	if kubeNode == nil {
+		return nil
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeConfig)
+	merged := config.MergeAddMetadataLabels(configs...)
+	if merged == nil {
+		return nil
+	}
+
+	if len(merged.KubernetesNodeLabels) == 0 && len(merged.KubernetesNodeAnnotations) == 0 {
+		return nil
+	}
+
+	return metadata.FromConfig(kubeNode, merged)
+}
+
+func newMetricLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.MetricLabeler {
+	if kubeNode == nil {
+		return nil
+	}
+
+	merged := config.MergeAddMetadataLabels(configs...)
+	if merged == nil {
+		return nil
+	}
+
+	if len(merged.KubernetesNodeLabels) == 0 && len(merged.KubernetesNodeAnnotations) == 0 {
+		return nil
+	}
+
+	return metadata.FromConfig(kubeNode, merged)
+}
+
+func getKubeClient(kubeConfig string) (*kubernetes.Clientset, error) {
+	config, err := k8s.BuildConfigFromFlags("", kubeConfig)
 	if err != nil {
 		logger.Warnf("No kube-config provided")
 		return nil, fmt.Errorf("unable to find kube config [%s]: %w", kubeConfig, err)
 	}
 
+	if config.UserAgent == "" {
+		config.UserAgent = fmt.Sprintf("adx-mon-collector/%s", version.String())
+	}
+
+	if config.QPS == 0 {
+		config.QPS = 25
+	}
+
+	if config.Burst == 0 {
+		config.Burst = 40
+	}
+
+	if config.WarningHandlerWithContext == nil {
+		handler := k8s.WarningLogger{}
+		config.WarningHandlerWithContext = handler
+		config.WarningHandler = handler
+	}
+
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to build kube config: %w", err)
+	}
+
+	return client, nil
+}
+
+func getInformer(ctx context.Context, cfg *config.Config, nodeName string, informer k8s.PodInformerInterface) (k8s.PodInformerInterface, error) {
+	if informer != nil {
+		return informer, nil
+	}
+
+	// Use kubelet informer if configured
+	if cfg.KubeletDiscovery != nil {
+		opts := k8s.KubeletInformerOptions{
+			NodeName:    nodeName,
+			KubeletHost: cfg.KubeletDiscovery.Host,
+			KubeletPort: cfg.KubeletDiscovery.Port,
+			TokenPath:   cfg.KubeletDiscovery.TokenPath,
+			CAPath:      cfg.KubeletDiscovery.CAPath,
+		}
+
+		if cfg.KubeletDiscovery.PollInterval > 0 {
+			opts.PollInterval = time.Duration(cfg.KubeletDiscovery.PollInterval) * time.Second
+		}
+		if cfg.KubeletDiscovery.RequestTimeout > 0 {
+			opts.RequestTimeout = time.Duration(cfg.KubeletDiscovery.RequestTimeout) * time.Second
+		}
+
+		kubeletInformer, err := k8s.NewKubeletPodInformer(opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create kubelet informer: %w", err)
+		}
+
+		if err := kubeletInformer.Open(ctx); err != nil {
+			return nil, fmt.Errorf("failed to start kubelet informer: %w", err)
+		}
+
+		return kubeletInformer, nil
+	}
+
+	// Fall back to standard Kubernetes API informer
+	client, err := getKubeClient(cfg.Kubeconfig)
+	if err != nil {
+		return nil, err
 	}
 
 	return k8s.NewPodInformer(client, nodeName), nil

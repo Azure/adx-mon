@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/celutil"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -25,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 )
 
 type AdxReconciler struct {
@@ -37,13 +41,144 @@ const (
 	ADXClusterCreatingReason = "Creating"
 	// ADXClusterWaitingReason denotes a cluster that is fully configured and is waiting to become available.
 	ADXClusterWaitingReason = "Waiting"
+
+	// otlpHubSchemaDefinition is the default OTLP schema for hub tables.
+	otlpHubSchemaDefinition = "Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic"
+
+	// Reconciliation requeue durations
+	requeueShort     = time.Minute      // Used for in-progress operations
+	requeueMedium    = 5 * time.Minute  // Used for provider registration
+	requeueLong      = 10 * time.Minute // Used for heartbeat/federation cycles
+	maxKustoScriptSz = 1 << 20          // 1MB max size for Kusto script batches
+
+	adxClusterMaxConcurrentReconciles = 4
+
+	heartbeatTargetTimeout         = 2 * time.Minute
+	heartbeatListDatabasesTimeout  = 30 * time.Second
+	heartbeatDatabaseSchemaTimeout = 45 * time.Second
+	heartbeatListFunctionsTimeout  = 30 * time.Second
+	heartbeatFunctionSchemaTimeout = 15 * time.Second
+	heartbeatIngestTimeout         = 30 * time.Second
+	heartbeatSkippedFunctionLimit  = 10
 )
+
+// resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
+// preferring the reconciled status endpoint and falling back to the spec when
+// the status has not been populated yet.
+func resolvedClusterEndpoint(cluster *adxmonv1.ADXCluster) string {
+	if cluster.Status.Endpoint != "" {
+		return cluster.Status.Endpoint
+	}
+	return cluster.Spec.Endpoint
+}
+
+func (r *AdxReconciler) setClusterCondition(ctx context.Context, cluster *adxmonv1.ADXCluster, status metav1.ConditionStatus, reason, message string, mutate func(*adxmonv1.ADXClusterStatus) bool) error {
+	logger.Infof("ADXCluster %s: updating status - %s: %s", cluster.Spec.ClusterName, reason, message)
+	condition := metav1.Condition{
+		Type:               adxmonv1.ADXClusterConditionOwner,
+		Status:             status,
+		ObservedGeneration: cluster.GetGeneration(),
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+	changed := false
+	if mutate != nil {
+		if mutate(&cluster.Status) {
+			changed = true
+		}
+	}
+	if meta.SetStatusCondition(&cluster.Status.Conditions, condition) {
+		changed = true
+	}
+	if changed {
+		if err := r.Status().Update(ctx, cluster); err != nil {
+			return fmt.Errorf("failed to update status: %w", err)
+		}
+	}
+	return nil
+}
+
+// logSetClusterCondition calls setClusterCondition and logs any error without propagating it.
+// Use this when setting status in non-critical paths where failing to update status should not
+// block reconciliation (e.g., when already returning an error or in skip paths).
+func (r *AdxReconciler) logSetClusterCondition(ctx context.Context, cluster *adxmonv1.ADXCluster, status metav1.ConditionStatus, reason, message string, mutate func(*adxmonv1.ADXClusterStatus) bool) {
+	if err := r.setClusterCondition(ctx, cluster, status, reason, message, mutate); err != nil {
+		logger.Warnf("ADXCluster %s: failed to update status condition: %v", cluster.Spec.ClusterName, err)
+	}
+}
+
+func appliedProvisionStateEqual(a, b *adxmonv1.AppliedProvisionState) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.SkuName != b.SkuName || a.Tier != b.Tier {
+		return false
+	}
+	if len(a.UserAssignedIdentities) != len(b.UserAssignedIdentities) {
+		return false
+	}
+	// Compare identities as sets (order-independent)
+	aSet := make(map[string]struct{}, len(a.UserAssignedIdentities))
+	for _, id := range a.UserAssignedIdentities {
+		aSet[id] = struct{}{}
+	}
+	for _, id := range b.UserAssignedIdentities {
+		if _, found := aSet[id]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+func copyAppliedProvisionState(src *adxmonv1.AppliedProvisionState) *adxmonv1.AppliedProvisionState {
+	if src == nil {
+		return nil
+	}
+	cp := &adxmonv1.AppliedProvisionState{
+		SkuName: src.SkuName,
+		Tier:    src.Tier,
+	}
+	if len(src.UserAssignedIdentities) > 0 {
+		cp.UserAssignedIdentities = append([]string(nil), src.UserAssignedIdentities...)
+	}
+	return cp
+}
 
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var cluster adxmonv1.ADXCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	// CriteriaExpression gating: if specified and evaluates to false, skip reconciliation quietly.
+	if expr := cluster.Spec.CriteriaExpression; expr != "" {
+		labels := getOperatorClusterLabels()
+		ok, err := celutil.EvaluateCriteriaExpression(labels, expr)
+		if err != nil {
+			logger.Errorf("ADXCluster %s/%s criteriaExpression error: %v", req.Namespace, req.Name, err)
+			// Surface error via status condition for visibility. No explicit requeue—this is a
+			// terminal error until the user edits the CRD (a CR update will trigger reconcile).
+			c := metav1.Condition{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: cluster.GetGeneration(), LastTransitionTime: metav1.Now()}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				if updateErr := r.Status().Update(ctx, &cluster); updateErr != nil {
+					logger.Warnf("ADXCluster %s/%s: failed to update status condition: %v", req.Namespace, req.Name, updateErr)
+				}
+			}
+			return ctrl.Result{}, nil
+		}
+		if !ok { // Expression false, mark condition and skip until spec changes
+			c := metav1.Condition{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping reconciliation", ObservedGeneration: cluster.GetGeneration(), LastTransitionTime: metav1.Now()}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				if updateErr := r.Status().Update(ctx, &cluster); updateErr != nil {
+					logger.Warnf("ADXCluster %s/%s: failed to update status condition: %v", req.Namespace, req.Name, updateErr)
+				}
+			}
+			return ctrl.Result{}, nil
+		}
+	}
+
+	logger.Infof("Reconciling ADXCluster %s/%s (generation %d)", req.Namespace, req.Name, cluster.GetGeneration())
 
 	if cluster.DeletionTimestamp != nil {
 		// Note, at this time we are not going to delete any Azure resources.
@@ -55,18 +190,22 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	switch {
 	case condition == nil:
 		// First time reconciliation
+		logger.Infof("ADXCluster %s: first-time reconciliation (no existing condition)", cluster.Spec.ClusterName)
 		return r.CreateCluster(ctx, &cluster)
 
 	case condition.ObservedGeneration != cluster.GetGeneration():
 		// CRD updated
+		logger.Infof("ADXCluster %s: CRD updated (generation %d -> %d)", cluster.Spec.ClusterName, condition.ObservedGeneration, cluster.GetGeneration())
 		return r.UpdateCluster(ctx, &cluster)
 
 	case condition.Reason == ADXClusterCreatingReason:
 		// Cluster is still being configured.
+		logger.Infof("ADXCluster %s: continuing cluster creation process", cluster.Spec.ClusterName)
 		return r.CreateCluster(ctx, &cluster)
 
 	case condition.Reason == ADXClusterWaitingReason:
 		// Check the status of the cluster
+		logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
 		return r.CheckStatus(ctx, &cluster)
 	}
 
@@ -74,11 +213,15 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) && cluster.Spec.Role != nil {
 		switch *cluster.Spec.Role {
 		case adxmonv1.ClusterRolePartition:
+			logger.Infof("ADXCluster %s: executing partition cluster heartbeat", cluster.Spec.ClusterName)
 			return r.HeartbeatFederatedClusters(ctx, &cluster)
 		case adxmonv1.ClusterRoleFederated:
+			logger.Infof("ADXCluster %s: executing federated cluster reconciliation", cluster.Spec.ClusterName)
 			return r.FederateClusters(ctx, &cluster)
 		}
 	}
+
+	logger.Infof("ADXCluster %s: reconciliation complete (no action needed)", cluster.Spec.ClusterName)
 
 	return ctrl.Result{}, nil
 }
@@ -86,94 +229,123 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 func (r *AdxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.ADXCluster{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: adxClusterMaxConcurrentReconciles,
+		}).
 		Complete(r)
 }
 
 func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
-	setClusterStatusCondition := func(reason, message string) error {
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionUnknown,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             reason,
-			Message:            message,
-		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return fmt.Errorf("failed to update status: %w", err)
-			}
-		}
-		return nil
-	}
+	logger.Infof("ADXCluster %s: entering CreateCluster phase", cluster.Spec.ClusterName)
 
-	// Set an initial status to communicate our current state.
-	if err := setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Creating ADX cluster %s", cluster.Name)); err != nil {
-		return ctrl.Result{}, err
-	}
-	// ADXCluster has many configuration options, but also supports zero-config; however, in order to create a functioning cluster,
-	// we need to ensure certain options are specified, either by the user or by default values.
-	if err := applyDefaults(ctx, r, cluster); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply defaults: %w", err)
-	}
-	// If the cluster already has an Endpoint, we assume it exists (either user-provided or previously created),
-	// so the create routine has no work left to do.
-	if cluster.Spec.Endpoint != "" {
-		if err := setClusterStatusCondition(ADXClusterWaitingReason, fmt.Sprintf("Waiting for ADX cluster %s", cluster.Name)); err != nil {
+	if cluster.Spec.Provision == nil {
+		if cluster.Spec.Endpoint == "" {
+			r.logSetClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
+				changed := false
+				if status.Endpoint != "" {
+					status.Endpoint = ""
+					changed = true
+				}
+				if status.AppliedProvisionState != nil {
+					status.AppliedProvisionState = nil
+					changed = true
+				}
+				return changed
+			})
+			return ctrl.Result{}, nil
+		}
+
+		logger.Infof("ADXCluster %s: provision section not specified; using provided endpoint", cluster.Spec.ClusterName)
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "ProvisioningSkipped", fmt.Sprintf("Using existing endpoint %s", cluster.Spec.Endpoint), func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != cluster.Spec.Endpoint {
+				status.Endpoint = cluster.Spec.Endpoint
+				changed = true
+			}
+			if status.AppliedProvisionState != nil {
+				status.AppliedProvisionState = nil
+				changed = true
+			}
+			return changed
+		}); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{}, nil
 	}
 
-	// Ensure the ADX provider is registered for this subscription.
+	if err := r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Creating ADX cluster %s", cluster.Name), nil); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	prov := cluster.Spec.Provision
+	missing := []string{}
+	if prov.SubscriptionId == "" {
+		missing = append(missing, "subscriptionId")
+	}
+	if prov.ResourceGroup == "" {
+		missing = append(missing, "resourceGroup")
+	}
+	if prov.Location == "" {
+		missing = append(missing, "location")
+	}
+	if prov.SkuName == "" {
+		missing = append(missing, "skuName")
+	}
+	if prov.Tier == "" {
+		missing = append(missing, "tier")
+	}
+	if len(missing) > 0 {
+		errMsg := fmt.Sprintf("missing required provisioning fields: %s", strings.Join(missing, ", "))
+		logger.Errorf("ADXCluster %s: %s", cluster.Spec.ClusterName, errMsg)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningInvalid", errMsg, nil)
+		return ctrl.Result{}, nil
+	}
+
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
-	registered, err := ensureAdxProvider(ctx, cred, cluster.Spec.Provision.SubscriptionId)
+	registered, err := ensureAdxProvider(ctx, cred, prov.SubscriptionId)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to ensure Kusto provider is registered: %w", err)
 	}
 	if !registered {
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", cluster.Spec.Provision.SubscriptionId))
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		logger.Infof("ADXCluster %s: waiting for provider registration, requeuing in %v", cluster.Spec.ClusterName, requeueMedium)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", prov.SubscriptionId), nil)
+		return ctrl.Result{RequeueAfter: requeueMedium}, nil
 	}
 
+	logger.Infof("ADXCluster %s: ensuring resource group", cluster.Spec.ClusterName)
 	if err := ensureResourceGroup(ctx, cluster, cred); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	logger.Infof("ADXCluster %s: creating or updating Kusto cluster", cluster.Spec.ClusterName)
 	clusterReady, err := createOrUpdateKustoCluster(ctx, cluster, cred)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if !clusterReady {
-		// We must wait for the cluster to be in a ready state before we can continue configuration.
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		logger.Infof("ADXCluster %s: cluster not ready yet, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName), nil)
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
+	logger.Infof("ADXCluster %s: ensuring databases", cluster.Spec.ClusterName)
 	dbCreated, err := ensureDatabases(ctx, cluster, cred)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if dbCreated {
-		// Wait for databases to be created.
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName))
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	}
-	_ = setClusterStatusCondition(ADXClusterWaitingReason, "Provisioning ADX clusters")
-
-	tblCreated, err := ensureHeartbeatTable(ctx, cluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if tblCreated {
-		// Tables are created synchronously, no waiting is necessary.
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, "Provisioned Heartbeat Table")
+		logger.Infof("ADXCluster %s: databases created, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName), nil)
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Provisioning ADX clusters", nil)
+
+	logger.Infof("ADXCluster %s: CreateCluster phase complete, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
 // ensureResourceGroup checks if the resource group exists and creates it if needed
@@ -272,6 +444,12 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 	} else {
 		resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 		if err != nil {
+			// Check if this is a 403 Forbidden error for an existing cluster
+			var respErr *azcore.ResponseError
+			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
+				logger.Warnf("ADXCluster %s: insufficient permissions to check existing cluster status (403 Forbidden), assuming cluster exists and is ready", cluster.Spec.ClusterName)
+				return true, nil // Assume the existing cluster is ready if we can't check it
+			}
 			return false, fmt.Errorf("failed to get cluster status: %w", err)
 		}
 		if resp.Properties == nil || resp.Properties.State == nil || *resp.Properties.State != armkusto.StateRunning {
@@ -283,12 +461,22 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 
 // ensureDatabases creates databases if they do not exist, returns true if any were created
 func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azcore.TokenCredential) (bool, error) {
+	if cluster.Spec.Provision == nil {
+		logger.Warnf("Skipping database ensure for cluster %s: provision configuration is empty", cluster.Spec.ClusterName)
+		return false, nil
+	}
+	if cluster.Spec.Provision.SubscriptionId == "" || cluster.Spec.Provision.ResourceGroup == "" {
+		return false, fmt.Errorf("cluster %s is missing subscriptionId or resourceGroup in provision spec", cluster.Spec.ClusterName)
+	}
+
 	databasesClient, err := armkusto.NewDatabasesClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create databases client: %w", err)
 	}
-	databases := cluster.Spec.Databases
-	if cluster.Spec.Federation.HeartbeatDatabase != nil {
+	// Copy the database slice before appending so we don't mutate the
+	// CR spec's backing array (Reconcile must treat spec as immutable).
+	databases := append([]adxmonv1.ADXClusterDatabaseSpec(nil), cluster.Spec.Databases...)
+	if cluster.Spec.Federation != nil && cluster.Spec.Federation.HeartbeatDatabase != nil {
 		databases = append(databases, adxmonv1.ADXClusterDatabaseSpec{
 			DatabaseName:  *cluster.Spec.Federation.HeartbeatDatabase,
 			TelemetryType: adxmonv1.DatabaseTelemetryLogs,
@@ -329,6 +517,8 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 				return false, fmt.Errorf("failed to create database: %w", err)
 			}
 			dbCreated = true
+		} else {
+			logger.Infof("Database %s already exists in cluster %s", db.DatabaseName, cluster.Spec.ClusterName)
 		}
 	}
 	return dbCreated, nil
@@ -342,80 +532,106 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 		cluster.Spec.Federation.HeartbeatTable == nil {
 		return false, nil
 	}
-	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
-	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
-		// Enables kustainer integration testing
-		ep.WithDefaultAzureCredential()
+	endpoint := resolvedClusterEndpoint(cluster)
+	if strings.TrimSpace(endpoint) == "" {
+		return false, fmt.Errorf("heartbeat table cannot be ensured without an endpoint")
 	}
-	client, err := kusto.New(ep)
+
+	client, err := newHeartbeatKustoClient(endpoint, "")
 	if err != nil {
 		return false, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
+	defer client.Close()
+	return ensureHeartbeatTableWithClient(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable)
+}
 
-	q := kql.New(".show tables | where TableName == '").AddUnsafe(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("' | count")
-	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q)
+func ensureHeartbeatTableWithClient(ctx context.Context, client *azkustodata.Client, database, table string) (bool, error) {
+	q := kql.New(".show tables | where TableName == ").AddString(table).AddLiteral(" | count")
+	result, err := client.Mgmt(ctx, database, q)
 	if err != nil {
 		return false, fmt.Errorf("failed to query Kusto tables: %w", err)
 	}
-	defer result.Stop()
 
-	for {
-		row, errInline, errFinal := result.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve tables: %w", err)
-		}
-
-		var t TableExists
-		if err := row.ToStruct(&t); err != nil {
-			return false, fmt.Errorf("failed to parse table count: %w", err)
-		}
-		if t.Count > 0 {
-			// Table exists, nothing to do
-			return false, nil
-		}
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, fmt.Errorf("failed to read heartbeat table existence result: %w", err)
+	}
+	var tableCount TableExists
+	if err := row.ToStruct(&tableCount); err != nil {
+		return false, fmt.Errorf("failed to parse table count: %w", err)
+	}
+	if tableCount.Count > 0 {
+		return false, nil
 	}
 
-	stmt := kql.New(".create table ").AddTable(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("(Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic)")
-	_, err = client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, stmt)
-	return true, err
+	stmt := kql.New(".create table ").AddTable(table).AddLiteral("(Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic)")
+	if _, err := client.Mgmt(ctx, database, stmt); err != nil {
+		return false, fmt.Errorf("failed to create heartbeat table: %w", err)
+	}
+	return true, nil
 }
 
 type TableExists struct {
 	Count int64 `kusto:"Count"`
 }
 
+func getSinglePrimaryRow(result query.Dataset) (query.Row, error) {
+	for _, table := range result.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+		rows := table.Rows()
+		if len(rows) != 1 {
+			return nil, fmt.Errorf("expected one primary result row, got %d", len(rows))
+		}
+		return rows[0], nil
+	}
+	return nil, fmt.Errorf("query returned no primary result")
+}
+
 func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	logger.Infof("ADXCluster %s: entering UpdateCluster phase", cluster.Spec.ClusterName)
+
+	// Note: This method handles existing Kusto clusters where the operator may not have full
+	// management permissions. When encountering 403 Forbidden errors from Azure APIs, the operator
+	// gracefully degrades to allow federation features to continue working while skipping
+	// cluster management operations that require elevated permissions.
+
 	// To accurately detect and reconcile user-driven changes to the cluster configuration (such as Sku, Tier, or UserAssignedIdentities),
 	// the operator stores a snapshot of the last-applied configuration. This allows the operator to distinguish between changes made
 	// via the CRD (which should be reconciled) and any modifications made directly in Azure (which are intentionally ignored).
 	// By comparing the current CRD spec to the stored applied state, we can determine exactly which fields the user has updated
 	// and ensure only those changes are propagated to the managed cluster.
 	if cluster.Spec.Provision == nil {
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "Complete",
-			Message:            "Cluster is already reconciled",
+		logger.Infof("ADXCluster %s: no provision spec, marking as bring-your-own", cluster.Spec.ClusterName)
+		endpoint := strings.TrimSpace(cluster.Spec.Endpoint)
+		statusType := metav1.ConditionTrue
+		reason := "ProvisioningSkipped"
+		message := "Cluster is already reconciled"
+		if endpoint == "" {
+			statusType = metav1.ConditionFalse
+			reason = "ProvisioningDisabled"
+			message = "No provisioning configuration or endpoint provided"
+		} else {
+			message = fmt.Sprintf("Using existing endpoint %s", endpoint)
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		if err := r.setClusterCondition(ctx, cluster, statusType, reason, message, func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != endpoint {
+				status.Endpoint = endpoint
+				changed = true
 			}
+			if status.AppliedProvisionState != nil {
+				status.AppliedProvisionState = nil
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // Since we don't have a previous state, we can't update
 	}
-	appliedProvisionState, err := cluster.Spec.Provision.LoadAppliedProvisioningState()
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to load applied provisioning state: %w", err)
-	}
+	appliedProvisionState := cluster.Status.AppliedProvisionState
 	if appliedProvisionState == nil {
 		appliedProvisionState = &adxmonv1.AppliedProvisionState{}
 	}
@@ -432,31 +648,65 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	}
 	resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 	if err != nil {
+		// Check if this is a 403 Forbidden error, which is expected when the operator
+		// is managing existing clusters without sufficient permissions to read cluster details
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
+			logger.Warnf("ADXCluster %s: insufficient permissions to read cluster details (403 Forbidden), skipping cluster updates - operator can still perform federation tasks", cluster.Spec.ClusterName)
+			c := metav1.Condition{
+				Type:               adxmonv1.ADXClusterConditionOwner,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: cluster.GetGeneration(),
+				LastTransitionTime: metav1.Now(),
+				Reason:             "PermissionRestricted",
+				Message:            "Cluster management restricted due to insufficient permissions, federation features remain available",
+			}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				if err := r.Status().Update(ctx, cluster); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+				}
+			}
+			return ctrl.Result{}, nil // Non-terminal state, federation can still work
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 
+	logger.Infof("ADXCluster %s: checking for cluster configuration changes", cluster.Spec.ClusterName)
 	clusterUpdate, updated := diffSkus(resp, appliedProvisionState, cluster)
-	if diffIdentities(resp, appliedProvisionState, cluster, &clusterUpdate) {
+	var identitiesUpdated bool
+	clusterUpdate, identitiesUpdated = diffIdentities(resp, appliedProvisionState, cluster, clusterUpdate)
+	if identitiesUpdated {
 		updated = true
 	}
 
 	if !updated {
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "Complete",
-			Message:            "Cluster is already reconciled",
-		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		logger.Infof("ADXCluster %s: no updates needed, marking as complete", cluster.Spec.ClusterName)
+
+		var desiredApplied *adxmonv1.AppliedProvisionState
+		if cluster.Spec.Provision != nil {
+			desiredApplied = &adxmonv1.AppliedProvisionState{
+				SkuName: cluster.Spec.Provision.SkuName,
+				Tier:    cluster.Spec.Provision.Tier,
 			}
+			if len(cluster.Spec.Provision.UserAssignedIdentities) > 0 {
+				desiredApplied.UserAssignedIdentities = append([]string(nil), cluster.Spec.Provision.UserAssignedIdentities...)
+			}
+		}
+
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "Complete", "Cluster is already reconciled", func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if !appliedProvisionStateEqual(status.AppliedProvisionState, desiredApplied) {
+				status.AppliedProvisionState = copyAppliedProvisionState(desiredApplied)
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // Terminal state, cluster is up-to-date
 	}
 
+	logger.Infof("ADXCluster %s: applying cluster updates", cluster.Spec.ClusterName)
 	_, err = clustersClient.BeginCreateOrUpdate(
 		ctx,
 		cluster.Spec.Provision.ResourceGroup,
@@ -468,6 +718,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to update Kusto cluster: %w", err)
 	}
 
+	logger.Infof("ADXCluster %s: cluster update initiated, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
 	c := metav1.Condition{
 		Type:               adxmonv1.ADXClusterConditionOwner,
 		Status:             metav1.ConditionUnknown,
@@ -481,10 +732,206 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 			return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 		}
 	}
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	return ctrl.Result{RequeueAfter: requeueShort}, nil
+}
+
+// diffSkus compares the desired SKU configuration from the CRD against the current Azure state
+// and the previously applied state. Returns an updated cluster configuration and true if an update
+// is needed. The function only triggers an update when:
+//   - The desired state differs from current Azure state
+//   - The current Azure state matches what was previously applied (to avoid overwriting manual changes)
+func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
+	clusterUpdate := armkusto.Cluster{
+		Location: resp.Location,
+		Identity: resp.Identity,
+		Tags:     resp.Tags,
+	}
+
+	if cluster.Spec.Provision == nil {
+		return clusterUpdate, false
+	}
+
+	desiredSku := strings.TrimSpace(cluster.Spec.Provision.SkuName)
+	desiredTier := strings.TrimSpace(cluster.Spec.Provision.Tier)
+
+	var currentSku, currentTier string
+	if resp.SKU != nil {
+		if resp.SKU.Name != nil {
+			currentSku = string(*resp.SKU.Name)
+		}
+		if resp.SKU.Tier != nil {
+			currentTier = string(*resp.SKU.Tier)
+		}
+	}
+
+	var appliedSku, appliedTier string
+	if applied != nil {
+		appliedSku = strings.TrimSpace(applied.SkuName)
+		appliedTier = strings.TrimSpace(applied.Tier)
+	}
+
+	// Early return if both desiredSku and desiredTier are empty.
+	// This is safe because the CRD contract requires these fields when spec.provision exists.
+	// If the contract changes, revisit this logic to ensure state changes (removal/reset) are detected.
+	if desiredSku == "" && desiredTier == "" {
+		return clusterUpdate, false
+	}
+
+	// Nothing to do if the cluster already matches the desired state.
+	if desiredSku == currentSku && desiredTier == currentTier {
+		return clusterUpdate, false
+	}
+
+	// Only attempt an update when the actual state still matches what we previously applied.
+	if applied != nil && (appliedSku != currentSku || appliedTier != currentTier) {
+		return clusterUpdate, false
+	}
+
+	clusterUpdate.SKU = &armkusto.AzureSKU{
+		Name: toSku(desiredSku),
+		Tier: toTier(desiredTier),
+	}
+	return clusterUpdate, true
+}
+
+// diffIdentities compares the desired user-assigned identities from the CRD against the current
+// Azure state and the previously applied state. It preserves unmanaged identities (those not
+// previously applied by the operator) while reconciling the operator-managed set. Returns an
+// updated cluster configuration and true if an update is needed.
+func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate armkusto.Cluster) (armkusto.Cluster, bool) {
+	if cluster.Spec.Provision == nil {
+		return clusterUpdate, false
+	}
+
+	desiredSet := make(map[string]struct{})
+	for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		desiredSet[id] = struct{}{}
+	}
+
+	appliedSet := make(map[string]struct{})
+	if applied != nil {
+		for _, id := range applied.UserAssignedIdentities {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			appliedSet[id] = struct{}{}
+		}
+	}
+
+	actualSet := make(map[string]struct{})
+	if resp.Identity != nil && resp.Identity.UserAssignedIdentities != nil {
+		for id := range resp.Identity.UserAssignedIdentities {
+			actualSet[id] = struct{}{}
+		}
+	}
+
+	finalSet := make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
+	for id := range actualSet {
+		if _, managed := appliedSet[id]; !managed {
+			finalSet[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+		}
+	}
+	for id := range desiredSet {
+		finalSet[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+	}
+
+	if len(finalSet) == len(actualSet) {
+		same := true
+		for id := range actualSet {
+			if _, ok := finalSet[id]; !ok {
+				same = false
+				break
+			}
+		}
+		if same {
+			return clusterUpdate, false
+		}
+	}
+
+	if clusterUpdate.Identity == nil {
+		clusterUpdate.Identity = &armkusto.Identity{}
+	}
+	clusterUpdate.Identity.Type = identityTypeForUpdate(resp.Identity, len(finalSet) > 0)
+	if len(finalSet) == 0 {
+		clusterUpdate.Identity.UserAssignedIdentities = nil
+	} else {
+		clusterUpdate.Identity.UserAssignedIdentities = finalSet
+	}
+	return clusterUpdate, true
+}
+
+func identityTypeForUpdate(existing *armkusto.Identity, includeUserAssigned bool) *armkusto.IdentityType {
+	hasSystemAssigned := identityHasSystem(existing)
+	switch {
+	case hasSystemAssigned && includeUserAssigned:
+		t := armkusto.IdentityTypeSystemAssignedUserAssigned
+		return &t
+	case hasSystemAssigned:
+		t := armkusto.IdentityTypeSystemAssigned
+		return &t
+	case includeUserAssigned:
+		t := armkusto.IdentityTypeUserAssigned
+		return &t
+	default:
+		t := armkusto.IdentityTypeNone
+		return &t
+	}
+}
+
+func identityHasSystem(identity *armkusto.Identity) bool {
+	if identity == nil || identity.Type == nil {
+		return false
+	}
+	switch *identity.Type {
+	case armkusto.IdentityTypeSystemAssigned, armkusto.IdentityTypeSystemAssignedUserAssigned:
+		return true
+	default:
+		return strings.Contains(string(*identity.Type), "SystemAssigned")
+	}
 }
 
 func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
+
+	if cluster.Spec.Provision == nil {
+		endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
+		if endpoint == "" {
+			r.logSetClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
+				changed := false
+				if status.Endpoint != "" {
+					status.Endpoint = ""
+					changed = true
+				}
+				if status.AppliedProvisionState != nil {
+					status.AppliedProvisionState = nil
+					changed = true
+				}
+				return changed
+			})
+			return ctrl.Result{}, nil
+		}
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "ProvisioningSkipped", fmt.Sprintf("Using existing endpoint %s", endpoint), func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != endpoint {
+				status.Endpoint = endpoint
+				changed = true
+			}
+			if status.AppliedProvisionState != nil {
+				status.AppliedProvisionState = nil
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
@@ -496,59 +943,72 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 	resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 	if err != nil {
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
+			logger.Warnf("ADXCluster %s: insufficient permissions to check cluster status (403 Forbidden), assuming cluster is ready for federation tasks", cluster.Spec.ClusterName)
+			if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "PermissionRestricted", "Cluster status check restricted due to insufficient permissions, federation features remain available", nil); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 	if resp.Properties == nil || resp.Properties.State == nil {
-		return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
+		logger.Infof("ADXCluster %s: cluster properties not available yet, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Cluster properties unavailable", nil)
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
-	// If the cluster is running, we're done
+	logger.Infof("ADXCluster %s: cluster state is %s", cluster.Spec.ClusterName, string(*resp.Properties.State))
+
 	if *resp.Properties.State == armkusto.StateRunning {
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "ClusterReady",
-			Message:            fmt.Sprintf("Cluster %s is ready", cluster.Spec.ClusterName),
+		endpoint := ""
+		if resp.Properties.URI != nil {
+			endpoint = *resp.Properties.URI
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		if endpoint == "" {
+			endpoint = resolvedClusterEndpoint(cluster)
+		}
+
+		var desiredApplied *adxmonv1.AppliedProvisionState
+		if cluster.Spec.Provision != nil {
+			desiredApplied = &adxmonv1.AppliedProvisionState{
+				SkuName: cluster.Spec.Provision.SkuName,
+				Tier:    cluster.Spec.Provision.Tier,
+			}
+			if len(cluster.Spec.Provision.UserAssignedIdentities) > 0 {
+				desiredApplied.UserAssignedIdentities = append([]string(nil), cluster.Spec.Provision.UserAssignedIdentities...)
 			}
 		}
 
-		if err := cluster.Spec.Provision.StoreAppliedProvisioningState(); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to store applied provisioning state: %w", err)
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "ClusterReady", fmt.Sprintf("Cluster %s is ready", cluster.Spec.ClusterName), func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != endpoint {
+				status.Endpoint = endpoint
+				changed = true
+			}
+			if !appliedProvisionStateEqual(status.AppliedProvisionState, desiredApplied) {
+				status.AppliedProvisionState = copyAppliedProvisionState(desiredApplied)
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
-		cluster.Spec.Endpoint = *resp.Properties.URI
-		if err := r.Update(ctx, cluster); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update cluster endpoint: %w", err)
-		}
-
-		return ctrl.Result{}, nil // Goal state reached
+		return ctrl.Result{}, nil
 	}
 
-	// If the cluster has failed to provision, we're done
 	if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == armkusto.ProvisioningStateFailed {
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             string(armkusto.ProvisioningStateFailed),
-			Message:            "Cluster creation failed",
+		logger.Errorf("ADXCluster %s: cluster provisioning failed", cluster.Spec.ClusterName)
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, string(armkusto.ProvisioningStateFailed), "Cluster creation failed", nil); err != nil {
+			return ctrl.Result{}, err
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil // This is a terminal failure
+		return ctrl.Result{}, nil
 	}
 
-	// For all other states, we can safely continue to wait
-	return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
+	logger.Infof("ADXCluster %s: cluster not ready yet (state: %s), requeuing in %v", cluster.Spec.ClusterName, string(*resp.Properties.State), requeueShort)
+	r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, fmt.Sprintf("Cluster state: %s", string(*resp.Properties.State)), nil)
+	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
 func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -560,6 +1020,7 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 		return ctrl.Result{}, nil
 	}
 
+	logger.Infof("ADXCluster %s: sending heartbeats to %d federated clusters", cluster.Spec.ClusterName, len(cluster.Spec.Federation.FederationTargets))
 	for _, target := range cluster.Spec.Federation.FederationTargets {
 		if err := heartbeatFederatedCluster(ctx, cluster, target); err != nil {
 			logger.Errorf("Failed to heartbeat federated cluster %s: %v", target.Endpoint, err)
@@ -567,91 +1028,36 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 		}
 		logger.Infof("Heartbeat sent to federated cluster %s", target.Endpoint)
 	}
-	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+	logger.Infof("ADXCluster %s: heartbeat cycle complete, requeuing in %v", cluster.Spec.ClusterName, requeueLong)
+	return ctrl.Result{RequeueAfter: requeueLong}, nil
 }
 
 func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster, target adxmonv1.ADXClusterFederatedClusterSpec) error {
-	partitionClusterEndpoint := cluster.Spec.Endpoint
-	ep := kusto.NewConnectionStringBuilder(partitionClusterEndpoint)
-	if strings.HasPrefix(partitionClusterEndpoint, "https://") {
-		// Enables kustainer integration testing
-		ep.WithDefaultAzureCredential()
-	}
-	client, err := kusto.New(ep)
+	targetCtx, cancel := context.WithTimeout(ctx, heartbeatTargetTimeout)
+	defer cancel()
+
+	partitionClusterEndpoint := resolvedClusterEndpoint(cluster)
+	client, err := newHeartbeatKustoClient(partitionClusterEndpoint, "")
 	if err != nil {
-		return fmt.Errorf("failed to create Kusto client: %w", err)
+		return fmt.Errorf("failed to create partition cluster Kusto client: %w", err)
 	}
+	defer client.Close()
 
-	q := kql.New(".show databases")
-	result, err := client.Mgmt(ctx, target.HeartbeatDatabase, q)
+	schema, stats, err := collectHeartbeatSchema(targetCtx, client, target.HeartbeatDatabase)
 	if err != nil {
-		return fmt.Errorf("failed to query databases: %w", err)
+		return err
 	}
-	defer result.Stop()
-
-	var databases []string
-	for {
-		row, errInline, errFinal := result.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return fmt.Errorf("failed to retrieve databases: %w", err)
-		}
-
-		var dbr DatabaseRec
-		if err := row.ToStruct(&dbr); err != nil {
-			return fmt.Errorf("failed to parse database: %w", err)
-		}
-		databases = append(databases, dbr.DatabaseName)
+	if stats.SkippedFunctions > 0 {
+		logger.Warnf("ADXCluster %s: collected heartbeat schema for federated target %s: databases=%d tables=%d functions=%d views=%d skippedFunctions=%d sampleSkippedFunctionNames=%s firstSkippedFunctionError=%q", cluster.Spec.ClusterName, target.Endpoint, stats.Databases, stats.Tables, stats.Functions, stats.Views, stats.SkippedFunctions, formatNameList(stats.SampleSkippedFunctionNames, heartbeatSkippedFunctionLimit), stats.FirstSkippedFunctionError)
+	} else {
+		logger.Infof("ADXCluster %s: collected heartbeat schema for federated target %s: databases=%d tables=%d functions=%d views=%d skippedFunctions=0", cluster.Spec.ClusterName, target.Endpoint, stats.Databases, stats.Tables, stats.Functions, stats.Views)
 	}
 
-	var schema []ADXClusterSchema
-	for _, database := range databases {
-		s := ADXClusterSchema{
-			Database: database,
-		}
-		q := kql.New(".show tables")
-		result, err := client.Mgmt(ctx, database, q)
-		if err != nil {
-			return fmt.Errorf("failed to query tables: %w", err)
-		}
-
-		for {
-			row, errInline, errFinal := result.NextRowOrError()
-			if errFinal == io.EOF {
-				break
-			}
-			if errInline != nil {
-				continue
-			}
-			if errFinal != nil {
-				return fmt.Errorf("failed to retrieve tables: %w", err)
-			}
-
-			var tbl TableRec
-			if err := row.ToStruct(&tbl); err != nil {
-				return fmt.Errorf("failed to parse table: %w", err)
-			}
-			s.Tables = append(s.Tables, tbl.TableName)
-		}
-
-		schema = append(schema, s)
-	}
-
-	federatedClusterEndpoint := target.Endpoint
-	ep = kusto.NewConnectionStringBuilder(federatedClusterEndpoint)
-	if strings.HasPrefix(federatedClusterEndpoint, "https://") && target.ManagedIdentityClientId != "" {
-		// Enables kustainer integration testing
-		ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
-	}
-	client, err = kusto.New(ep)
+	federatedClient, err := newHeartbeatKustoClient(target.Endpoint, target.ManagedIdentityClientId)
 	if err != nil {
-		return fmt.Errorf("failed to create Kusto client: %w", err)
+		return fmt.Errorf("failed to create federated cluster Kusto client: %w", err)
 	}
+	defer federatedClient.Close()
 
 	schemaData, err := json.Marshal(schema)
 	if err != nil {
@@ -663,22 +1069,237 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		return fmt.Errorf("failed to marshal partition metadata: %w", err)
 	}
 
+	logger.Infof("ADXCluster %s: ingesting heartbeat row into %s.%s on %s (schemaBytes=%d)", cluster.Spec.ClusterName, target.HeartbeatDatabase, target.HeartbeatTable, target.Endpoint, len(schemaData))
+	return ingestHeartbeatRow(targetCtx, federatedClient, target, partitionClusterEndpoint, schemaData, partitionMetadata)
+}
+
+func newHeartbeatKustoClient(endpoint, managedIdentityClientID string) (*azkustodata.Client, error) {
+	kcsb := azkustodata.NewConnectionStringBuilder(endpoint)
+	if strings.HasPrefix(endpoint, "https://") {
+		if managedIdentityClientID != "" {
+			kcsb = kcsb.WithUserAssignedIdentityClientId(managedIdentityClientID)
+		} else {
+			// Enables kustainer integration testing while defaulting to workload identity in production.
+			kcsb = kcsb.WithDefaultAzureCredential()
+		}
+	}
+	return azkustodata.New(kcsb)
+}
+
+type heartbeatSchemaCollectionStats struct {
+	Databases                  int
+	Tables                     int
+	Functions                  int
+	Views                      int
+	SkippedFunctions           int
+	SampleSkippedFunctionNames []string
+	FirstSkippedFunctionError  string
+}
+
+func collectHeartbeatSchema(ctx context.Context, client *azkustodata.Client, heartbeatDatabase string) ([]ADXClusterSchema, heartbeatSchemaCollectionStats, error) {
+	var stats heartbeatSchemaCollectionStats
+	databases, err := listKustoDatabases(ctx, client, heartbeatDatabase)
+	if err != nil {
+		return nil, stats, err
+	}
+	stats.Databases = len(databases)
+
+	schema := make([]ADXClusterSchema, 0, len(databases))
+	for _, database := range databases {
+		s, dbStats, err := collectDatabaseHeartbeatSchema(ctx, client, database)
+		if err != nil {
+			return nil, stats, err
+		}
+		schema = append(schema, s)
+		stats.Tables += len(s.Tables)
+		stats.Functions += dbStats.Functions
+		stats.Views += len(s.Views)
+		stats.SkippedFunctions += dbStats.SkippedFunctions
+		stats.SampleSkippedFunctionNames = appendBoundedNames(stats.SampleSkippedFunctionNames, dbStats.SampleSkippedFunctionNames, heartbeatSkippedFunctionLimit)
+		if stats.FirstSkippedFunctionError == "" {
+			stats.FirstSkippedFunctionError = dbStats.FirstSkippedFunctionError
+		}
+	}
+	return schema, stats, nil
+}
+
+func listKustoDatabases(ctx context.Context, client *azkustodata.Client, heartbeatDatabase string) ([]string, error) {
+	const stage = "show databases"
+
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatListDatabasesTimeout)
+	defer cancel()
+
+	result, err := client.Mgmt(stageCtx, heartbeatDatabase, kql.New(".show databases"))
+	if err != nil {
+		return nil, wrapHeartbeatStageError(stage, heartbeatListDatabasesTimeout, err)
+	}
+
+	var databases []string
+	for _, table := range result.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+		for _, row := range table.Rows() {
+			var dbr DatabaseRec
+			if err := row.ToStruct(&dbr); err != nil {
+				return nil, wrapHeartbeatStageError(stage, heartbeatListDatabasesTimeout, fmt.Errorf("parse database: %w", err))
+			}
+			databases = append(databases, dbr.DatabaseName)
+		}
+	}
+	return databases, nil
+}
+
+type heartbeatDatabaseSchemaStats struct {
+	Functions                  int
+	SkippedFunctions           int
+	SampleSkippedFunctionNames []string
+	FirstSkippedFunctionError  string
+}
+
+func collectDatabaseHeartbeatSchema(ctx context.Context, client *azkustodata.Client, database string) (ADXClusterSchema, heartbeatDatabaseSchemaStats, error) {
+	s := ADXClusterSchema{
+		Database:     database,
+		TableSchemas: make(map[string]string),
+	}
+	var stats heartbeatDatabaseSchemaStats
+
+	tableColumns, err := listHeartbeatDatabaseTableColumns(ctx, client, database)
+	if err != nil {
+		return ADXClusterSchema{}, stats, err
+	}
+	for tableName, cols := range tableColumns {
+		s.Tables = append(s.Tables, tableName)
+		s.TableSchemas[tableName] = strings.Join(cols, ", ")
+	}
+	sort.Strings(s.Tables)
+
+	functionNames, err := listHeartbeatFunctions(ctx, client, database)
+	if err != nil {
+		return ADXClusterSchema{}, stats, err
+	}
+	stats.Functions = len(functionNames)
+	for _, fnName := range functionNames {
+		isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fnName)
+		if err != nil {
+			stats.SkippedFunctions++
+			stats.SampleSkippedFunctionNames = appendBoundedNames(stats.SampleSkippedFunctionNames, []string{fmt.Sprintf("%s.%s", database, fnName)}, heartbeatSkippedFunctionLimit)
+			if stats.FirstSkippedFunctionError == "" {
+				stats.FirstSkippedFunctionError = fmt.Sprintf("%s.%s: %s", database, fnName, kustoutil.ParseError(err))
+			}
+			continue
+		}
+		if isView {
+			s.Views = append(s.Views, fnName)
+			s.TableSchemas[fnName] = viewSchema
+		}
+	}
+	sort.Strings(s.Views)
+	return s, stats, nil
+}
+
+func listHeartbeatDatabaseTableColumns(ctx context.Context, client *azkustodata.Client, database string) (map[string][]string, error) {
+	stage := fmt.Sprintf("show database schema for %s", database)
+
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatDatabaseSchemaTimeout)
+	defer cancel()
+
+	result, err := client.Mgmt(stageCtx, database, kql.New(".show database schema"))
+	if err != nil {
+		return nil, wrapHeartbeatStageError(stage, heartbeatDatabaseSchemaTimeout, err)
+	}
+
+	tableColumns := make(map[string][]string)
+	for _, table := range result.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+		for _, row := range table.Rows() {
+			var rec DatabaseSchemaRec
+			if err := row.ToStruct(&rec); err != nil {
+				return nil, wrapHeartbeatStageError(stage, heartbeatDatabaseSchemaTimeout, fmt.Errorf("parse database schema: %w", err))
+			}
+			if rec.TableName == "" {
+				continue
+			}
+			colDef := fmt.Sprintf("['%s']:%s", rec.ColumnName, rec.ColumnType)
+			tableColumns[rec.TableName] = append(tableColumns[rec.TableName], colDef)
+		}
+	}
+	return tableColumns, nil
+}
+
+func listHeartbeatFunctions(ctx context.Context, client *azkustodata.Client, database string) ([]string, error) {
+	stage := fmt.Sprintf("show functions for %s", database)
+
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatListFunctionsTimeout)
+	defer cancel()
+
+	result, err := client.Mgmt(stageCtx, database, kql.New(".show functions | project Name"))
+	if err != nil {
+		return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, err)
+	}
+
+	var functions []string
+	for _, table := range result.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+		for _, row := range table.Rows() {
+			functionName, err := row.StringByName("Name")
+			if err != nil {
+				return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, fmt.Errorf("parse function: %w", err))
+			}
+			functions = append(functions, functionName)
+		}
+	}
+	return functions, nil
+}
+
+func ingestHeartbeatRow(ctx context.Context, federatedClient *azkustodata.Client, target adxmonv1.ADXClusterFederatedClusterSpec, partitionClusterEndpoint string, schemaData, partitionMetadata []byte) error {
 	// Use encoding/csv to properly escape CSV fields
 	var b strings.Builder
 	w := csv.NewWriter(&b)
-	w.Write([]string{
+	if err := w.Write([]string{
 		time.Now().Format(time.RFC3339),
 		partitionClusterEndpoint,
 		string(schemaData),
 		string(partitionMetadata),
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to serialize heartbeat row: %w", err)
+	}
 	w.Flush()
+	if err := w.Error(); err != nil {
+		return fmt.Errorf("failed to serialize heartbeat row: %w", err)
+	}
 	row := strings.TrimRight(b.String(), "\n") // Remove trailing newline added by csv.Writer
 	stmt := kql.New(".ingest inline into table ").
 		AddTable(target.HeartbeatTable).
 		AddLiteral(" <| ").AddUnsafe(row)
-	_, err = client.Mgmt(ctx, target.HeartbeatDatabase, stmt)
-	return err
+
+	stage := fmt.Sprintf("ingest heartbeat into %s.%s", target.HeartbeatDatabase, target.HeartbeatTable)
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatIngestTimeout)
+	defer cancel()
+
+	_, err := federatedClient.Mgmt(stageCtx, target.HeartbeatDatabase, stmt)
+	if err != nil {
+		return wrapHeartbeatStageError(stage, heartbeatIngestTimeout, err)
+	}
+	return nil
+}
+
+func wrapHeartbeatStageError(stage string, timeout time.Duration, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%s timed out after %v: %w", stage, timeout, err)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%s canceled: %w", stage, err)
+	default:
+		return fmt.Errorf("%s failed: %w", stage, err)
+	}
 }
 
 type TableRec struct {
@@ -689,9 +1310,42 @@ type DatabaseRec struct {
 	DatabaseName string `json:"DatabaseName"`
 }
 
+type DatabaseExistsRec struct {
+	Count int64 `kusto:"Count"`
+}
+
+type DatabaseSchemaRec struct {
+	TableName  string `kusto:"TableName"`
+	ColumnName string `kusto:"ColumnName"`
+	ColumnType string `kusto:"ColumnType"`
+}
+
 type ADXClusterSchema struct {
-	Database string   `json:"database"`
-	Tables   []string `json:"tables"`
+	Database     string            `json:"database"`
+	Tables       []string          `json:"tables"`
+	TableSchemas map[string]string `json:"tableSchemas,omitempty"`
+	Views        []string          `json:"views"`
+}
+
+func formatNameList(names []string, limit int) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	if limit <= 0 || len(names) <= limit {
+		return strings.Join(names, ",")
+	}
+	return fmt.Sprintf("%s,+%d more", strings.Join(names[:limit], ","), len(names)-limit)
+}
+
+func appendBoundedNames(dst, src []string, limit int) []string {
+	if limit <= 0 || len(dst) >= limit {
+		return dst
+	}
+	remaining := limit - len(dst)
+	if len(src) > remaining {
+		src = src[:remaining]
+	}
+	return append(dst, src...)
 }
 
 func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -699,61 +1353,115 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		*cluster.Spec.Role != adxmonv1.ClusterRoleFederated ||
 		cluster.Spec.Federation == nil ||
 		cluster.Spec.Federation.HeartbeatDatabase == nil ||
-		cluster.Spec.Federation.HeartbeatTable == nil {
+		cluster.Spec.Federation.HeartbeatTable == nil ||
+		cluster.Spec.Federation.HeartbeatTTL == nil {
 		return ctrl.Result{}, nil
 	}
 
+	logger.Infof("ADXCluster %s: starting federation reconciliation", cluster.Spec.ClusterName)
+
 	// Step 1: Create Kusto client
-	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
-	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
-		ep.WithDefaultAzureCredential()
+	endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
+	if endpoint == "" {
+		logger.Infof("ADXCluster %s: endpoint unavailable for federation, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
-	client, err := kusto.New(ep)
+	client, err := newHeartbeatKustoClient(endpoint, "")
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
+	defer client.Close()
 
-	// Step 2: Query heartbeat table
-	rows, err := queryHeartbeatTable(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
+	// Step 2: Ensure heartbeat table exists
+	_, err = ensureHeartbeatTableWithClient(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to ensure heartbeat table: %w", err)
+	}
+
+	// Step 3: Query heartbeat table and process in streaming fashion
+	logger.Infof("ADXCluster %s: querying heartbeat table for federation data", cluster.Spec.ClusterName)
+	state, err := streamHeartbeatData(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to query heartbeat table: %w", err)
 	}
+	dbCount := len(state.DBSet)
+	entityCount := federationEntityCount(state)
+	logger.Infof("ADXCluster %s: processed heartbeat data from %d partition clusters: databases=%d databaseNames=%s logicalEntities=%d parseErrors=%d", cluster.Spec.ClusterName, state.EndpointCount, dbCount, formatNameList(federationDatabaseNames(state), 10), entityCount, len(state.ParseErrors))
+	if state.EndpointCount == 0 {
+		logger.Warnf("ADXCluster %s: no fresh heartbeat rows found in %s.%s within TTL %s; federation will not discover new partition tables or views this cycle", cluster.Spec.ClusterName, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
+	}
+	if entityCount == 0 && state.EndpointCount > 0 {
+		logger.Warnf("ADXCluster %s: fresh heartbeat rows were found, but no tables or views were discovered; hub tables and functions will not be updated this cycle", cluster.Spec.ClusterName)
+	}
 
-	// Step 3: Parse result
-	schemaByEndpoint, _ := parseHeartbeatRows(rows)
-
-	// Step 4: Unique list of databases
-	dbSet := extractDatabasesFromSchemas(schemaByEndpoint)
+	// Step 4: Build database specs from discovered databases
 	var dbSpecs []adxmonv1.ADXClusterDatabaseSpec
-	for db := range dbSet {
+	for db := range state.DBSet {
 		dbSpecs = append(dbSpecs, adxmonv1.ADXClusterDatabaseSpec{DatabaseName: db})
 	}
+	logger.Infof("ADXCluster %s: ensuring %d databases exist for federation", cluster.Spec.ClusterName, len(dbSpecs))
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
-	cluster.Spec.Databases = dbSpecs
-	_, err = ensureDatabases(ctx, cluster, cred)
+	merged := mergeDatabaseSpecs(cluster.Spec.Databases, dbSpecs)
+	tempCluster := cluster.DeepCopy()
+	tempCluster.Spec.Databases = merged
+	_, err = ensureDatabases(ctx, tempCluster, cred)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
-	// Step 5: Map tables to endpoints
-	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
+	// Step 5: Only target databases that are available on the hub. Provisioning
+	// is optional and asynchronous: discovered databases may not exist here yet.
+	availableDatabases, err := listKustoDatabases(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list available hub databases: %w", err)
+	}
+	hubDatabases, tableEndpoints, skippedDatabases := selectFederationDestinations(merged, state.DBTableEndpoints, availableDatabases)
+	if len(skippedDatabases) > 0 {
+		logger.Warnf("ADXCluster %s: skipping %d unavailable hub databases this cycle: %s; provision them or grant the operator access to enable synchronization", cluster.Spec.ClusterName, len(skippedDatabases), formatNameList(skippedDatabases, 10))
+	}
 
-	// Step 6: Generate function definitions
-	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
+	// Step 6: Generate and execute entity group definitions
+	entityGroupsByDB := generateEntityGroupDefinitions(state.SpokeDBEndpoints, hubDatabases)
+	logger.Infof("ADXCluster %s: updating entity groups for %d databases", cluster.Spec.ClusterName, len(entityGroupsByDB))
+	for db, entityGroups := range entityGroupsByDB {
+		logger.Infof("ADXCluster %s: executing %d entity group statements for database %s", cluster.Spec.ClusterName, len(entityGroups), db)
+		scripts := splitKustoScripts(entityGroups, maxKustoScriptSz)
+		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to execute entity group scripts for db %s: %w", db, err)
+		}
+	}
 
-	// Step 7/8: For each database, split scripts and execute
-	const maxScriptSize = 1024 * 1024 // 1MB
+	// Step 7: Ensure hub tables exist for all tables and views
+	logger.Infof("ADXCluster %s: ensuring hub tables exist for alias functions", cluster.Spec.ClusterName)
+	for db, tableMap := range tableEndpoints {
+		// Build a map with empty schemas to use OTLP default for all tables
+		tables := make(map[string]string)
+		for table := range tableMap {
+			tables[table] = ""
+		}
+		if err := ensureHubTables(ctx, client, db, tables); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to ensure hub tables for database %s: %w", db, err)
+		}
+	}
+
+	// Step 8: Generate function definitions
+	funcsByDB := generateKustoFunctionDefinitions(tableEndpoints)
+
+	// Step 9: For each database, split scripts and execute
+	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
 	for db, funcs := range funcsByDB {
-		scripts := splitKustoScripts(funcs, maxScriptSize)
+		logger.Infof("ADXCluster %s: executing %d functions for database %s", cluster.Spec.ClusterName, len(funcs), db)
+		scripts := splitKustoScripts(funcs, maxKustoScriptSz)
 		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to execute Kusto scripts for db %s: %w", db, err)
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+	logger.Infof("ADXCluster %s: federation reconciliation complete, requeuing in %v", cluster.Spec.ClusterName, requeueLong)
+	return ctrl.Result{RequeueAfter: requeueLong}, nil
 }
 
 // getIMDSMetadata queries Azure IMDS for metadata about the current environment
@@ -793,61 +1501,6 @@ func getIMDSMetadata(ctx context.Context, imdsURL string) (location, subscriptio
 	}
 	return
 }
-
-// recommendedSKUs defines the preferred SKUs in priority order
-var recommendedSKUs = []string{
-	"Standard_L8as_v3",
-	"Standard_L16as_v3",
-	"Standard_L32as_v3",
-}
-
-// getBestAvailableSKU queries Azure for available SKUs and returns the highest priority one
-func getBestAvailableSKU(ctx context.Context, subscriptionId string, region string, cred azcore.TokenCredential) (sku, tier string, err error) {
-	clustersClient, err := armkusto.NewClustersClient(subscriptionId, cred, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create clusters client: %w", err)
-	}
-
-	// Get list of SKUs available in the region
-	availableSKUs := make(map[string]bool)
-	pager := clustersClient.NewListSKUsPager(nil)
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return "", "", fmt.Errorf("failed to get SKUs: %w", err)
-		}
-		for _, sku := range page.Value {
-			if sku.ResourceType != nil && *sku.ResourceType == "clusters" &&
-				sku.Tier != nil && *sku.Tier == "Standard" {
-				for _, loc := range sku.Locations {
-					if strings.EqualFold(*loc, region) {
-						availableSKUs[*sku.Name] = true
-					}
-				}
-			}
-		}
-	}
-
-	// Check recommended SKUs in priority order
-	for _, recommendedSKU := range recommendedSKUs {
-		if availableSKUs[recommendedSKU] {
-			return recommendedSKU, "Standard", nil
-		}
-	}
-
-	// If no recommended SKU is available, pick the first available Standard SKU
-	var allSKUs []string
-	for sku := range availableSKUs {
-		allSKUs = append(allSKUs, sku)
-	}
-	if len(allSKUs) > 0 {
-		sort.Strings(allSKUs) // Sort for deterministic selection
-		return allSKUs[0], "Standard", nil
-	}
-
-	return "", "", fmt.Errorf("no suitable SKU found in region %s", region)
-}
-
 func ensureAdxProvider(ctx context.Context, cred azcore.TokenCredential, subscriptionID string) (bool, error) {
 	// Check if Kusto provider is registered
 	providersClient, err := armresources.NewProvidersClient(subscriptionID, cred, nil)
@@ -873,181 +1526,42 @@ func ensureAdxProvider(ctx context.Context, cred azcore.TokenCredential, subscri
 	return true, nil
 }
 
-func applyDefaults(ctx context.Context, r *AdxReconciler, cluster *adxmonv1.ADXCluster) error {
-	// Get IMDS metadata for defaults
-	imdsLocation, imdsSub, imdsRG, _, imdsOK := getIMDSMetadata(ctx, "")
-
-	// Authenticate early since we need it for SKU selection
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return fmt.Errorf("failed to create default credential: %w", err)
-	}
-
-	updated := false
-	if cluster.Spec.Endpoint != "" {
-		return nil // Skip clusters that already have endpoints
-	}
-
-	// Initialize provision and status if needed
-	if cluster.Spec.Provision == nil {
-		logger.Infof("Zero config specified for cluster, discovering defaults")
-		cluster.Spec.Provision = &adxmonv1.ADXClusterProvisionSpec{}
-		updated = true
-	}
-
-	// Fill in defaults from IMDS when available
-	if cluster.Spec.Provision.Location == "" && imdsOK {
-		logger.Infof("Setting location to %s for cluster", imdsLocation)
-		cluster.Spec.Provision.Location = imdsLocation
-		updated = true
-	}
-
-	if cluster.Spec.Provision.SubscriptionId == "" && imdsOK {
-		logger.Infof("Setting subscription ID to %s for cluster", imdsSub)
-		cluster.Spec.Provision.SubscriptionId = imdsSub
-		updated = true
-	}
-
-	if cluster.Spec.Provision.ResourceGroup == "" && imdsOK {
-		logger.Infof("Setting resource group to %s for cluster", imdsRG)
-		cluster.Spec.Provision.ResourceGroup = imdsRG
-		updated = true
-	}
-
-	// Get best available SKU if not specified
-	if cluster.Spec.Provision.SkuName == "" {
-		sku, tier, err := getBestAvailableSKU(ctx, cluster.Spec.Provision.SubscriptionId, cluster.Spec.Provision.Location, cred)
-		if err != nil {
-			return fmt.Errorf("failed to determine SKU: %w", err)
-		}
-		cluster.Spec.Provision.SkuName = sku
-		cluster.Spec.Provision.Tier = tier
-		updated = true
-	}
-
-	if len(cluster.Spec.Databases) == 0 {
-		// Default to two databases if none specified
-		cluster.Spec.Databases = []adxmonv1.ADXClusterDatabaseSpec{
-			{
-				DatabaseName:  "Metrics",
-				TelemetryType: adxmonv1.DatabaseTelemetryMetrics,
-			},
-			{
-				DatabaseName:  "Logs",
-				TelemetryType: adxmonv1.DatabaseTelemetryLogs,
-			},
-		}
-		updated = true
-	}
-
-	// Persist any changes back to the API server
-	if updated {
-		if err := r.Update(ctx, cluster); err != nil {
-			logger.Errorf("Failed to update cluster information: %v", err)
-			return fmt.Errorf("failed to update cluster spec: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func diffSkus(resp armkusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
-	clusterUpdate := armkusto.Cluster{
-		Location:   resp.Location,
-		SKU:        resp.SKU,
-		Identity:   resp.Identity,
-		Properties: resp.Properties,
-	}
-	if resp.SKU == nil {
-		return clusterUpdate, false
-	}
-
-	var updated bool
-	if resp.SKU.Name != nil && string(*resp.SKU.Name) == appliedProvisionState.SkuName && appliedProvisionState.SkuName != cluster.Spec.Provision.SkuName {
-		logger.Infof("Updating cluster %s sku from %s to %s", *resp.Name, string(*resp.SKU.Name), cluster.Spec.Provision.SkuName)
-		clusterUpdate.SKU.Name = toSku(cluster.Spec.Provision.SkuName)
-		updated = true
-	}
-	if resp.SKU.Tier != nil && string(*resp.SKU.Tier) == appliedProvisionState.Tier && appliedProvisionState.Tier != cluster.Spec.Provision.Tier {
-		logger.Infof("Updating cluster %s tier from %s to %s", *resp.Name, string(*resp.SKU.Tier), cluster.Spec.Provision.Tier)
-		clusterUpdate.SKU.Tier = toTier(cluster.Spec.Provision.Tier)
-		updated = true
-	}
-	return clusterUpdate, updated
-}
-
-func diffIdentities(resp armkusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *armkusto.Cluster) bool {
-	var updated bool
-	if resp.Identity != nil && resp.Identity.Type != nil && *resp.Identity.Type == armkusto.IdentityTypeUserAssigned && appliedProvisionState.UserAssignedIdentities != nil {
-		// This block is responsible for reconciling the set of user-assigned identities on the cluster.
-		// The goal is to ensure that only the identities managed by the operator (i.e., those specified in the CRD)
-		// are added or removed, without disturbing any identities that may have been added out-of-band (e.g., manually in Azure).
-		//
-		// To do this, we compare the set of user-assigned identities from the last-applied state (appliedProvisionState.UserAssignedIdentities)
-		// with the current desired state from the CRD (cluster.Spec.Provision.UserAssignedIdentities):
-		//   - For any identity present in the CRD but not in the applied state, we add it to resp.Identity.UserAssignedIdentities
-		//     (but only if it isn't already present, to avoid overwriting manual additions).
-		//   - For any identity present in the applied state but not in the CRD, we remove it from resp.Identity.UserAssignedIdentities
-		//     (but only if it is present, and only if it was previously managed by the operator).
-		//
-		// This approach ensures that we do not inadvertently remove or alter any identities that a user may have added
-		// directly in Azure or through other means. Only the identities that the operator is responsible for are managed here.
-		// The 'updated' flag is set to true if any changes are made, so that the update can be persisted.
-
-		// Build sets for comparison
-		currentSet := make(map[string]struct{})
-		for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
-			currentSet[id] = struct{}{}
-		}
-		appliedSet := make(map[string]struct{})
-		for _, id := range appliedProvisionState.UserAssignedIdentities {
-			appliedSet[id] = struct{}{}
-		}
-		// Additions: in currentSet but not in appliedSet
-		for id := range currentSet {
-			if _, wasApplied := appliedSet[id]; !wasApplied {
-				if resp.Identity.UserAssignedIdentities == nil {
-					clusterUpdate.Identity.UserAssignedIdentities = make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
-				}
-				if _, exists := resp.Identity.UserAssignedIdentities[id]; !exists {
-					clusterUpdate.Identity.UserAssignedIdentities[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
-					updated = true
-				}
-			}
-		}
-		// Deletions: in appliedSet but not in currentSet
-		for id := range appliedSet {
-			if _, isCurrent := currentSet[id]; !isCurrent {
-				if resp.Identity.UserAssignedIdentities != nil {
-					if _, exists := resp.Identity.UserAssignedIdentities[id]; exists {
-						delete(clusterUpdate.Identity.UserAssignedIdentities, id)
-						updated = true
-					}
-				}
-			}
-		}
-	}
-	return updated
-}
-
+// toSku converts a string SKU name to an armkusto.AzureSKUName pointer.
+// Returns nil for empty strings. Validates against known SKU values and falls
+// back to using the raw string if no match is found.
 func toSku(sku string) *armkusto.AzureSKUName {
-	for _, v := range armkusto.PossibleAzureSKUNameValues() {
-		if string(v) == sku {
-			return &v
+	if strings.TrimSpace(sku) == "" {
+		return nil
+	}
+	for _, candidate := range armkusto.PossibleAzureSKUNameValues() {
+		if string(candidate) == sku {
+			value := candidate
+			return &value
 		}
 	}
-	return nil
+	value := armkusto.AzureSKUName(sku)
+	return &value
 }
 
+// toTier converts a string tier name to an armkusto.AzureSKUTier pointer.
+// Returns nil for empty strings. Validates against known tier values and falls
+// back to using the raw string if no match is found.
 func toTier(tier string) *armkusto.AzureSKUTier {
-	for _, v := range armkusto.PossibleAzureSKUTierValues() {
-		if string(v) == tier {
-			return &v
+	if strings.TrimSpace(tier) == "" {
+		return nil
+	}
+	for _, candidate := range armkusto.PossibleAzureSKUTierValues() {
+		if string(candidate) == tier {
+			value := candidate
+			return &value
 		}
 	}
-	return nil
+	value := armkusto.AzureSKUTier(tier)
+	return &value
 }
 
+// toDatabase constructs an armkusto.Database object with the standard Azure resource ID format
+// for a Kusto database. Used when creating new databases in a cluster.
 func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.Database {
 	return &armkusto.Database{
 		Kind:     to.Ptr(armkusto.KindReadWrite),
@@ -1061,90 +1575,324 @@ func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.D
 // HeartbeatRow represents a row in the heartbeat table
 // Schema: Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic
 type HeartbeatRow struct {
-	Timestamp         time.Time         `kusto:"Timestamp"`
-	ClusterEndpoint   string            `kusto:"ClusterEndpoint"`
-	Schema            json.RawMessage   `kusto:"Schema"`
-	PartitionMetadata map[string]string `kusto:"PartitionMetadata"`
+	Timestamp       time.Time       `kusto:"Timestamp"`
+	ClusterEndpoint string          `kusto:"ClusterEndpoint"`
+	Schema          json.RawMessage `kusto:"Schema"`
 }
 
-// Helper: Query the heartbeat table for recent entries
-func queryHeartbeatTable(ctx context.Context, client *kusto.Client, database, table, ttl string) ([]HeartbeatRow, error) {
-	query := fmt.Sprintf("%s | where Timestamp > ago(%s)", table, ttl)
-	result, err := client.Query(ctx, database, kql.New("").AddUnsafe(query))
+// FederationState accumulates derived data during streaming processing of heartbeat rows.
+// This avoids holding all raw schema JSON in memory at once.
+type FederationState struct {
+	// DBSet contains unique databases discovered from all endpoints
+	DBSet map[string]struct{}
+
+	// DBTableEndpoints maps database -> table/view -> list of endpoints
+	DBTableEndpoints map[string]map[string][]string
+
+	// SpokeDBEndpoints maps database -> list of endpoints (for entity group generation)
+	SpokeDBEndpoints map[string][]string
+
+	// EndpointCount is the number of successfully processed endpoints
+	EndpointCount int
+
+	// ParseErrors collects non-fatal schema parsing errors
+	ParseErrors []string
+}
+
+// NewFederationState creates an initialized FederationState
+func NewFederationState() *FederationState {
+	return &FederationState{
+		DBSet:            make(map[string]struct{}),
+		DBTableEndpoints: make(map[string]map[string][]string),
+		SpokeDBEndpoints: make(map[string][]string),
+	}
+}
+
+func federationEntityCount(state *FederationState) int {
+	count := 0
+	for _, tableMap := range state.DBTableEndpoints {
+		count += len(tableMap)
+	}
+	return count
+}
+
+func federationDatabaseNames(state *FederationState) []string {
+	databases := make([]string, 0, len(state.DBSet))
+	for db := range state.DBSet {
+		databases = append(databases, db)
+	}
+	sort.Strings(databases)
+	return databases
+}
+
+// processHeartbeatRow processes a single heartbeat row and updates the federation state.
+// Schema parsing errors are recorded but do not stop processing.
+func (s *FederationState) processHeartbeatRow(row HeartbeatRow) {
+	var schemas []ADXClusterSchema
+	if err := json.Unmarshal(row.Schema, &schemas); err != nil {
+		s.ParseErrors = append(s.ParseErrors, fmt.Sprintf("endpoint %s: %v", row.ClusterEndpoint, err))
+		return
+	}
+
+	s.EndpointCount++
+
+	for _, schema := range schemas {
+		db := schema.Database
+
+		// Update DBSet
+		s.DBSet[db] = struct{}{}
+
+		// Update SpokeDBEndpoints
+		s.SpokeDBEndpoints[db] = append(s.SpokeDBEndpoints[db], row.ClusterEndpoint)
+
+		// Update DBTableEndpoints
+		if s.DBTableEndpoints[db] == nil {
+			s.DBTableEndpoints[db] = make(map[string][]string)
+		}
+		for _, table := range schema.Tables {
+			s.DBTableEndpoints[db][table] = append(s.DBTableEndpoints[db][table], row.ClusterEndpoint)
+		}
+		for _, view := range schema.Views {
+			s.DBTableEndpoints[db][view] = append(s.DBTableEndpoints[db][view], row.ClusterEndpoint)
+		}
+	}
+}
+
+// streamHeartbeatData queries the heartbeat table and processes rows in a streaming fashion,
+// returning the accumulated federation state without holding all schemas in memory.
+func streamHeartbeatData(ctx context.Context, client *azkustodata.Client, database, table, ttl string) (*FederationState, error) {
+	stmt, err := buildHeartbeatQuery(table, ttl)
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.IterativeQuery(ctx, database, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query heartbeat table: %w", err)
 	}
-	defer result.Stop()
+	defer result.Close()
 
-	var rows []HeartbeatRow
-	for {
-		row, errInline, errFinal := result.NextRowOrError()
-		if errFinal == io.EOF {
-			break
+	state := NewFederationState()
+
+	for tableResult := range result.Tables() {
+		if tableResult.Err() != nil {
+			return nil, fmt.Errorf("failed to read heartbeat table: %w", tableResult.Err())
 		}
-		if errInline != nil {
+
+		table := tableResult.Table()
+		if !table.IsPrimaryResult() {
 			continue
 		}
-		if errFinal != nil {
-			return nil, fmt.Errorf("failed to read heartbeat row: %w", errFinal)
+
+		for rowResult := range table.Rows() {
+			if rowResult.Err() != nil {
+				return nil, fmt.Errorf("failed to read heartbeat row: %w", rowResult.Err())
+			}
+
+			row := rowResult.Row()
+			var h HeartbeatRow
+			if err := row.ToStruct(&h); err != nil {
+				return nil, fmt.Errorf("failed to parse heartbeat row: %w", err)
+			}
+
+			state.processHeartbeatRow(h)
 		}
-		var h HeartbeatRow
-		if err := row.ToStruct(&h); err != nil {
-			return nil, fmt.Errorf("failed to parse heartbeat row: %w", err)
-		}
-		rows = append(rows, h)
 	}
-	return rows, nil
+
+	// Log any parse errors encountered
+	for _, parseErr := range state.ParseErrors {
+		logger.Errorf("failed to parse schema for %s", parseErr)
+	}
+
+	return state, nil
 }
 
-// Helper: Parse heartbeat rows into endpoint->schema and endpoint->partitionMetadata
-func parseHeartbeatRows(rows []HeartbeatRow) (map[string]ADXClusterSchema, map[string]map[string]string) {
-	schemaByEndpoint := make(map[string]ADXClusterSchema)
-	partitionMetaByEndpoint := make(map[string]map[string]string)
-	for _, row := range rows {
-		var schema ADXClusterSchema
-		_ = json.Unmarshal(row.Schema, &schema)
-		schemaByEndpoint[row.ClusterEndpoint] = schema
-		partitionMetaByEndpoint[row.ClusterEndpoint] = row.PartitionMetadata
+func buildHeartbeatQuery(table, ttl string) (azkustodata.Statement, error) {
+	duration, err := time.ParseDuration(ttl)
+	if err != nil {
+		return nil, fmt.Errorf("invalid heartbeat TTL %q: %w", ttl, err)
 	}
-	return schemaByEndpoint, partitionMetaByEndpoint
+	return kql.New("").
+		AddTable(table).
+		AddLiteral(" | where Timestamp > ago(").
+		AddTimespan(duration).
+		AddLiteral(") | summarize arg_max(Timestamp, Schema) by ClusterEndpoint"), nil
 }
 
-// Helper: Extract unique databases from schemas
-func extractDatabasesFromSchemas(schemas map[string]ADXClusterSchema) map[string]struct{} {
-	dbSet := make(map[string]struct{})
-	for _, schema := range schemas {
-		dbSet[schema.Database] = struct{}{}
+func mergeDatabaseSpecs(userDbs, discoveredDbs []adxmonv1.ADXClusterDatabaseSpec) []adxmonv1.ADXClusterDatabaseSpec {
+	combined := make(map[string]adxmonv1.ADXClusterDatabaseSpec, len(userDbs)+len(discoveredDbs))
+	for _, db := range userDbs {
+		combined[db.DatabaseName] = db
 	}
-	return dbSet
+	for _, db := range discoveredDbs {
+		if existing, ok := combined[db.DatabaseName]; ok {
+			if existing.TelemetryType == "" {
+				combined[db.DatabaseName] = db
+			}
+			continue
+		}
+		combined[db.DatabaseName] = db
+	}
+	merged := make([]adxmonv1.ADXClusterDatabaseSpec, 0, len(combined))
+	for _, db := range combined {
+		merged = append(merged, db)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].DatabaseName < merged[j].DatabaseName })
+	return merged
 }
 
-// Helper: Map tables to endpoints for each database
-func mapTablesToEndpoints(schemas map[string]ADXClusterSchema) map[string]map[string][]string {
-	dbTableEndpoints := make(map[string]map[string][]string)
-	for endpoint, schema := range schemas {
-		db := schema.Database
-		if dbTableEndpoints[db] == nil {
-			dbTableEndpoints[db] = make(map[string][]string)
+// selectFederationDestinations intersects the desired hub databases with the
+// data-plane inventory. Keep the original heartbeat state intact so missing
+// destinations can be retried, and keep all spoke entity groups available for
+// cross-database queries from the remaining hub databases.
+func selectFederationDestinations(desired []adxmonv1.ADXClusterDatabaseSpec, tableEndpoints map[string]map[string][]string, available []string) ([]string, map[string]map[string][]string, []string) {
+	exists := make(map[string]bool, len(available))
+	for _, db := range available {
+		exists[db] = true
+	}
+	var destinations, skipped []string
+	selected := make(map[string]map[string][]string)
+	for _, spec := range desired {
+		db := spec.DatabaseName
+		if !exists[db] {
+			skipped = append(skipped, db)
+			continue
 		}
-		for _, table := range schema.Tables {
-			dbTableEndpoints[db][table] = append(dbTableEndpoints[db][table], endpoint)
+		destinations = append(destinations, db)
+		if tables, ok := tableEndpoints[db]; ok {
+			selected[db] = tables
 		}
 	}
-	return dbTableEndpoints
+	sort.Strings(destinations)
+	sort.Strings(skipped)
+	return destinations, selected, skipped
+}
+
+func ensureHubTables(ctx context.Context, client *azkustodata.Client, database string, tables map[string]string) error {
+	var tableNames []string
+	for t := range tables {
+		tableNames = append(tableNames, t)
+	}
+	sort.Strings(tableNames)
+
+	for _, table := range tableNames {
+		schema := tables[table]
+		if strings.TrimSpace(table) == "" {
+			continue
+		}
+		exists, err := tableExists(ctx, client, database, table)
+		if err != nil {
+			return fmt.Errorf("failed to check table existence for %s.%s: %w", database, table, err)
+		}
+		if exists {
+			continue
+		}
+
+		schemaDef := otlpHubSchemaDefinition
+		if schema != "" {
+			schemaDef = schema
+		}
+
+		stmt := kql.New(".create table ").
+			AddUnsafe(table).
+			AddLiteral(" (").
+			AddUnsafe(schemaDef).
+			AddLiteral(")")
+		_, err = client.Mgmt(ctx, database, stmt)
+		if err != nil {
+			return fmt.Errorf("failed to create table %s.%s: %w", database, table, err)
+		}
+		logger.Infof("Created hub table %s.%s using schema: %s", database, table, schemaDef)
+	}
+	return nil
+}
+
+func tableExists(ctx context.Context, client *azkustodata.Client, database, table string) (bool, error) {
+	stmt := kql.New(".show tables | where TableName == ").AddString(table).AddLiteral(" | count")
+	result, err := client.Mgmt(ctx, database, stmt)
+	if err != nil {
+		return false, fmt.Errorf("failed to query table existence: %w", err)
+	}
+
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, fmt.Errorf("failed to read table existence result: %w", err)
+	}
+	var rec DatabaseExistsRec
+	if err := row.ToStruct(&rec); err != nil {
+		return false, fmt.Errorf("failed to parse table existence: %w", err)
+	}
+	return rec.Count > 0, nil
+}
+
+// generateEntityGroupDefinitions generates entity group definitions for spoke databases, replicated across all hub databases.
+// Each spoke database gets an entity group named "{SpokeDatabaseName}Spoke" containing all cluster endpoints
+// that have that database. These entity groups are created in every hub database.
+// Note: ADX does not support .create-or-alter for entity groups, so we use .drop followed by .create.
+// The script executes with ContinueOnErrors=true, so the drop will succeed even if the entity group doesn't exist.
+func generateEntityGroupDefinitions(spokeDBEndpoints map[string][]string, hubDatabases []string) map[string][]string {
+	// Sort spoke database names for deterministic output
+	var spokeDBNames []string
+	for db := range spokeDBEndpoints {
+		spokeDBNames = append(spokeDBNames, db)
+	}
+	sort.Strings(spokeDBNames)
+
+	// Sort hub databases for deterministic output
+	sortedHubDBs := append([]string(nil), hubDatabases...)
+	sort.Strings(sortedHubDBs)
+
+	// Generate entity group statements for each spoke database
+	entityGroupsByHubDB := make(map[string][]string)
+	for _, spokeDB := range spokeDBNames {
+		endpoints := spokeDBEndpoints[spokeDB]
+		if len(endpoints) == 0 {
+			continue
+		}
+
+		// Sort endpoints for deterministic output
+		sortedEndpoints := append([]string(nil), endpoints...)
+		sort.Strings(sortedEndpoints)
+
+		// Build the entity list: cluster('ep1').database('db'), cluster('ep2').database('db'), ...
+		var entities []string
+		for _, ep := range sortedEndpoints {
+			entities = append(entities, fmt.Sprintf("cluster('%s').database('%s')", ep, spokeDB))
+		}
+
+		// Entity group name: {SpokeDatabaseName}Spoke
+		entityGroupName := fmt.Sprintf("%sSpoke", spokeDB)
+		// ADX doesn't support .create-or-alter for entity groups, so we drop first then create.
+		// The drop may fail if the entity group doesn't exist, but ContinueOnErrors=true handles this.
+		dropStmt := fmt.Sprintf(".drop entity_group %s", entityGroupName)
+		createStmt := fmt.Sprintf(".create entity_group %s (%s)", entityGroupName, strings.Join(entities, ", "))
+
+		// Replicate this entity group definition to all hub databases
+		for _, hubDB := range sortedHubDBs {
+			entityGroupsByHubDB[hubDB] = append(entityGroupsByHubDB[hubDB], dropStmt, createStmt)
+		}
+	}
+
+	return entityGroupsByHubDB
 }
 
 // Helper: Generate Kusto function definitions for each table
+// References the named entity groups created by generateEntityGroupDefinitions (e.g., "MetricsSpoke", "LogsSpoke")
 func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]string) map[string][]string {
 	funcsByDB := make(map[string][]string)
 	for db, tableMap := range dbTableEndpoints {
-		for table, endpoints := range tableMap {
-			var clusters []string
-			for _, ep := range endpoints {
-				clusters = append(clusters, fmt.Sprintf("cluster('%s').database('%s')", ep, db))
-			}
-			macro := fmt.Sprintf("macro-expand entity_group [%s] as X { X.%s }", strings.Join(clusters, ", "), table)
-			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
+		// Reference the named entity group for this spoke database
+		entityGroupName := fmt.Sprintf("%sSpoke", db)
+		for table := range tableMap {
+			// Note: When referencing a stored entity group, do NOT use "entity_group" keyword prefix.
+			// Correct: macro-expand MyGroup as X ( X.Table )
+			// Wrong:   macro-expand entity_group MyGroup as X ( X.Table )
+			// isfuzzy=true best_effort=true allows the function to succeed even when some spokes
+			// are missing the table, returning partial results instead of an error.
+			macro := fmt.Sprintf("macro-expand isfuzzy=true best_effort=true %s as X ( X.%s )", entityGroupName, table)
+			// skipvalidation=true follows Microsoft guidance for cross-cluster functions created via scripts
+			// and avoids requiring the hub operator identity to have access to spoke databases.
+			// See https://learn.microsoft.com/kusto/management/create-function
+			funcDef := fmt.Sprintf(".create-or-alter function with (skipvalidation=true) %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}
 	}
@@ -1176,7 +1924,7 @@ func splitKustoScripts(funcs []string, maxSize int) [][]string {
 }
 
 // Helper: Execute Kusto scripts in a database, using the .execute database script preamble
-func executeKustoScripts(ctx context.Context, client *kusto.Client, database string, scripts [][]string) error {
+func executeKustoScripts(ctx context.Context, client *azkustodata.Client, database string, scripts [][]string) error {
 	const scriptPreamble = ".execute database script with (ContinueOnErrors=true)\n<|\n"
 	for _, script := range scripts {
 		fullScript := scriptPreamble + strings.Join(script, "")
@@ -1186,4 +1934,54 @@ func executeKustoScripts(ctx context.Context, client *kusto.Client, database str
 		}
 	}
 	return nil
+}
+
+type FunctionKind struct {
+	Kind string `kusto:"FunctionKind"`
+}
+
+type FunctionSchemaRec struct {
+	Kind          string          `kusto:"FunctionKind"`
+	OutputColumns json.RawMessage `kusto:"OutputColumns"`
+}
+
+type OutputColumn struct {
+	Name    string `json:"Name"`
+	CslType string `json:"CslType"`
+}
+
+func checkIfFunctionIsView(ctx context.Context, client *azkustodata.Client, database, functionName string) (bool, string, error) {
+	stage := fmt.Sprintf("show function schema for %s.%s", database, functionName)
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatFunctionSchemaTimeout)
+	defer cancel()
+
+	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind, OutputColumns = todynamic(Schema).OutputColumns")
+	result, err := client.Mgmt(stageCtx, database, q)
+	if err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, err)
+	}
+
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, err)
+	}
+	var rec FunctionSchemaRec
+	if err := row.ToStruct(&rec); err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse function schema: %w", err))
+	}
+
+	if rec.Kind != "ViewFunction" {
+		return false, "", nil
+	}
+
+	var cols []OutputColumn
+	if err := json.Unmarshal(rec.OutputColumns, &cols); err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse output columns: %w", err))
+	}
+
+	var parts []string
+	for _, col := range cols {
+		parts = append(parts, fmt.Sprintf("['%s']:%s", col.Name, col.CslType))
+	}
+	return true, strings.Join(parts, ", "), nil
 }

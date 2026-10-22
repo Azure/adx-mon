@@ -8,10 +8,8 @@ import (
 	"time"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
-
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,8 +54,9 @@ func (s *Store) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	s.rules = rules
+
+	s.wg.Add(1)
 	go s.reloadPeriodically()
 	return nil
 }
@@ -75,17 +74,23 @@ func (s *Store) Rules() []*Rule {
 }
 
 func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
+	if err := validateInterval(r.Spec.Interval.Duration); err != nil {
+		return nil, fmt.Errorf("alert rule %s/%s: %w", r.Namespace, r.Name, err)
+	}
+
 	rule := &Rule{
-		Version:           r.ResourceVersion,
-		Database:          r.Spec.Database,
-		Namespace:         r.Namespace,
-		Name:              r.Name,
-		Interval:          r.Spec.Interval.Duration,
-		Query:             r.Spec.Query,
-		Destination:       r.Spec.Destination,
-		AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
-		Criteria:          r.Spec.Criteria,
-		IsMgmtQuery:       false,
+		Version:            fmt.Sprintf("%d", r.Generation),
+		Database:           r.Spec.Database,
+		Namespace:          r.Namespace,
+		Name:               r.Name,
+		Interval:           r.Spec.Interval.Duration,
+		Query:              r.Spec.Query,
+		Destination:        r.Spec.Destination,
+		AutoMitigateAfter:  r.Spec.AutoMitigateAfter.Duration,
+		Criteria:           r.Spec.Criteria,
+		CriteriaExpression: r.Spec.CriteriaExpression,
+		IsMgmtQuery:        false,
+		LastQueryTime:      r.Status.LastQueryTime.Time,
 	}
 
 	// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
@@ -93,15 +98,22 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	// declaration because then Kusto will say it's an invalid query.
 	rule.IsMgmtQuery = strings.HasPrefix(r.Spec.Query, ".")
 
-	stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
-
-	rule.Stmt = stmt
 	return rule, nil
 }
 
+func validateInterval(interval time.Duration) error {
+	if interval < alertrulev1.MinAlertRuleInterval {
+		return fmt.Errorf("interval %s must be at least %s", interval, alertrulev1.MinAlertRuleInterval)
+	}
+	return nil
+}
+
 func (s *Store) reloadRules() ([]*Rule, error) {
+	ctx, cancel := context.WithTimeout(s.ctx, 1*time.Minute)
+	defer cancel()
+
 	ruleList := &alertrulev1.AlertRuleList{}
-	if err := s.ctrlCli.List(context.Background(), ruleList); err != nil {
+	if err := s.ctrlCli.List(ctx, ruleList); err != nil {
 		return nil, fmt.Errorf("failed to list alert rules: %w", err)
 	}
 
@@ -109,7 +121,8 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 	for _, r := range ruleList.Items {
 		rule, err := toRule(r, s.opts.Region)
 		if err != nil {
-			return nil, err
+			logger.Errorf("Skipping invalid AlertRule: %v", err)
+			continue
 		}
 		rules = append(rules, rule)
 	}
@@ -117,7 +130,6 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 }
 
 func (s *Store) reloadPeriodically() {
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	for {
@@ -161,11 +173,60 @@ type Rule struct {
 
 	// Criteria is a map of key-value pairs that are used to determine where an alert can execute.
 	Criteria map[string][]string
+	// CriteriaExpression is an optional CEL expression used for richer execution control.
+	CriteriaExpression string
 
 	// Management queries (starts with a dot) have to call a different
 	// query API in the Kusto Go SDK.
 	IsMgmtQuery bool
 
-	// Stmt specifies the underlayEtcdPeersQuery to execute.
-	Stmt kusto.Stmt
+	// LastQueryTime from the AlertRule status, used for smart scheduling
+	LastQueryTime time.Time
+}
+
+// Matches evaluates whether this rule should execute based on simple Criteria AND the CEL CriteriaExpression.
+// It returns true if both the map criteria matches and the expression evaluates to true.
+// Errors are returned for invalid criteria keys (referencing tags that don't exist) or CEL compilation issues.
+func (r *Rule) Matches(tags map[string]string) (bool, error) {
+	// Normalize provided tags (lowercase keys & values) without mutating caller map.
+	lowered := make(map[string]string, len(tags))
+	for k, v := range tags {
+		lowered[strings.ToLower(k)] = strings.ToLower(v)
+	}
+
+	// Map criteria evaluation - only requires one matching key/value
+	// We do not currently enforce that unknown keys are an error like with criteriaExpression
+	// for backwards compatibility
+	var criteriaMatched bool
+	if len(r.Criteria) == 0 {
+		criteriaMatched = true
+	} else {
+		for k, values := range r.Criteria {
+			keyLower := strings.ToLower(k)
+			vv, ok := lowered[keyLower]
+			if !ok { // key absent -> cannot match this key; continue checking others
+				continue
+			}
+			for _, candidate := range values {
+				if strings.EqualFold(vv, candidate) {
+					criteriaMatched = true
+					break
+				}
+			}
+		}
+	}
+
+	expressionMatched := false
+	if r.CriteriaExpression == "" {
+		expressionMatched = true
+	} else {
+		// do not pass lowered - for expressions, match on the actual cases.
+		matched, err := celutil.EvaluateCriteriaExpression(tags, r.CriteriaExpression)
+		if err != nil {
+			return false, fmt.Errorf("failed to evaluate criteriaExpression: %w", err)
+		}
+		expressionMatched = matched
+	}
+
+	return criteriaMatched && expressionMatched, nil
 }

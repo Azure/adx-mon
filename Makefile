@@ -1,54 +1,81 @@
 .DEFAULT_GOAL := default
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+BUILD_TIME ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+LDFLAGS := -X 'github.com/Azure/adx-mon/pkg/version.Version=$(VERSION)' \
+	-X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(GIT_COMMIT)' \
+	-X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(BUILD_TIME)'
+
 build-alerter:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/alerter ./cmd/alerter/...
-.PHONY: build
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/alerter ./cmd/alerter/...
+.PHONY: build-alerter
 
 build-ingestor:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/ingestor ./cmd/ingestor/...
-.PHONY: build
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/ingestor ./cmd/ingestor/...
+.PHONY: build-ingestor
 
 build-collector:
 	mkdir -p bin
-	CGO_ENABLED=1 go build -o bin/collector ./cmd/collector/
-.PHONY: build
+	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o bin/collector ./cmd/collector/
+.PHONY: build-collector
 
 build-operator:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/operator ./cmd/operator/...
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/operator ./cmd/operator/...
+.PHONY: build-operator
+
+build-adxexporter:
+	mkdir -p bin
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/adxexporter ./cmd/adxexporter/...
+.PHONY: build-adxexporter
+
+build: build-alerter build-ingestor build-collector build-operator build-adxexporter
 .PHONY: build
 
-build: build-alerter build-ingestor build-collector build-operator
-.PHONY: build
-
-image: image-ingestor image-alerter image-collector image-operator
+image: image-ingestor image-alerter image-collector image-operator image-adxexporter
 .PHONY: image
 
 image-ingestor:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
+.PHONY: image-ingestor
 
 image-alerter:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
+.PHONY: image-alerter
 
 image-collector:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
+.PHONY: image-collector
 
 image-operator:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
+.PHONY: image-operator
+
+image-adxexporter:
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/adxexporter:latest -f build/images/Dockerfile.adxexporter .
+.PHONY: image-adxexporter
 
 image-operator-dev:
+.PHONY: image-operator-dev
 
 push:
 	docker push ghcr.io/azure/adx-mon/alerter:latest
 	docker push ghcr.io/azure/adx-mon/ingestor:latest
 	docker push ghcr.io/azure/adx-mon/collector:latest
 	docker push ghcr.io/azure/adx-mon/operator:latest
+	docker push ghcr.io/azure/adx-mon/adxexporter:latest
+.PHONY: push
 
 clean:
 	rm bin/*
 .PHONY: clean
+
+gendocs:
+	go run tools/docgen/config/config.go
+.PHONY: gendocs
 
 test:
 	ENABLE_ASSERTIONS=true INTEGRATION=1 go test -timeout 30m ./...
@@ -85,3 +112,4 @@ k8s-bundle:
 default:
 	@$(MAKE) test
 	@$(MAKE) build
+.PHONY: default

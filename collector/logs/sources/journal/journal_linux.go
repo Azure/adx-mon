@@ -21,11 +21,15 @@ const (
 // journalReader is an interface for reading journal entries.
 type journalReader interface {
 	AddMatch(match string) error
+	AddDisjunction() error
 	Next() (uint64, error)
 	GetEntry() (*sdjournal.JournalEntry, error)
 	NextSkip(skip uint64) (uint64, error)
 	SeekHead() error
+	SeekTail() error
+	Previous() (uint64, error)
 	SeekCursor(cursor string) error
+	TestCursor(cursor string) error
 	Wait(timeout time.Duration) int
 	Close() error
 }
@@ -70,16 +74,17 @@ func (s *Source) Open(ctx context.Context) error {
 
 	tailers := make([]*tailer, 0, len(s.targets))
 	for _, target := range s.targets {
-		logger.Info("Opening journal source", "filters", target.Matches, "database", target.Database, "table", target.Table)
+		logger.Info("Opening journal source", "filters", target.Matches, "database", target.Database, "table", target.Table, "path", target.JournalPath)
 		batchQueue := make(chan *types.Log, 512)
 		outputQueue := make(chan *types.LogBatch, 1)
 
-		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table)
+		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table, target.JournalPath)
 		tailer := &tailer{
 			matches:        target.Matches,
 			database:       target.Database,
 			table:          target.Table,
 			journalFields:  target.JournalFields,
+			journalPath:    target.JournalPath,
 			cursorFilePath: cPath,
 			logLineParsers: target.LogLineParsers,
 			batchQueue:     batchQueue,

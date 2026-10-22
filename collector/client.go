@@ -1,12 +1,10 @@
 package collector
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -17,9 +15,10 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/version"
 	prom_model "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
-	corev1 "k8s.io/api/core/v1"
+	"github.com/prometheus/common/model"
 )
 
 const (
@@ -31,6 +30,7 @@ type MetricsClient struct {
 	opts      ClientOpts
 	transport *http.Transport
 	client    *http.Client
+	userAgent string
 
 	closing chan struct{}
 
@@ -120,6 +120,7 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 		NodeName:  opts.NodeName,
 		transport: transport,
 		client:    httpClient,
+		userAgent: fmt.Sprintf("adx-mon-collector/%s", version.String()),
 		token:     token,
 		closing:   make(chan struct{}),
 	}
@@ -132,7 +133,7 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 }
 
 func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.MetricFamily, error) {
-	parser := &expfmt.TextParser{}
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.ScrapeTimeOut)
 	defer cancel()
@@ -142,6 +143,7 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
 	}
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	c.mu.RLock()
 	token := c.token
@@ -183,6 +185,7 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
 	}
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	c.mu.RLock()
 	token := c.token
@@ -213,42 +216,6 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 	return prompb.NewIterator(br), nil
 }
 
-// Pods returns a list of pods running on the node. This uses the kubelet API instead of the kubernetes API server.
-func (c *MetricsClient) Pods() (corev1.PodList, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s:10250/pods", c.NodeName), nil)
-	if err != nil {
-		return corev1.PodList{}, err
-	}
-
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
-
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return corev1.PodList{}, err
-	}
-	defer resp.Body.Close()
-
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(resp.Body)
-	if err != nil {
-		return corev1.PodList{}, err
-	}
-
-	var pl corev1.PodList
-	err = json.Unmarshal(buf.Bytes(), &pl)
-	if err != nil {
-		return corev1.PodList{}, err
-	}
-
-	return pl, nil
-}
-
 func (c *MetricsClient) Close() error {
 	close(c.closing)
 	c.client.CloseIdleConnections()
@@ -264,7 +231,7 @@ func (c *MetricsClient) readToken() (string, error) {
 }
 
 func (c *MetricsClient) refreshToken() {
-	t := time.NewTicker(30 * time.Minute)
+	t := time.NewTicker(1 * time.Minute)
 	defer t.Stop()
 
 	for {

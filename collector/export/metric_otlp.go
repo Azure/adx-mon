@@ -169,7 +169,7 @@ func (c *PromToOtlpExporter) Write(ctx context.Context, wr *prompb.WriteRequest)
 	if timeseriesCount == 0 {
 		return nil
 	}
-	return c.sendRequest(serialized, timeseriesCount)
+	return c.sendRequest(ctx, serialized, timeseriesCount)
 }
 
 func (c *PromToOtlpExporter) CloseIdleConnections() {
@@ -197,7 +197,7 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 	count := int64(0)
 	for _, ts := range wr.Timeseries {
 		nameBytes := prompb.MetricName(ts)
-		if c.transformer.ShouldDropMetric(ts, nameBytes) {
+		if c.transformer.ShouldDropMetric(wr, ts, nameBytes) {
 			continue
 		}
 		count++
@@ -211,8 +211,8 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 			},
 		}
 
-		attributes := make([]*commonv1.KeyValue, 0, len(ts.Labels))
-		c.transformer.WalkLabels(ts, func(k, v []byte) {
+		attributes := make([]*commonv1.KeyValue, 0, len(ts.Labels)+len(wr.CommonLabels))
+		c.transformer.WalkLabels(wr, ts, func(k, v []byte) {
 			// skip adding the name label and any adxmon_ prefixed labels
 			if bytes.Equal(k, nameLabel) || bytes.HasPrefix(k, []byte("adxmon_")) {
 				return
@@ -262,8 +262,8 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 	return serialized, count, err
 }
 
-func (c *PromToOtlpExporter) sendRequest(body []byte, count int64) error {
-	req, err := http.NewRequest("POST", c.destination, bytes.NewReader(body))
+func (c *PromToOtlpExporter) sendRequest(ctx context.Context, body []byte, count int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.destination, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("metric otlp forwarder request: %w", err)
 	}

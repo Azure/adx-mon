@@ -2,12 +2,12 @@ package adx
 
 import (
 	"context"
-	ERRS "errors"
+	stderrors "errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,11 +15,24 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/pkg/celutil"
+	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
+	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/errors"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
+	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
+)
+
+const (
+	maxConcurrentFunctionTargets = 5
+	functionReconcileTimeout     = 5 * time.Minute
+	functionTargetTimeout        = 2 * time.Minute
 )
 
 type TableDetail struct {
@@ -41,7 +54,7 @@ type DropUnusedTablesTask struct {
 type StatementExecutor interface {
 	Database() string
 	Endpoint() string
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 func NewDropUnusedTablesTask(kustoCli StatementExecutor) *DropUnusedTablesTask {
@@ -85,121 +98,307 @@ func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
 }
 
 func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDetail, error) {
-	stmt := kusto.NewStmt(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
-	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	stmt := kql.New(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
+	ds, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
 
-	var tables []TableDetail
-	for {
-		row, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			return tables, nil
-		} else if err1 != nil {
-			return tables, err1
-		} else if err2 != nil {
-			return tables, err2
-		}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return nil, fmt.Errorf("failed to load table details: missing primary result table")
+	}
 
+	var details []TableDetail
+	for _, row := range table.Rows() {
 		var v TableDetail
 		if err := row.ToStruct(&v); err != nil {
-			return tables, err
+			return details, err
 		}
-		tables = append(tables, v)
+		details = append(details, v)
 	}
+
+	return details, nil
 }
 
 type SyncFunctionsTask struct {
-	store    storage.Functions
-	kustoCli StatementExecutor
+	store      storage.Functions
+	executors  []StatementExecutor
+	initialRun bool
+	// ClusterLabels carries the ingestor's cluster identity for criteriaExpression evaluation.
+	ClusterLabels map[string]string
 }
 
-func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor) *SyncFunctionsTask {
+func NewSyncFunctionsTask(store storage.Functions, executors []StatementExecutor, clusterLabels map[string]string) *SyncFunctionsTask {
 	return &SyncFunctionsTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		executors:     executors,
+		initialRun:    true,
+		ClusterLabels: clusterLabels,
 	}
 }
 
 func (t *SyncFunctionsTask) Run(ctx context.Context) error {
-	functions, err := t.store.List(ctx)
+	functions, err := t.store.List(ctx, storage.ListOptions{
+		IncludeCriteriaMismatches: t.initialRun,
+	})
+	if stderrors.Is(err, storage.ErrNotLeader) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to list functions: %w", err)
 	}
+	t.initialRun = false
 	for _, function := range functions {
+		targetsAllDBs := function.Spec.AllDatabases
+		configuredDB := function.Spec.Database
 
-		if function.Spec.Database != v1.AllDatabases && function.Spec.Database != t.kustoCli.Database() {
+		if configuredDB == v1.AllDatabases {
+			logger.Warnf("Function %s/%s uses deprecated database wildcard '*'; use allDatabases: true instead", function.Namespace, function.Name)
+			targetsAllDBs = true
+		}
+
+		if function.Spec.AllDatabases && configuredDB != "" && configuredDB != v1.AllDatabases {
+			err := fmt.Errorf("invalid Function spec: allDatabases is true but database %q is also specified; these fields are mutually exclusive", configuredDB)
+			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
+			function.SetReconcileCondition(metav1.ConditionFalse, "ValidationFailed", err.Error())
+			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
+				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
+			}
 			continue
 		}
 
-		if !function.DeletionTimestamp.IsZero() {
-			// Until we can parse KQL we don't actually know the function's
-			// name as described in this CRD; however, we'll make the assumption
-			// that the CRD name is the same as the function name in Kusto and
-			// attempt a delete.
-			stmt := kql.New(".drop function ").AddUnsafe(function.Name).AddLiteral(" ifexists")
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
-				// Deletion is best-effort, especially while we still can't parse KQL
+		if !targetsAllDBs && configuredDB == "" {
+			err := fmt.Errorf("invalid Function spec: neither database nor allDatabases is set; one must be specified")
+			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
+			function.SetReconcileCondition(metav1.ConditionFalse, "ValidationFailed", err.Error())
+			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
+				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 			}
-			t.updateKQLFunctionStatus(ctx, function, v1.Success, nil)
-			return nil
+			continue
 		}
 
-		// If endpoints have changed, or function is not in Success, re-apply
-		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
-			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-				if !errors.Retry(err) {
-					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
-						logger.Errorf("Failed to update permanent failure status: %v", err)
-					}
-					continue
-				} else {
-					t.updateKQLFunctionStatus(ctx, function, v1.Failed, err)
-					logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-					continue
+		expr := strings.TrimSpace(function.Spec.CriteriaExpression)
+		if expr == "" {
+			function.SetCriteriaMatchCondition(true, expr, nil, t.ClusterLabels)
+		} else {
+			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
+			if err != nil {
+				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
+				logger.Errorf("Function %s/%s criteriaExpression error: %v", function.Namespace, function.Name, err)
+				function.SetCriteriaMatchCondition(false, expr, err, t.ClusterLabels)
+				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaEvaluationFailed", err.Error())
+				if updErr := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); updErr != nil {
+					logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 				}
+				continue
 			}
-
-			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
-			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
-				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
-				if err := t.store.Update(ctx, function); err != nil {
-					logger.Errorf("Failed to update function %s.%s: %v", function.Spec.Database, function.Name, err)
+			if !ok {
+				function.SetCriteriaMatchCondition(false, expr, nil, t.ClusterLabels)
+				message := fmt.Sprintf("Function skipped because criteria expression evaluated to false for cluster labels: %s", v1.FormatClusterLabels(t.ClusterLabels))
+				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaNotMatched", message)
+				function.Status.Status = v1.Failed
+				function.Status.ObservedGeneration = function.GetGeneration()
+				function.Status.Error = ""
+				function.Status.Reason = "CriteriaNotMatched"
+				function.Status.Message = message
+				if err := t.store.UpdateStatus(ctx, function); err != nil {
+					logger.Errorf("Failed to update function status for %s.%s after criteria mismatch: %v", function.Spec.Database, function.Name, err)
 				}
+				continue
 			}
+			function.SetCriteriaMatchCondition(true, expr, nil, t.ClusterLabels)
+		}
 
+		if !function.DeletionTimestamp.IsZero() {
+			function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeleting", "Function deletion in progress")
+			function.Status.Status = v1.Failed
+			function.Status.Error = ""
+			function.Status.Reason = "Function finalizing"
+			function.Status.Message = "Finalization in progress; Kusto function drop is disabled"
+			noopMsg := "Finalization no-op; skipping Kusto function drop"
+			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", noopMsg)
+			function.Status.Reason = "Function finalized (no-op)"
+			function.Status.Message = noopMsg
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
-				logger.Errorf("Failed to update success status: %v", err)
+				logger.Errorf("Failed to update success status following deletion for %s.%s: %v", function.Spec.Database, function.Name, err)
 			}
+			continue
+		}
+
+		targets := t.functionTargets(configuredDB, targetsAllDBs)
+		if len(targets) == 0 {
+			continue
+		}
+
+		functionCtx, cancel := context.WithTimeout(ctx, functionReconcileTimeout)
+		result := reconcileFunctionTargets(functionCtx, function, targets)
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		function.SetReconcileCondition(result.conditionStatus, result.reason, result.message)
+		if err := t.updateKQLFunctionStatus(ctx, function, result.status, result.err); err != nil {
+			logger.Errorf("Failed to update status for function %s/%s: %v", function.Namespace, function.Name, err)
 		}
 	}
 
 	return nil
 }
 
+func (t *SyncFunctionsTask) functionTargets(database string, allDatabases bool) []StatementExecutor {
+	targets := make(map[string]StatementExecutor)
+	for _, executor := range t.executors {
+		if !allDatabases && !strings.EqualFold(database, executor.Database()) {
+			continue
+		}
+		// A null byte cannot occur in endpoints or database names, so the composite key is unambiguous.
+		key := executor.Endpoint() + "\x00" + strings.ToLower(executor.Database())
+		targets[key] = executor
+	}
+
+	keys := make([]string, 0, len(targets))
+	for key := range targets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	result := make([]StatementExecutor, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, targets[key])
+	}
+	return result
+}
+
+type functionTargetResult struct {
+	endpoint  string
+	database  string
+	err       error
+	retryable bool
+}
+
+type functionReconcileResult struct {
+	status          v1.FunctionStatusEnum
+	conditionStatus metav1.ConditionStatus
+	reason          string
+	message         string
+	err             error
+}
+
+func reconcileFunctionTargets(ctx context.Context, function *v1.Function, targets []StatementExecutor) functionReconcileResult {
+	results := make([]functionTargetResult, len(targets))
+	var group errgroup.Group
+	group.SetLimit(maxConcurrentFunctionTargets)
+	for i, target := range targets {
+		group.Go(func() error {
+			results[i] = executeFunctionTarget(ctx, function.Spec.Body, target)
+			return nil
+		})
+	}
+	_ = group.Wait()
+	if stderrors.Is(ctx.Err(), context.Canceled) {
+		return functionReconcileResult{err: ctx.Err()}
+	}
+
+	return aggregateFunctionTargetResults(function, results)
+}
+
+func executeFunctionTarget(ctx context.Context, body string, target StatementExecutor) functionTargetResult {
+	result := functionTargetResult{endpoint: target.Endpoint(), database: target.Database()}
+	targetCtx, cancel := context.WithTimeout(ctx, functionTargetTimeout)
+	defer cancel()
+
+	if err := targetCtx.Err(); err != nil {
+		result.err = err
+		result.retryable = true
+		return result
+	}
+
+	stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(body)
+	_, result.err = target.Mgmt(targetCtx, stmt)
+	result.retryable = targetCtx.Err() != nil || errors.Retry(result.err) || kustoutil.IsMissingTableError(result.err)
+	return result
+}
+
+func aggregateFunctionTargetResults(function *v1.Function, results []functionTargetResult) functionReconcileResult {
+	transientFailures := 0
+	permanentFailures := 0
+	var firstTransient, firstPermanent *functionTargetResult
+	for _, result := range results {
+		if result.err == nil {
+			logger.Infof("Successfully created function %s/%s on %s/%s", function.Namespace, function.Name, result.endpoint, result.database)
+			continue
+		}
+		if result.retryable {
+			transientFailures++
+			if firstTransient == nil {
+				firstTransient = &result
+			}
+			logger.Warnf("Transient failure to create function %s/%s on %s/%s: %v", function.Namespace, function.Name, result.endpoint, result.database, result.err)
+			continue
+		}
+		permanentFailures++
+		if firstPermanent == nil {
+			firstPermanent = &result
+		}
+		logger.Errorf("Permanent failure to create function %s/%s on %s/%s: %v", function.Namespace, function.Name, result.endpoint, result.database, result.err)
+	}
+
+	failed := transientFailures + permanentFailures
+	if transientFailures > 0 {
+		retryableMessage := fmt.Sprintf("%d target failures are retryable", transientFailures)
+		if transientFailures == 1 {
+			retryableMessage = "1 target failure is retryable"
+		}
+		message := functionFailureMessage(
+			fmt.Sprintf("Function failed on %d of %d targets; %s", failed, len(results), retryableMessage),
+			firstTransient,
+		)
+		return functionReconcileResult{
+			status:          v1.Failed,
+			conditionStatus: metav1.ConditionFalse,
+			reason:          "KustoExecutionRetrying",
+			message:         message,
+			err:             firstTransient.err,
+		}
+	}
+	if permanentFailures > 0 {
+		message := functionFailureMessage(
+			fmt.Sprintf("Function permanently failed on %d of %d targets", permanentFailures, len(results)),
+			firstPermanent,
+		)
+		return functionReconcileResult{
+			status:          v1.PermanentFailure,
+			conditionStatus: metav1.ConditionFalse,
+			reason:          "KustoExecutionFailed",
+			message:         message,
+			err:             firstPermanent.err,
+		}
+	}
+
+	message := fmt.Sprintf("Function created on all %d targets", len(results))
+	return functionReconcileResult{
+		status:          v1.Success,
+		conditionStatus: metav1.ConditionTrue,
+		reason:          "KustoExecutionSucceeded",
+		message:         message,
+	}
+}
+
+func functionFailureMessage(summary string, result *functionTargetResult) string {
+	message := fmt.Sprintf("%s; first error on %s/%s: %s", summary, result.endpoint, result.database, kustoutil.ParseError(result.err))
+	if len(message) > kustoutil.MaxErrorMessageLength {
+		return message[:kustoutil.MaxErrorMessageLength]
+	}
+	return message
+}
+
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
-		errMsg := err.Error()
-
-		var kustoerr *errors.HttpError
-		if ERRS.As(err, &kustoerr) {
-			decoded := kustoerr.UnmarshalREST()
-			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
-				if errMsgVal, ok := errMap["@message"].(string); ok {
-					errMsg = errMsgVal
-				}
-			}
-		}
-
-		if len(errMsg) > 256 {
-			errMsg = errMsg[:256]
-		}
-		fn.Status.Error = errMsg
+		fn.Status.Error = kustoutil.ParseError(err)
+	} else if fn.Status.Error != "" {
+		fn.Status.Error = ""
 	}
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
@@ -210,12 +409,15 @@ func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.
 type ManagementCommandTask struct {
 	store    storage.CRDHandler
 	kustoCli StatementExecutor
+	// ClusterLabels mirrors the ingestor cluster identity for management-command gating.
+	ClusterLabels map[string]string
 }
 
-func NewManagementCommandsTask(store storage.CRDHandler, kustoCli StatementExecutor) *ManagementCommandTask {
+func NewManagementCommandsTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *ManagementCommandTask {
 	return &ManagementCommandTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		kustoCli:      kustoCli,
+		ClusterLabels: clusterLabels,
 	}
 }
 
@@ -225,47 +427,111 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to list management commands: %w", err)
 	}
 	for _, command := range managementCommands.Items {
-		// ManagementCommands database is optional as not all commands are scoped at the database level
-		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
+		// Determine effective scope: Database field takes precedence for backwards compatibility
+		effectiveScope, targetDB, err := t.resolveCommandScope(&command)
+		if err != nil {
+			logger.Errorf("ManagementCommand %s/%s validation error: %v", command.Namespace, command.Name, err)
+			if updErr := t.store.UpdateStatus(ctx, &command, err); updErr != nil {
+				logger.Errorf("Failed to update management command status for %s/%s: %v", command.Namespace, command.Name, updErr)
+			}
 			continue
 		}
 
+		// For database-scoped commands, skip if the database doesn't match this ingestor's database
+		if effectiveScope == v1.ScopeDatabase && targetDB != t.kustoCli.Database() {
+			continue
+		}
+
+		if expr := command.Spec.CriteriaExpression; expr != "" {
+			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
+			if err != nil {
+				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
+				logger.Errorf("ManagementCommand %s/%s criteriaExpression error: %v", command.Namespace, command.Name, err)
+				if updErr := t.store.UpdateStatus(ctx, &command, err); updErr != nil {
+					logger.Errorf("Failed to update management command status for %s/%s: %v", command.Namespace, command.Name, updErr)
+				}
+				continue
+			}
+			if !ok {
+				if logger.IsDebug() {
+					logger.Debugf("Skipping management command %s/%s due to criteriaExpression evaluating to false", command.Namespace, command.Name)
+				}
+				continue
+			}
+		}
+
 		var stmt *kql.Builder
-		if command.Spec.Database == "" {
+		switch effectiveScope {
+		case v1.ScopeCluster:
 			stmt = kql.New(".execute cluster script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
-		} else {
+		case v1.ScopeAllDatabases, v1.ScopeDatabase:
+			// Both AllDatabases and Database scope use database script execution
 			stmt = kql.New(".execute database script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
 		}
-		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+		_, err = t.kustoCli.Mgmt(ctx, stmt)
+		if err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
 			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
-		}
-
-		logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
-		if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
-			logger.Errorf("Failed to update success status: %v", err)
+		} else {
+			logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
+			if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
+				logger.Errorf("Failed to update success status: %v", err)
+			}
 		}
 	}
 
 	return nil
 }
 
+// resolveCommandScope determines the effective scope and target database for a ManagementCommand.
+// Database field takes precedence over Scope field for backwards compatibility.
+// Returns (effectiveScope, targetDatabase, error).
+func (t *ManagementCommandTask) resolveCommandScope(cmd *v1.ManagementCommand) (v1.ManagementCommandScope, string, error) {
+	db := cmd.Spec.Database
+	scope := cmd.Spec.Scope
+
+	// Database field takes precedence for backwards compatibility
+	if db != "" {
+		// Explicit database specified - this is database-scoped
+		return v1.ScopeDatabase, db, nil
+	}
+
+	// No database specified - check Scope field
+	switch scope {
+	case v1.ScopeDatabase:
+		// Scope requires a database but none provided
+		return "", "", fmt.Errorf("scope is %q but database field is empty; database is required for this scope", scope)
+	case v1.ScopeAllDatabases:
+		return v1.ScopeAllDatabases, "", nil
+	case v1.ScopeCluster:
+		return v1.ScopeCluster, "", nil
+	case "":
+		// Legacy behavior: empty database + empty scope = cluster-scoped
+		logger.Warnf("ManagementCommand %s/%s uses deprecated empty database for cluster scope; use scope: Cluster instead", cmd.Namespace, cmd.Name)
+		return v1.ScopeCluster, "", nil
+	default:
+		return "", "", fmt.Errorf("unknown scope value: %q", scope)
+	}
+}
+
 type SummaryRuleTask struct {
 	store         storage.CRDHandler
 	kustoCli      StatementExecutor
-	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
+	ClusterLabels map[string]string
+	Clock         clock.Clock
 }
 
-func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor) *SummaryRuleTask {
+func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
 	task := &SummaryRuleTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		kustoCli:      kustoCli,
+		ClusterLabels: clusterLabels,
+		Clock:         clock.RealClock{},
 	}
 	// Set the default implementations
-	task.GetOperations = task.getOperations
 	task.SubmitRule = task.submitRule
 	return task
 }
@@ -293,100 +559,84 @@ func IsKustoAsyncOperationStateCompleted(state string) bool {
 		state == string(KustoAsyncOperationStateFailed)
 }
 
+// matchesCriteria checks if the given criteria matches any of the cluster labels.
+// It uses case-insensitive matching for both keys and values.
+// Returns true if no criteria are specified (empty criteria means always match).
+// Returns true if any criterion matches (OR logic between criteria).
+func matchesCriteria(criteria map[string][]string, clusterLabels map[string]string) bool {
+	// If no criteria are specified, always match
+	if len(criteria) == 0 {
+		return true
+	}
+
+	// Check if any criterion matches
+	for k, v := range criteria {
+		lowerKey := strings.ToLower(k)
+		// Look for matching cluster label (case-insensitive key matching)
+		for labelKey, labelValue := range clusterLabels {
+			if strings.ToLower(labelKey) == lowerKey {
+				for _, value := range v {
+					if strings.ToLower(labelValue) == strings.ToLower(value) {
+						return true // Found a match, return immediately
+					}
+				}
+				break // We found the key, no need to check other label keys
+			}
+		}
+	}
+
+	return false // No criteria matched
+}
+
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
-	// Fetch all summary rules from storage
-	summaryRules := &v1.SummaryRuleList{}
-	if err := t.store.List(ctx, summaryRules); err != nil {
-		return fmt.Errorf("failed to list summary rules: %w", err)
-	}
+	// Set a timeout to prevent hanging.
+	// If the loop takes more than 5 minutes, something is wrong and we should just cancel and try again next iteration.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 
-	// Get the status of all async operations currently tracked in Kusto
-	// to match against our rules' operations
-	kustoAsyncOperations, err := t.GetOperations(ctx)
+	summaryRules, err := t.initializeRun(timeoutCtx)
 	if err != nil {
-		return fmt.Errorf("failed to get async operations: %w", err)
+		return err
 	}
 
 	// Process each summary rule individually
 	for _, rule := range summaryRules.Items {
-		// Skip rules not belonging to the current database
-		if rule.Spec.Database != t.kustoCli.Database() {
+		if !t.shouldProcessRule(rule) {
+			t.logSummaryRule(&rule, true, nil)
 			continue
 		}
 
-		// Get the current condition of the rule
-		cnd := rule.GetCondition()
-		if cnd == nil {
-			// For first-time execution, initialize the condition with a timestamp
-			// that's one interval back from current time
-			cnd = &metav1.Condition{
-				LastTransitionTime: metav1.Time{Time: time.Now().Add(-rule.Spec.Interval.Duration)},
-			}
+		// Handle rule execution logic (timing evaluation and submission)
+		err := t.handleRuleExecution(timeoutCtx, &rule)
+
+		// If the submission failed we intentionally skip backfill generation for this
+		// cycle. Backfilling when the cluster is offline (or submissions are failing)
+		// causes us to enqueue synthetic backlog windows that will immediately be
+		// retried again next cycle, inflating the async operation list. The backlog
+		// will be reconstructed on the first successful submission using the last
+		// successful execution timestamp, so skipping here is safe and prevents
+		// unbounded growth / test expectation mismatch.
+		if err == nil {
+			// Process any backlog operations for this rule (only when submission
+			// succeeded this cycle).
+			rule.BackfillAsyncOperations(t.Clock)
 		}
-
-		// Determine if the rule should be executed based on several criteria:
-		// 1. The rule is being deleted
-		// 2. Previous submission failed
-		// 3. Rule has been updated (new generation)
-		// 4. It's time for the next interval execution
-		shouldSubmitRule := rule.DeletionTimestamp != nil || // Rule is being deleted
-			cnd.Status == metav1.ConditionFalse || // Submission failed, so no async operation was created for this interval
-			cnd.ObservedGeneration != rule.GetGeneration() || // A new version of this CRD was created
-			time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration // It's time to execute for a new interval
-
-		if shouldSubmitRule {
-			// Prepare a new async operation with time range from last execution to now
-			asyncOp := v1.AsyncOperation{
-				StartTime: cnd.LastTransitionTime.UTC().Truncate(time.Minute).Format(time.RFC3339Nano),
-				EndTime:   time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339Nano),
-			}
-			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
-			if err != nil {
-				t.store.UpdateStatus(ctx, &rule, err)
-			} else {
-
-				asyncOp.OperationId = operationId
-				rule.SetAsyncOperation(asyncOp)
-			}
-		}
+		// NOTE: If we skipped BackfillAsyncOperations due to an error we still want
+		// to attempt recovery of any pre-existing backlog operations as the
+		// underlying outage may have been transient after submission; however, we
+		// only attempt to process operations that already exist (trackAsyncOperations).
 
 		// Process any outstanding async operations for this rule
-		operations := rule.GetAsyncOperations()
-		foundOperations := make(map[string]bool)
+		t.trackAsyncOperations(timeoutCtx, &rule)
 
-		for _, op := range operations {
-			found := false
-			for _, kustoOp := range kustoAsyncOperations {
-				if op.OperationId == kustoOp.OperationId {
-					found = true
-					foundOperations[op.OperationId] = true
+		// Process user-requested historical backfill (low priority, bounded concurrency).
+		backfill.Process(timeoutCtx, &rule, t.Clock, t.backfillSubmitFunc(), t.backfillGetStatusFunc())
 
-					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
-						// We're done polling this async operation, so we can remove it from the list
-						rule.RemoveAsyncOperation(kustoOp.OperationId)
-					}
-					if kustoOp.ShouldRetry != 0 {
-						if _, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err != nil {
-							logger.Errorf("Failed to submit rule: %v", err)
-						}
-					}
-
-					// Operation is still in progress, so we can skip it
-				}
-			}
-			
-			// If the operation wasn't found in the Kusto operations list after checking all operations,
-			// it has fallen out of the backlog window
-			if !found {
-				logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
-					op.OperationId, rule.Name)
-				rule.RemoveAsyncOperation(op.OperationId)
-			}
-		}
-
-		if err := t.store.UpdateStatus(ctx, &rule, nil); err != nil {
+		t.logSummaryRule(&rule, false, err)
+		// Update the rule's primary status condition
+		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
 			logger.Errorf("Failed to update summary rule status: %v", err)
 			// Not a lot we can do here, we'll end up just retrying next interval.
 		}
@@ -395,81 +645,310 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	return nil
 }
 
+func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, error) {
+	// Fetch all summary rules from storage
+	summaryRules := &v1.SummaryRuleList{}
+	if err := t.store.List(ctx, summaryRules); err != nil {
+		return nil, fmt.Errorf("failed to list summary rules: %w", err)
+	}
+
+	return summaryRules, nil
+}
+
+func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
+	// Ownership gating via shared helper: default (missing) goes to ingestor for backward compatibility.
+	if !crdownership.IsOwnedBy(&rule, v1.SummaryRuleOwnerIngestor) {
+		logger.Logger().Info("Ownership annotation not ingestor; skipping processing",
+			"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+			"event", "control_handed_over",
+		)
+		return false
+	}
+
+	// Skip rules not belonging to the current database
+	if rule.Spec.Database != t.kustoCli.Database() {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping %s/%s on %s because it does not match the current database: %s", rule.Namespace, rule.Name, t.kustoCli.Database(), rule.Spec.Database)
+		}
+		return false
+	}
+
+	// Legacy criteria map (OR semantics). Must match if provided.
+	if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
+		}
+		return false
+	}
+
+	// CEL criteriaExpression (AND semantics with criteria map) if provided.
+	if rule.Spec.CriteriaExpression != "" {
+		ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, rule.Spec.CriteriaExpression)
+		if err != nil {
+			logger.Errorf("Skipping %s/%s due to criteriaExpression error: %v", rule.Namespace, rule.Name, err)
+			return false
+		}
+		if !ok {
+			if logger.IsDebug() {
+				logger.Debugf("Skipping %s/%s because criteriaExpression evaluated to false", rule.Namespace, rule.Name)
+			}
+			return false
+		}
+	}
+
+	return true
+}
+
+// handleRuleExecution handles the execution logic for a single summary rule.
+// It evaluates whether the rule should be submitted based on its interval and timing,
+// and if so, submits the rule as an async operation to Kusto.
+// Returns any submission error that occurred.
+func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) error {
+	// Get the current condition of the rule
+	cnd := rule.GetCondition()
+	if cnd == nil {
+		// For first-time execution, initialize the condition with a timestamp
+		// that's one interval back from current time
+		cnd = &metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: t.Clock.Now().Add(-rule.Spec.Interval.Duration)},
+		}
+	}
+
+	// Calculate the next execution window based on the last successful execution
+	windowStartTime, windowEndTime := rule.NextExecutionWindow(t.Clock)
+
+	if rule.ShouldSubmitRule(t.Clock) {
+		// Subtract 1 tick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
+		// from endTime for the query to avoid boundary issues while keeping the original
+		// windowEndTime for status tracking. This allows users to use `between(_startTime .. _endTime)`
+		// in their query without worrying about the boundary issue.
+		queryEndTime := windowEndTime.Add(-kustoutil.OneTick)
+
+		// Prepare a new async operation with calculated time range
+		asyncOp := v1.AsyncOperation{
+			StartTime: windowStartTime.Format(time.RFC3339Nano),
+			EndTime:   queryEndTime.Format(time.RFC3339Nano),
+		}
+		operationId, err := t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
+		asyncOp.OperationId = operationId
+		rule.SetAsyncOperation(asyncOp)
+		rule.SetLastExecutionTime(windowEndTime)
+
+		if err != nil {
+			return fmt.Errorf("failed to submit rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// trackAsyncOperations processes pending async operations for a SummaryRule.
+func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule) {
+	operations := rule.GetAsyncOperations()
+	for _, op := range operations {
+
+		// Check for backlog operations, or those that failed to be submitted. We need to attempt
+		// executing these so that we don't skip any windows.
+		if op.OperationId == "" {
+			t.processBacklogOperation(ctx, rule, op)
+			continue
+		}
+
+		kustoOp, err := t.getOperation(ctx, op.OperationId)
+		if err != nil {
+			logger.Errorf("Failed to query operation %s: %v", op.OperationId, err)
+			continue
+		}
+		if kustoOp == nil {
+			// Operation not found - could be old or completed
+			continue
+		}
+
+		if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
+			t.handleCompletedOperation(ctx, rule, *kustoOp)
+		}
+		if kustoOp.ShouldRetry != 0 {
+			t.handleRetryOperation(ctx, rule, op, *kustoOp)
+		}
+	}
+}
+
+func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation, kustoOp AsyncOperationStatus) {
+	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil && operationId != operation.OperationId {
+		// We've resubmitted an async operation due to a recoverable failure but this has created a new operation-id to track.
+		// Remove the existing async operation, we're done processing it, but save the newly created async operation for tracking.
+		rule.RemoveAsyncOperation(operation.OperationId)
+
+		// The new operation has all the same time window as the previous, we only
+		// need to update the OperationId.
+		operation.OperationId = operationId
+		rule.SetAsyncOperation(operation)
+	}
+}
+
+func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1.SummaryRule, kustoOp AsyncOperationStatus) {
+	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
+		// Operation failed - mark the rule as failed
+		logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+
+		// Use detailed status message if available, otherwise fall back to generic message
+		var err error
+		if kustoOp.Status != "" {
+			// Truncate status message to prevent excessively long condition messages
+			status := kustoOp.Status
+			if len(status) > 200 { // Leave room for "async operation {id} failed: " prefix
+				status = status[:200]
+			}
+			err = fmt.Errorf("async operation %s failed: %s", kustoOp.OperationId, status)
+		} else {
+			err = fmt.Errorf("async operation %s failed", kustoOp.OperationId)
+		}
+
+		if updateErr := t.updateSummaryRuleStatus(ctx, rule, err); updateErr != nil {
+			logger.Errorf("Failed to update summary rule status for failed operation: %v", updateErr)
+		}
+	}
+	// We're done polling this async operation, so we can remove it from the list
+	rule.RemoveAsyncOperation(kustoOp.OperationId)
+}
+
+func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation) {
+	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil {
+		// Great, we were able to recover the failed submission window.
+		operation.OperationId = operationId
+
+		// Parse the operation EndTime and calculate the original window end time.
+		// The operation.EndTime has kustoutil.OneTick (100ns) subtracted in handleRuleExecution
+		// to avoid Kusto boundary issues, so we need to add it back for timestamp tracking.
+		if operationEndTime, parseErr := time.Parse(time.RFC3339Nano, operation.EndTime); parseErr == nil {
+			// Restore the original window end time by adding back the subtracted OneTick
+			originalWindowEndTime := operationEndTime.Add(kustoutil.OneTick)
+
+			// Only advance timestamp if this window represents forward progress
+			currentTimestamp := rule.GetLastExecutionTime()
+			if currentTimestamp == nil {
+				currentTimestamp = &time.Time{}
+			}
+			if originalWindowEndTime.After(*currentTimestamp) {
+				rule.SetLastExecutionTime(originalWindowEndTime)
+			}
+		} else {
+			logger.Warnf("Failed to parse operation EndTime '%s' for backlog recovery: %v", operation.EndTime, parseErr)
+		}
+
+		// Track the operation after timestamp advancement to maintain consistency.
+		// This order ensures that if timestamp advancement succeeds, the operation is tracked;
+		// if timestamp parsing fails, we still track the operation but without advancing the timestamp.
+		rule.SetAsyncOperation(operation)
+	}
+}
+
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
-	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
-	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+	body := kustoutil.ApplySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
+
 	// Execute asynchronously
-	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(rule.Spec.Body)
-	res, err := t.kustoCli.Mgmt(ctx, stmt)
+	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" with (extend_schema=true) <| ").AddUnsafe(body)
+	ds, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 	}
 
-	return operationIDFromResult(res)
+	return operationIDFromResult(ds)
 }
 
-func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
-	// List all the async operations that have been executed in the last 24 hours. If one of our
-	// async operations falls out of this window, it's time to stop trying that particular operation.
-	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry) | sort by LastUpdatedOn asc")
-	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+// getOperation retrieves the status of a specific asynchronous Kusto operation by its operationId.
+//
+// This method performs an individual operation lookup without time limitations, which eliminates
+// the 24-hour limitation bug that affected the previous bulk query approach. It ensures accurate
+// retrieval of operations regardless of their age by directly querying for a specific operation ID.
+//
+// Parameters:
+//   - ctx: context.Context for cancellation and timeout control
+//   - operationId: string identifier of the Kusto async operation to query
+//
+// Returns:
+//   - *AsyncOperationStatus: pointer to the operation status struct if found, or nil if not found
+//   - error: error if the query fails or the result cannot be parsed
+//
+// The method uses parameterized queries to prevent injection attacks and queries the latest
+// operation status using arg_max to ensure we get the most recent state information.
+func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+	// Management commands (those starting with a dot) do NOT support QueryParameters per azure-kusto-go docs.
+
+	stmt := kql.New(`.show operations`).
+		AddLiteral(" | where OperationId == ").AddString(operationId).
+		AddLiteral(" | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)").
+		AddLiteral(" | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status")
+
+	ds, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve async operations: %w", err)
+		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
 	}
-	defer rows.Stop()
 
-	var operations []AsyncOperationStatus
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return nil, fmt.Errorf("failed to retrieve async operations: %v", errFinal)
-		}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return nil, fmt.Errorf("failed to retrieve operation %s: missing primary result table", operationId)
+	}
 
+	for _, row := range table.Rows() {
 		var status AsyncOperationStatus
 		if err := row.ToStruct(&status); err != nil {
-			return nil, fmt.Errorf("failed to parse async operation: %v", err)
+			return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
 		}
-		if status.State == "" {
-			continue
+		if status.State != "" {
+			return &status, nil
 		}
-
-		operations = append(operations, status)
 	}
 
-	return operations, nil
+	// Operation not found
+	return nil, nil
 }
 
-func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
-	defer iter.Stop()
+// logSummaryRule emits a concise wide log for a SummaryRule.
+// When skipped is true we only log identity + skip reason fields.
+// When processed we include inflight_ops, last_exec_end, and forward_progress.
+func (t *SummaryRuleTask) logSummaryRule(rule *v1.SummaryRule, skipped bool, submissionErr error) {
+	if skipped {
+		logger.Logger().Info("SummaryRule", "ns", rule.Namespace, "rule", rule.Name, "db", rule.Spec.Database, "table", rule.Spec.Table, "criteria_skipped", true)
+		return
+	}
+	asyncOps := rule.GetAsyncOperations()
+	inflightOps := len(asyncOps)
+	lastExec := rule.GetLastExecutionTime()
+	lastExecStr := ""
+	if lastExec != nil && !lastExec.IsZero() {
+		lastExecStr = lastExec.UTC().Format(time.RFC3339Nano)
+	}
+	forward := false
+	if submissionErr == nil {
+		forward = lastExecStr != "" && lastExec.UTC().Add(rule.Spec.Interval.Duration).After(time.Now().Add(-rule.Spec.Interval.Duration))
+	}
+	logger.Logger().Info("SummaryRule", "ns", rule.Namespace, "rule", rule.Name, "db", rule.Spec.Database, "table", rule.Spec.Table, "criteria_skipped", false, "inflight_ops", inflightOps, "last_exec_end", lastExecStr, "forward_progress", forward)
+}
 
-	for {
-		row, errInline, errFinal := iter.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return "", fmt.Errorf("failed to retrieve operation ID: %v", errFinal)
-		}
-
-		if len(row.Values) != 1 {
-			return "", fmt.Errorf("unexpected number of values in row: %d", len(row.Values))
-		}
-
-		return row.Values[0].String(), nil
+func operationIDFromResult(ds kustov1.Dataset) (string, error) {
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return "", fmt.Errorf("failed to parse operation id: missing primary result table")
+	}
+	if len(table.Rows()) == 0 {
+		return "", nil
 	}
 
-	return "", nil
+	vals := table.Rows()[0].Values()
+	if len(vals) != 1 {
+		return "", fmt.Errorf("unexpected number of values in row: %d", len(vals))
+	}
+
+	return vals[0].String(), nil
+}
+
+// updateSummaryRuleStatus updates the status of a SummaryRule with proper Kusto error parsing
+func (t *SummaryRuleTask) updateSummaryRuleStatus(ctx context.Context, rule *v1.SummaryRule, err error) error {
+	return t.store.UpdateStatusWithKustoErrorParsing(ctx, rule, err)
 }
 
 type AsyncOperationStatus struct {
@@ -477,6 +956,7 @@ type AsyncOperationStatus struct {
 	LastUpdatedOn time.Time `kusto:"LastUpdatedOn"`
 	State         string    `kusto:"State"`
 	ShouldRetry   float64   `kusto:"ShouldRetry"`
+	Status        string    `kusto:"Status"`
 }
 
 type AuditDiskSpaceTask struct {
@@ -497,6 +977,10 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 
 	err := filepath.Walk(t.StorageDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// Ignore no such file or directory errors
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".wal") {
@@ -518,4 +1002,27 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d", actualSize, expectedSize, actualCount, expectedCount)
 	}
 	return nil
+}
+
+// backfillSubmitFunc adapts the ingestor's SubmitRule (which already takes string
+// parameters) into the backfill.SubmitFunc signature.
+func (t *SummaryRuleTask) backfillSubmitFunc() backfill.SubmitFunc {
+	return func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return t.SubmitRule(ctx, rule, startTime, endTime)
+	}
+}
+
+// backfillGetStatusFunc adapts the ingestor's getOperation into the
+// backfill.GetOperationStatusFunc signature.
+func (t *SummaryRuleTask) backfillGetStatusFunc() backfill.GetOperationStatusFunc {
+	return func(ctx context.Context, database, operationID string) (string, bool, error) {
+		status, err := t.getOperation(ctx, operationID)
+		if err != nil {
+			return "", false, err
+		}
+		if status == nil {
+			return "InProgress", false, nil
+		}
+		return status.State, status.ShouldRetry != 0, nil
+	}
 }

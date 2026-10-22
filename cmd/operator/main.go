@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -20,9 +21,12 @@ import (
 
 func main() {
 	app := &cli.App{
-		Name:    "operator",
-		Usage:   "adx-mon operator",
-		Flags:   []cli.Flag{},
+		Name:  "operator",
+		Usage: "adx-mon operator",
+		Flags: []cli.Flag{
+			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish operator clusters. Format: <key>=<value>"},
+			&cli.StringFlag{Name: "pprof-bind-address", Usage: "Address and port to bind pprof endpoints. Omit to disable."},
+		},
 		Action:  realMain,
 		Version: version.String(),
 	}
@@ -58,13 +62,28 @@ func realMain(ctx *cli.Context) error {
 	// Set the controller-runtime logger to use our logger
 	log.SetLogger(logger.AsLogr())
 
+	clusterLabels, err := parseClusterLabels(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to parse cluster labels: %w", err)
+	}
+	operator.SetClusterLabels(clusterLabels)
+
+	pprofBindAddress := ""
+	if ctx.IsSet("pprof-bind-address") {
+		pprofBindAddress = ctx.String("pprof-bind-address")
+	}
+
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = fmt.Sprintf("adx-mon-operator/%s", version.String())
+	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: "0", // Disable metrics server
 		},
+		PprofBindAddress: pprofBindAddress,
 	})
 	if err != nil {
 		return fmt.Errorf("unable to create manager: %w", err)
@@ -95,6 +114,14 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create alerter controller: %w", err)
 	}
 
+	cr := &operator.CollectorReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = cr.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create collector controller: %w", err)
+	}
+
 	// Start manager
 	go func() {
 		if err := mgr.Start(svcCtx); err != nil {
@@ -105,4 +132,21 @@ func realMain(ctx *cli.Context) error {
 
 	<-svcCtx.Done()
 	return nil
+}
+
+func parseClusterLabels(ctx *cli.Context) (map[string]string, error) {
+	clusterLabels := make(map[string]string)
+	for _, label := range ctx.StringSlice("cluster-labels") {
+		split := strings.SplitN(label, "=", 2)
+		if len(split) != 2 {
+			return nil, fmt.Errorf("invalid cluster label format %q, expected <key>=<value>", label)
+		}
+		key := strings.TrimSpace(split[0])
+		value := strings.TrimSpace(split[1])
+		if key == "" {
+			return nil, fmt.Errorf("cluster label key cannot be empty (input %q)", label)
+		}
+		clusterLabels[key] = value
+	}
+	return clusterLabels, nil
 }

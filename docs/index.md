@@ -21,5 +21,7 @@ collection and analysis of observability data.
 * [Installation](installation.md)
 * [Quick Start](quick-start.md)
 * [Concepts](concepts.md)
+* [Guides](guides.md)
 * [CRD Reference](crds.md)
-* [Cook Book](cookbook.md)
+* [ADXCluster Controller](adxcluster-controller.md)
+* [Cook Book](cookbook/cookbook.md)

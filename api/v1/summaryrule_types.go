@@ -18,10 +18,13 @@ package v1
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -31,10 +34,27 @@ const (
 	SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
 	// SummaryRuleOperationIdOwner is the owner of the summary rule operation id
 	SummaryRuleOperationIdOwner = "summaryrule.adx-mon.azure.com/OperationId"
+	// SummaryRuleLastSuccessfulExecution tracks the end time of the last successful query execution
+	SummaryRuleLastSuccessfulExecution = "summaryrule.adx-mon.azure.com/LastSuccessfulExecution"
 	// SummaryRuleAsyncOperationPollInterval acts as a cooldown period between checking
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
 	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
+
+	// SummaryRuleOwnerAnnotation is a per-CRD annotation that determines which component
+	// should process the SummaryRule. Supported values are SummaryRuleOwnerIngestor and
+	// SummaryRuleOwnerADXExporter. When empty or missing, the default behavior is for the
+	// Ingestor to process the rule (backward compatibility).
+	SummaryRuleOwnerAnnotation = "adx-mon.azure.com/owner"
+	// SummaryRuleDesiredOwnerAnnotation is an optional per-CRD annotation used to request
+	// a safe ownership transition. When set to SummaryRuleOwnerADXExporter, the ADX Exporter
+	// will adopt ownership only when it is safe to do so (no inflight async ops and outside
+	// a submission window), then it will set SummaryRuleOwnerAnnotation and clear this value.
+	SummaryRuleDesiredOwnerAnnotation = "adx-mon.azure.com/desired-owner"
+	// SummaryRuleOwnerIngestor specifies ownership by the Ingestor component
+	SummaryRuleOwnerIngestor = "ingestor"
+	// SummaryRuleOwnerADXExporter specifies ownership by the ADX Exporter component
+	SummaryRuleOwnerADXExporter = "adx-exporter"
 )
 
 // SummaryRuleSpec defines the desired state of SummaryRule
@@ -43,12 +63,70 @@ type SummaryRuleSpec struct {
 	Database string `json:"database"`
 	// Table is rule output destination
 	Table string `json:"table"`
-	// Name is the name of the rule
-	Name string `json:"name"`
+	// Name is the name of the rule (deprecated and not used - use `metadata.name` instead)
+	Name string `json:"name,omitempty"`
 	// Body is the KQL body of the function
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="interval must be a valid positive duration"
 	Interval metav1.Duration `json:"interval"`
+	// IngestionDelay is subtracted from the execution window start and end times to account
+	// for data ingestion latency, ensuring the query only processes fully ingested data.
+	// NOTE: Current implementation also subtracts this delay from the "now" used to decide
+	// whether an interval has elapsed (i.e. scheduling readiness). This effectively lengthens
+	// wall‑clock spacing between executions to Interval + IngestionDelay. If you intend only
+	// to shift the processed window but keep wall‑clock cadence at Interval, this behavior
+	// will be adjusted in a future release.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == '' || duration(self) >= duration('0s')",message="ingestionDelay must be a valid duration"
+	IngestionDelay *metav1.Duration `json:"ingestionDelay,omitempty"`
+
+	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+	// are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+	Criteria map[string][]string `json:"criteria,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression that provides a richer way
+	// to determine if the summary rule should execute. The CEL environment is dynamically constructed from the
+	// ingestor's cluster labels (e.g. region, cloud, and any --cluster-labels key/value pairs). All variables are
+	// exposed as strings and can be referenced directly by their label name. For example:
+	//
+	//   criteriaExpression: "region in ['eastus','westus'] && environment == 'prod'"
+	//
+	// Execution semantics:
+	//   * If neither criteria nor criteriaExpression are specified, the rule always executes.
+	//   * If only criteriaExpression is specified, it must evaluate to true for the rule to execute.
+	//   * If only criteria (map) is specified, existing matching behavior (any key/value match) applies.
+	//   * If both are specified, the rule executes when BOTH the criteria map matches AND the expression evaluates to true.
+	//
+	// An invalid expression (parse or type check error) will be treated as an error and prevent the rule from executing.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
+
+	// Backfill optionally specifies a historical time range to process. The controller will
+	// generate interval-sized windows from StartTime to EndTime and submit them as low-priority
+	// async operations, independent of the normal scheduling cursor.
+	// +optional
+	Backfill *BackfillSpec `json:"backfill,omitempty"`
+}
+
+// BackfillSpec defines a user-requested historical backfill for a SummaryRule.
+type BackfillSpec struct {
+	// RequestID is a user-chosen identifier for this backfill request. The same RequestID
+	// resumes an in-progress backfill; a new RequestID starts a fresh backfill.
+	// +kubebuilder:validation:MinLength=1
+	RequestID string `json:"requestId"`
+	// StartTime is the inclusive start of the historical range to backfill.
+	StartTime metav1.Time `json:"startTime"`
+	// EndTime is the exclusive end of the historical range to backfill.
+	EndTime metav1.Time `json:"endTime"`
+	// MaxInFlight limits the number of concurrent async operations for backfill windows.
+	// Defaults to 1 if unset or zero, keeping backfill as a low-priority background task.
+	// Values greater than 20 are rejected to keep historical processing throttled.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=20
+	// +optional
+	MaxInFlight int `json:"maxInFlight,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -65,13 +143,93 @@ type SummaryRule struct {
 
 // SummaryRuleStatus defines the observed state of Function
 type SummaryRuleStatus struct {
-	// Conditions is an array of current observed SummaryRule conditions
+	// Conditions is an array of current observed SummaryRule conditions.
+	// SummaryRule controllers set at minimum the owner condition (SummaryRuleOwner) and may also
+	// use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Backfill tracks the progress of a user-requested historical backfill.
+	// +optional
+	Backfill *BackfillStatus `json:"backfill,omitempty"`
+}
+
+// BackfillPhase describes the current lifecycle phase of a backfill request.
+type BackfillPhase string
+
+const (
+	BackfillPhasePending   BackfillPhase = "Pending"
+	BackfillPhaseRunning   BackfillPhase = "Running"
+	BackfillPhaseCompleted BackfillPhase = "Completed"
+	BackfillPhaseFailed    BackfillPhase = "Failed"
+)
+
+// BackfillStatus tracks the observed progress of a backfill request.
+type BackfillStatus struct {
+	// RequestID mirrors the spec.backfill.requestId that this status corresponds to.
+	RequestID string `json:"requestId"`
+	// Phase is the current lifecycle phase of the backfill.
+	Phase BackfillPhase `json:"phase"`
+	// ObservedGeneration is the spec generation when this backfill was started.
+	// If the spec generation changes, the backfill is failed.
+	ObservedGeneration int64 `json:"observedGeneration"`
+	// NextWindowStart is the start time of the next window to be submitted.
+	NextWindowStart metav1.Time `json:"nextWindowStart"`
+	// SubmittedWindows is the total number of successful submissions (including retries).
+	SubmittedWindows int `json:"submittedWindows"`
+	// CompletedWindows is the number of windows that completed successfully.
+	CompletedWindows int `json:"completedWindows"`
+	// RetriedWindows counts how many times a window operation failed and was
+	// re-queued for retry. This is an observability counter; failed windows are
+	// never permanently skipped.
+	RetriedWindows int `json:"retriedWindows"`
+	// ActiveOperations are the currently in-flight async operations for this backfill.
+	ActiveOperations []BackfillOperation `json:"activeOperations,omitempty"`
+	// Message provides human-readable detail about the current phase.
+	Message string `json:"message,omitempty"`
+}
+
+// BackfillOperation tracks a single in-flight backfill async operation.
+type BackfillOperation struct {
+	OperationID string `json:"operationId,omitempty"`
+	StartTime   string `json:"startTime"`
+	EndTime     string `json:"endTime"`
 }
 
 func (s *SummaryRule) GetCondition() *metav1.Condition {
 	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOwner)
+}
+
+func (s *SummaryRule) GetLastExecutionTime() *time.Time {
+	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleLastSuccessfulExecution)
+	if condition == nil {
+		return nil
+	}
+
+	// Parse the time from the message field
+	if condition.Message == "" {
+		return nil
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, condition.Message)
+	if err != nil {
+		return nil
+	}
+
+	return &t
+}
+
+func (s *SummaryRule) SetLastExecutionTime(endTime time.Time) {
+	condition := &metav1.Condition{
+		Type:               SummaryRuleLastSuccessfulExecution,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ExecutionCompleted",
+		Message:            endTime.UTC().Format(time.RFC3339Nano),
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: s.GetGeneration(),
+	}
+
+	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
 func (s *SummaryRule) SetCondition(c metav1.Condition) {
@@ -125,15 +283,33 @@ func (s *SummaryRule) SetAsyncOperation(operation AsyncOperation) {
 	asyncOperations := s.GetAsyncOperations()
 
 	// Check if the operation already exists
+	found := false
 	for i, op := range asyncOperations {
-		if op.OperationId == operation.OperationId {
+		// If we're unable to submit an AsyncOperation, we add it to our backlog for
+		// future submission. Once we're able to submit the operation, we set the
+		// operation-id, which means we need to detect this case and match operations
+		// based on their time windows.
+		if op.OperationId == "" {
+			if op.StartTime == operation.StartTime &&
+				op.EndTime == operation.EndTime &&
+				op.StartTime != "" && op.EndTime != "" {
+				// If the operation is in the backlog, we need to update it with the new
+				// operation-id and the start and end times.
+				asyncOperations[i] = operation
+				found = true
+				break
+			}
+		} else if op.OperationId == operation.OperationId {
 			// Update the existing operation
 			asyncOperations[i] = operation
+			found = true
 			break
 		}
 	}
 	// If the operation doesn't exist, append it
-	asyncOperations = append(asyncOperations, operation)
+	if !found {
+		asyncOperations = append(asyncOperations, operation)
+	}
 	// Limit the number of async operations to 200
 	if len(asyncOperations) > 200 {
 		asyncOperations = asyncOperations[1:]
@@ -194,6 +370,194 @@ func (s *SummaryRule) RemoveAsyncOperation(operationId string) {
 		condition.Status = metav1.ConditionUnknown
 		condition.Reason = "InProgress"
 	}
+
+	meta.SetStatusCondition(&s.Status.Conditions, *condition)
+}
+
+func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	lastSuccessfulEndTime := s.GetLastExecutionTime()
+	cnd := s.GetCondition()
+	if cnd == nil {
+		// For first-time execution, initialize the condition with a timestamp
+		// that's one interval back from current time
+		cnd = &metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: clk.Now().Add(-s.Spec.Interval.Duration)},
+		}
+	}
+
+	// Make readiness delay-aware: we only consider time elapsed against (now - delay)
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+	effectiveNow := clk.Now().Add(-delay)
+
+	// Determine if the rule should be executed based on several criteria:
+	// 1. The rule is being deleted
+	// 2. Rule has been updated (new generation)
+	// 3. It's time for the next interval execution (based on delay-aware clock)
+	return s.DeletionTimestamp != nil || // Rule is being deleted
+		cnd.ObservedGeneration != s.GetGeneration() || // A new version of this CRD was created
+		(lastSuccessfulEndTime != nil && effectiveNow.Sub(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
+		(lastSuccessfulEndTime == nil && effectiveNow.Sub(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
+}
+
+func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	lastSuccessfulEndTime := s.GetLastExecutionTime()
+	if lastSuccessfulEndTime == nil {
+		// First execution: start from current time minus delay, aligned to interval boundary
+		now := clk.Now().UTC().Add(-delay)
+		alignedNow := now.Truncate(s.Spec.Interval.Duration)
+		windowEndTime = alignedNow
+		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
+	} else {
+		// Subsequent executions: start at previous end boundary; always return full interval.
+		windowStartTime = lastSuccessfulEndTime.Truncate(s.Spec.Interval.Duration)
+		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
+	}
+	return
+}
+
+func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	// Get the last execution time as our starting point
+	lastExecutionTime := s.GetLastExecutionTime()
+	if lastExecutionTime == nil || lastExecutionTime.IsZero() {
+		// No action if there's no last execution time
+		return
+	}
+
+	// Get existing async operations to check for duplicates
+	existingOps := s.GetAsyncOperations()
+
+	// Create a map for quick duplicate checking based on canonical time windows.
+	// Canonical window representation uses (start, start+interval-OneTick) to match
+	// how we store backlog operations (inclusive end). Previously we keyed on the
+	// unadjusted exclusive end while storing an adjusted inclusive end, causing
+	// perpetual re-generation of the same backlog window.
+	existingWindows := make(map[string]bool)
+	intervalDuration := s.Spec.Interval.Duration
+	for _, op := range existingOps {
+		if op.StartTime == "" || op.EndTime == "" {
+			continue
+		}
+		startParsed, errStart := time.Parse(time.RFC3339Nano, op.StartTime)
+		if errStart != nil {
+			continue
+		}
+		// Reconstruct canonical end as start + interval - OneTick (what we store)
+		canonicalEnd := startParsed.Add(intervalDuration).Add(-kustoutil.OneTick)
+		key := startParsed.Format(time.RFC3339Nano) + ":" + canonicalEnd.Format(time.RFC3339Nano)
+		existingWindows[key] = true
+	}
+
+	var newOperations []AsyncOperation
+
+	// Calculate ingestion delay
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	// Calculate the current effective time (accounting for ingestion delay)
+	now := clk.Now().UTC().Add(-delay)
+
+	// Start from the last execution time and generate windows forward
+	currentWindowStart := lastExecutionTime.UTC()
+	// intervalDuration already captured above
+
+	// Generate operations from last execution time forward until we hit current time
+	for {
+		// Calculate the next window
+		windowStart := currentWindowStart
+		windowEnd := windowStart.Add(intervalDuration)
+
+		// Stop if this window would end at or after current time
+		// (only backfill completely finished intervals)
+		if windowEnd.After(now) || windowEnd.Equal(now) {
+			break
+		}
+
+		// Check if this time window already exists (canonical key uses inclusive end)
+		inclusiveEnd := windowEnd.Add(-kustoutil.OneTick)
+		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + inclusiveEnd.Format(time.RFC3339Nano)
+		if !existingWindows[windowKey] {
+			newOp := AsyncOperation{
+				OperationId: "", // backlog operation
+				StartTime:   windowStart.Format(time.RFC3339Nano),
+				EndTime:     inclusiveEnd.Format(time.RFC3339Nano),
+			}
+			newOperations = append(newOperations, newOp)
+			existingWindows[windowKey] = true
+		}
+
+		// Move to next interval
+		currentWindowStart = windowEnd
+	}
+
+	// Add new operations to existing ones, oldest first (to ensure newest are preserved when pruning)
+	allOperations := append(existingOps, newOperations...)
+
+	// If we exceed 200 operations, prune oldest (prioritize newest windows)
+	if len(allOperations) > 200 {
+		// Sort by StartTime to find chronologically oldest
+		sort.Slice(allOperations, func(i, j int) bool {
+			timeI, errI := time.Parse(time.RFC3339Nano, allOperations[i].StartTime)
+			timeJ, errJ := time.Parse(time.RFC3339Nano, allOperations[j].StartTime)
+
+			// Handle parsing errors - fall back to array position
+			if errI != nil || errJ != nil {
+				return i < j
+			}
+
+			return timeI.Before(timeJ)
+		})
+
+		// Keep only the newest 200 operations
+		allOperations = allOperations[len(allOperations)-200:]
+	}
+
+	// Marshal and store the updated operations
+	operationsJSON, err := json.Marshal(allOperations)
+	if err != nil {
+		// If we can't marshal the JSON, something has gone horribly wrong
+		return
+	}
+
+	// Update the condition
+	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOperationIdOwner)
+	if condition == nil {
+		condition = &metav1.Condition{}
+	}
+
+	message := string(operationsJSON)
+	if condition.Message == message {
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = "NoBacklog"
+	} else {
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = "InProgress"
+	}
+	condition.Message = message
+	condition.LastTransitionTime = metav1.Now()
+	condition.ObservedGeneration = s.GetGeneration()
+	condition.Type = SummaryRuleOperationIdOwner
 
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }

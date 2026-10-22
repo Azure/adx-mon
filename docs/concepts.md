@@ -23,7 +23,7 @@ The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is t
 
 #### Key Features
 - **Multi-Source Telemetry Collection:** Collects from Prometheus endpoints, logs (including OTLP and host logs), and traces.
-- **Kubernetes Native:** Discovers pods and services to scrape via annotations (e.g., `adx-mon/scrape: "true"`).
+- **Kubernetes Native:** Discovers pod logs via `adx-mon/log-destination` and pod metrics via `adx-mon/scrape: "true"`.
 - **Configurable via TOML:** Uses a TOML config file (see `docs/config.md`) for flexible setup of scrape targets, filters, exporters, and storage.
 - **Efficient Buffering:** Uses a Write-Ahead Log (WAL) to buffer data locally for reliability and performance.
 - **Label/Attribute Lifting:** Supports lifting selected labels/attributes to top-level columns for easier querying in ADX.
@@ -42,9 +42,11 @@ The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is t
   - `host-log`: Collects host and kernel logs.
   - `exporters`: Additional telemetry destinations.
 - **Kubernetes Annotations:**
-  - `adx-mon/scrape`: Enables scraping for a pod/service.
-  - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path.
-  - `adx-mon/log-destination`: Sets log destination table.
+  - `adx-mon/scrape`: Enables Prometheus metrics scraping for a pod.
+  - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path. Port can be numeric (e.g., "8080") or named (e.g., "metrics").
+  - `adx-mon/targets`: Comma-separated list of path:port combinations. Supports named ports.
+  - `adx-mon/scrape-interval`: Overrides the scrape interval for all metrics endpoints on a pod using a positive Go duration (e.g., `30s`, `2m`, or `500ms`). Missing, empty, or invalid values use the collector's global interval; invalid values log a warning.
+  - `adx-mon/log-destination`: Enables pod log collection and sets the destination as `Database:Table`, independently of metrics scraping.
   - `adx-mon/log-parsers`: Comma-separated list of log parsers (e.g., `json`).
 
 #### Example Collector CRD
@@ -102,6 +104,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
 - **Batching & Coalescing:** Segments are batched by table/schema and uploaded to ADX in large, compressed batches (100MB–1GB recommended) to optimize ingestion cost and performance.
 - **Peer Transfer:** Small segments are transferred to peer ingestors for coalescing, reducing the number of small files ingested by ADX.
 - **Direct Upload Fallback:** If a segment is too old or too large, it is uploaded directly to ADX, bypassing peer transfer.
+- **Realtime Ingestion:** Selected tables are rotated and batched as soon as segments close and ingested with ADX streaming ingestion, falling back to queued ingestion when needed. See [realtime ingestion](ingestor.md#realtime-ingestion).
 - **Multi-Database Support:** Can upload to multiple ADX databases (e.g., metrics, logs) simultaneously.
 - **Kubernetes Native:** Deployed as a StatefulSet, supports scaling and partitioning.
 - **CRD-Driven:** Managed via the `Ingestor` CRD for declarative configuration.
@@ -112,13 +115,17 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
 - **Config File/CLI:** Main configuration is via CLI flags or environment variables (see `cmd/ingestor/main.go`). Key options include:
   - `--storage-dir`: Directory for WAL segments.
   - `--metrics-kusto-endpoints`, `--logs-kusto-endpoints`: ADX endpoints for metrics/logs (format: `<db>=<endpoint>`).
+  - `--cluster-labels`: Labels used to identify and distinguish ingestor clusters (format: `<key>=<value>`). Used for `<key>` substitutions in SummaryRules.
   - `--uploads`: Number of concurrent uploads.
   - `--max-segment-size`, `--max-segment-age`: Segment batching thresholds.
   - `--max-transfer-size`, `--max-transfer-age`: Peer transfer thresholds.
   - `--disable-peer-transfer`: Disable peer transfer (upload all segments directly).
   - `--partition-size`: Number of nodes in a partition for sharding.
   - `--max-disk-usage`, `--max-segment-count`: Backpressure controls.
+  - `--max-intake-memory`: Ceiling on memory buffered by in-flight transfers (1 GiB by default). See [table isolation](table-isolation.md#upgrading) before upgrading.
+  - `--max-table-disk-usage`, `--max-table-segment-count`, `--table-limit`, `--disable-table-limits`, `--enforce-table-limits`: Per-table backlog budgets. See [table isolation](table-isolation.md).
   - `--enable-wal-fsync`: Enable fsync for WAL durability.
+  - `--realtime-table`, `--realtime-streaming-budget`: Tables that use realtime streaming ingestion and the streaming concurrency budget per Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion) for all realtime options.
   - See `docs/config.md` for all options.
 
 #### Example Ingestor CRD
@@ -169,9 +176,54 @@ flowchart TD
 
 ---
 
+### SummaryRules
+
+**SummaryRules** provide automated data aggregation and ETL (Extract, Transform, Load) capabilities within ADX-Mon. They execute scheduled KQL queries against ADX to create rollups, downsampled data, or import data from external sources, helping manage data retention costs and improve query performance.
+
+#### Key Features
+- **Automated Scheduling:** Execute KQL queries at defined intervals (e.g., hourly, daily) with precise time window management.
+- **Async Operation Tracking:** Submit queries as ADX async operations and monitor them through completion, handling retries and failures automatically.
+- **Time Window Management:** Calculate exact execution windows to ensure no data gaps or overlaps between runs.
+- **Cluster Label Substitution:** Support environment-agnostic rules using cluster labels for multi-environment deployments.
+- **State Persistence:** Track execution history and operation status using Kubernetes conditions.
+- **Resilient Operation:** Handle ADX cluster restarts, network issues, and operation cleanup automatically.
+
+#### Configuration & Usage
+- **Deployment:** SummaryRules are managed by the Ingestor's `SummaryRuleTask` which runs periodically to process all rules.
+- **CRD Definition:** Rules are defined as `SummaryRule` CRDs with fields:
+  - `database`: Target ADX database
+  - `table`: Destination table for aggregated results
+  - `body`: KQL query with `_startTime` and `_endTime` placeholders
+  - `interval`: Execution frequency (e.g., `1h`, `15m`, `1d`)
+- **Placeholders:**
+  - `_startTime`/`_endTime`: Automatically replaced with execution window times
+  - `_<label>`: Replaced with cluster label values from ingestor configuration
+
+#### Example SummaryRule CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: hourly-cpu-usage
+spec:
+  database: Metrics
+  table: CPUUsageHourly
+  interval: 1h
+  body: |
+    Metrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Name == "cpu_usage_percent"
+    | summarize avg(Value), max(Value), min(Value)
+      by bin(Timestamp, 1h), Pod, Namespace
+```
+
+For detailed examples and best practices, see the [SummaryRules Cookbook](cookbook/cookbook.md#summaryrules).
+
+---
+
 ## WAL Segment File Format
 
-> **Note:** The WAL binary format is fully documented below and matches the implementation in `pkg/wal/segment.go`. This includes segment and block headers, field layout, encoding, versioning, and repair logic. For advanced integrations or troubleshooting, see also [Ingestor Overview](ingestor.md#walf-format-and-storage).
+> **Note:** The WAL binary format is fully documented below and matches the implementation in `pkg/wal/segment.go`. This includes segment and block headers, field layout, encoding, versioning, and repair logic. For advanced integrations or troubleshooting, see also [Ingestor Overview](ingestor.md#wal-format-and-storage).
 
 WAL (Write-Ahead Log) segment files are the durable, append-only storage format used for buffering telemetry data before upload to Azure Data Explorer (ADX). Understanding the binary format is essential for troubleshooting, recovery, and advanced integrations.
 
@@ -249,9 +301,11 @@ The **Alerter** component is responsible for evaluating alert rules (defined as 
 #### Key Features
 - **CRD-Driven:** Alerting rules are defined as `AlertRule` CRDs, specifying the KQL query, schedule, and notification destination.
 - **Kusto Query Execution:** Periodically executes KQL queries against ADX clusters, as configured in the rule.
-- **Notification Delivery:** Sends alert notifications to a configurable HTTP endpoint (e.g., ICM, PagerDuty, custom webhooks) in a standard JSON format.
+- **Notification Delivery:** Sends ADX-Mon alert notifications to a configurable HTTP endpoint (e.g., PagerDuty, custom webhooks) in a standard JSON format.
+- **Notification Throttling:** When notification limits are exceeded, ADX-Mon sends a summary with the severity and title of up to 100 suppressed alerts, an omitted-alert count when needed, and links and query text for the evaluated time window. Alerts already delivered are excluded from the table.
 - **Correlation & Auto-Mitigation:** Supports correlation IDs to deduplicate alerts and auto-mitigate after a configurable duration.
 - **Tag-Based Routing:** Supports tag-based filtering to control which alerter instance processes which rules (e.g., by region, cloud, or custom tags).
+- **Conditional Execution (criteria / criteriaExpression):** AlertRule, SummaryRule and MetricsExporter share unified conditional logic. A legacy `criteria` map (OR semantics across entries) and an optional CEL `criteriaExpression` (evaluated against lower‑cased cluster label/tag variables such as `region`, `cloud`, `environment`, etc.) combine with AND semantics. If either is empty it is permissive. Evaluation errors skip execution.
 - **Health & Metrics:** Exposes Prometheus metrics for alert delivery health, query health, and notification status.
 
 #### Configuration & Usage
@@ -298,13 +352,32 @@ Alert notifications are sent as JSON via HTTP POST to the configured endpoint. E
 5. **Health Monitoring:** Exposes Prometheus metrics for query and notification health.
 
 #### Tag-Based Routing
-Alerter instances can be configured with tags (e.g., `region`, `cloud`). Only rules whose `criteria` match the instance's tags will be processed by that instance. This enables multi-region or multi-cloud deployments.
+Alerter instances can be configured with tags (e.g., `region`, `cloud`). Only rules whose `criteria` match the instance's tags will be processed by that instance. This enables multi-region or multi-cloud deployments. `criteriaExpression` is parsed and executed using [CEL](https://cel.dev/), with the available variables being defined by tags passed into the executing service.
+
+#### Unified Execution Selection Examples
+```yaml
+# Map only
+spec:
+  criteria:
+    region: [eastus, westus]
+
+# Expression only
+spec:
+  criteriaExpression: region in ['eastus','westus'] && env == 'prod'
+
+# Both (AND)
+spec:
+  criteria:
+    region: [eastus]
+  criteriaExpression: env == 'prod' && cloud == 'public'
+```
+Behavior formula: `(criteria empty OR any match) AND (criteriaExpression empty OR expression true)`.
 
 #### Example CLI Usage
 ```sh
 cd cmd/alerter
 # Run with required Kusto endpoint and kubeconfig
-./alerter --kusto-endpoint "DB=https://cluster.kusto.windows.net" --kubeconfig ~/.kube/config --region uksouth --cloud AzureCloud --alerter-address http://alerter-endpoint
+./alerter --kusto-endpoint "DB=https://cluster.kusto.windows.net" --kubeconfig ~/.kube/config --region uksouth --cloud AzureCloud --tag environment=test --alerter-address http://alerter-endpoint
 ```
 
 #### Health & Metrics
@@ -316,6 +389,86 @@ cd cmd/alerter
 - Includes a `lint` mode to validate alert rules without sending notifications.
 - Supports local testing with fake Kusto and alert endpoints.
 - See `README.md` for testing instructions.
+
+---
+
+### ADX Exporter
+
+The **ADX Exporter** (`adxexporter`) component executes KQL queries against Azure Data Explorer and exports the results as metrics to OTLP-compatible endpoints. It enables organizations to transform ADX analytics data into standardized metrics for external observability platforms without creating intermediate ADX tables.
+
+#### Key Features
+- **Direct KQL Execution:** Execute KQL queries and transform results to metrics without intermediate table storage.
+- **OTLP Push:** Push metrics directly to any OTLP-compatible endpoint (OpenTelemetry Collector, Prometheus with remote-write receiver, etc.).
+- **Memory Efficient:** Uses `pkg/prompb` object pooling for high cardinality metrics with reduced GC pressure.
+- **Timestamp Fidelity:** Preserves actual KQL query timestamps instead of export-time timestamps.
+- **Criteria-Based Execution:** Supports the same cluster-label filtering as Alerter and SummaryRules for secure, distributed execution.
+- **CRD-Driven:** MetricsExporter CRDs define KQL queries, transform configuration, and scheduling.
+
+#### Configuration & Usage
+- **Deployment:** Deploy as a standalone Kubernetes Deployment with appropriate cluster labels.
+- **CLI Flags:**
+  - `--cluster-labels`: Comma-separated key=value pairs for criteria matching (e.g., `region=eastus,environment=production`).
+  - `--kusto-endpoint`: ADX endpoint in format `<database>=<endpoint>`. Can specify multiple.
+  - `--otlp-endpoint`: **(Required)** OTLP HTTP endpoint for pushing metrics.
+  - `--health-probe-port`: Port for health endpoints (default: 8081).
+
+#### Example CLI Usage
+```bash
+adxexporter \
+  --cluster-labels="region=eastus,environment=production,team=platform" \
+  --kusto-endpoint="MetricsDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
+```
+
+#### Example MetricsExporter CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: service-response-times
+  namespace: monitoring
+spec:
+  database: TelemetryDB
+  interval: 5m
+  criteria:
+    region: ["eastus", "westus"]
+    environment: ["production"]
+  body: |
+    ServiceTelemetry
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize 
+        metric_value = avg(ResponseTimeMs),
+        timestamp = bin(Timestamp, 1m)
+        by ServiceName, Environment
+    | extend metric_name = "service_response_time_avg"
+  transform:
+    metricNameColumn: "metric_name"
+    valueColumns: ["metric_value"]
+    timestampColumn: "timestamp"
+    labelColumns: ["ServiceName", "Environment"]
+```
+
+#### How It Works
+1. **CRD Discovery:** Watches MetricsExporter CRDs matching its cluster labels via criteria filtering.
+2. **Query Execution:** Executes KQL queries on schedule with `_startTime`/`_endTime` parameter substitution.
+3. **Transform:** Converts KQL results to `MetricData` using the transform configuration.
+4. **OTLP Push:** Converts metrics to `prompb.WriteRequest` format using pooled objects and pushes to the OTLP endpoint.
+
+#### Transform Configuration
+The transform configuration maps KQL columns to metrics format:
+- `metricNameColumn`: Column containing metric names (or use `defaultMetricName` for a static name).
+- `valueColumns`: Array of columns containing numeric metric values.
+- `timestampColumn`: Column containing timestamps.
+- `labelColumns`: Columns to use as metric labels/attributes.
+- `metricNamePrefix`: Optional prefix for all metric names.
+
+#### Health & Metrics
+- Exposes `/healthz` and `/readyz` endpoints on the health probe port (default: 8081).
+- Metrics are pushed to the configured OTLP endpoint, not scraped.
+
+#### Development & Testing
+- Supports local testing with mock OTLP endpoints.
+- See the [Kusto-to-Metrics Design](designs/kusto-to-metrics.md) for detailed architecture and implementation.
 
 ---
 
@@ -337,7 +490,7 @@ The **Operator** is the control plane component that manages the lifecycle of al
 2. **Azure Resource Management:** Provisions or connects to ADX clusters/databases as specified in the `ADXCluster` CRD.
 3. **Component Deployment:** Deploys or updates StatefulSets/Deployments for Ingestor, Collector, and Alerter based on their CRDs.
 4. **Status & Health:** Updates CRD status fields and subresource conditions to reflect readiness and errors.
-5. **Federation Support:** Manages federated clusters, heartbeats, and macro-expand KQL functions for cross-cluster querying.
+5. **Federation Support:** Manages federated clusters, heartbeats, named entity groups, and macro-expand KQL functions for cross-cluster querying.
 
 #### Example Operator Workflow
 ```mermaid
@@ -410,8 +563,9 @@ flowchart TD
 
 #### Federation & Multi-Cluster
 - **Partition Clusters:** Each partition cluster is managed by its own operator and contains a subset of the data (e.g., by geo or tenant).
-- **Federated Cluster:** A central operator manages a federated ADX cluster, providing a unified query interface and managing heartbeats and macro-expand KQL functions.
+- **Federated Cluster:** A central operator manages a federated ADX cluster, providing a unified query interface and managing heartbeats, named entity groups, and macro-expand KQL functions.
 - **Heartbeat Table:** Partition clusters send periodic heartbeats to the federated cluster, which uses them to discover topology and liveness.
+- **Named Entity Groups:** The federated operator creates named entity groups (e.g., `MetricsSpoke`, `LogsSpoke`) that reference all partition cluster endpoints for each database, enabling efficient cross-cluster querying via macro-expand.
 
 #### Development & Testing
 - Operator can be run locally or in-cluster.
@@ -523,7 +677,7 @@ spec:
 All must have the following fields:
 
 * `database` - The ADX database to execute the query.
-* `interval` - The interval at which the query should be executed.
+* `interval` - The interval at which the query should be executed. Must be at least `30s`, such as `5m`.
 * `query` - The KQL query to execute.
 * `destination` - The destination to send the alert to.  This is provider specific.
 

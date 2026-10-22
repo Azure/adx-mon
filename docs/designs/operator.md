@@ -20,6 +20,7 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 - **adx-mon Component Management:**
   - Generate and apply manifests for adx-mon components (collector, ingestor, alerter) based on their respective CRDs (`Collector`, `Ingestor`, `Alerter`).
   - Manage Kubernetes resources like StatefulSets, Deployments, and Services for these components.
+  - The operator service account requires get, list, watch, create, update, and delete access to Roles, RoleBindings, ClusterRoles, and ClusterRoleBindings, plus update access to StatefulSets, so security controls can be migrated and continuously enforced. Production operator RBAC is maintained in the deployment repository and must be upgraded before this operator version is rolled out.
   - Support default container images for each component, with overrides via the `image` field in each CRD spec.
   - Allow configuration of the number of ingestor instances via `spec.replicas` in the `Ingestor` CRD.
   - Support deployment of only a subset of components (e.g., only collectors) to enable federated/multi-cluster topologies.
@@ -37,6 +38,23 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 - **Resource Cleanup on Deletion:**
   - When a CRD for an adx-mon component (e.g., `Ingestor`) is deleted, the operator uses Kubernetes owner references to ensure the corresponding managed Kubernetes resources (like StatefulSets) are garbage collected.
   - Deletion of an `ADXCluster` CRD does *not* automatically delete the underlying Azure resources by default.
+
+---
+
+## Diagnostics
+
+- Pprof endpoints are disabled by default. Enable them by starting the operator with `--pprof-bind-address=:6060`.
+- The operator serves pprof under `/debug/pprof/` on the bind address. Example access using port-forward:
+  ```bash
+  kubectl port-forward deploy/<operator-deployment> 6060:6060
+  ```
+  Then open `http://localhost:6060/debug/pprof/`.
+
+## Kubernetes Compatibility and Ingestor Security
+
+- Kubernetes 1.22 or newer is required. Kubernetes automatically injects a rotating, Pod-bound service account token into ingestor pods.
+- During upgrades, the operator first removes cluster-wide core API permissions, then creates namespace-local pod permissions.
+- Graceful shutdown requires `patch` on pods in the ingestor namespace. Kubernetes RBAC cannot dynamically restrict this permission to only the current StatefulSet pod, so namespace-wide pod patch is an accepted residual risk.
 
 ---
 
@@ -70,20 +88,26 @@ Each CRD is described below with its current schema and example YAML, strictly r
   - `retentionInDays` (int, optional): Retention period in days. Default: 30.
   - `retentionPolicy` (string, optional): ADX retention policy.
   - `telemetryType` (string, required): One of `Metrics`, `Logs`, or `Traces`.
-- `provision` (object, optional): Azure provisioning details:
-  - `subscriptionId` (string, optional): Azure subscription ID. If omitted, will be auto-detected in zero-config mode.
-  - `resourceGroup` (string, optional): Azure resource group. If omitted, will be auto-created or detected.
-  - `location` (string, optional): Azure region (e.g., "eastus2"). If omitted, will be auto-detected.
-  - `skuName` (string, optional): Azure SKU (e.g., "Standard_L8as_v3").
-  - `tier` (string, optional): Azure ADX tier (e.g., "Standard"). Defaults to "Standard" if not specified.
-  - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids).
-  - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Defaults to false.
-  - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Defaults to 10.
-  - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Defaults to 2.
-  - `appliedProvisionState` (string, optional, read-only): JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities as last applied by the operator.
+- `provision` (object, optional): Azure provisioning details. When this section is present, the operator performs Azure resource reconciliation. **Required fields must be supplied explicitly; optional fields have defaults as noted below.**
+  - **Required fields:**
+    - `subscriptionId` (string, required): Azure subscription ID the operator should use.
+    - `resourceGroup` (string, required): Azure resource group that owns the ADX cluster.
+    - `location` (string, required): Azure region (e.g., "eastus2").
+    - `skuName` (string, required): Azure SKU (e.g., "Standard_L8as_v3").
+    - `tier` (string, required): Azure ADX tier (e.g., "Standard").
+  - **Optional fields (with defaults):**
+    - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids). Default: empty list.
+    - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Default: `false`.
+    - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Default: `10`.
+    - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Default: `2`.
 
 **Status fields:**
 - `conditions` (array, optional): Standard Kubernetes conditions.
+- `endpoint` (string, optional): Observed Kusto endpoint. Mirrors `spec.endpoint` in BYO scenarios or reflects the provisioned endpoint when the operator manages the cluster.
+- `appliedProvisionState` (object, optional): Snapshot of the last provisioned SKU, tier, and user-assigned identities reconciled by the controller. The operator uses this record to:
+  - detect spec-driven changes (e.g., user bumps the SKU) without mutating `spec`;
+  - tolerate out-of-band edits made directly in Azure by skipping updates when the live cluster no longer matches the previously applied values;
+  - expose the currently effective provisioning settings to other reconcilers without forcing them to reach back into Azure.
 
 **Minimal Example:**
 ```yaml
@@ -456,12 +480,13 @@ The federated feature relies on a `heartbeat` table in the federated cluster to 
 #### Field Explanations
 - **Timestamp**: The UTC time when the partition cluster emitted the heartbeat.
 - **ClusterEndpoint**: The fully qualified endpoint URL of the partition cluster.
-- **Schema**: A dynamic object describing the databases and tables present in the partition cluster. For example:
+- **Schema**: A dynamic object describing the databases, tables, and views present in the partition cluster. For example:
   ```json
   [
     {
       "database": "Logs",
-      "tables": ["A", "B", "C"]
+      "tables": ["A", "B", "C"],
+      "views": ["MyView", "AnotherView"]
     }
   ]
   ```
@@ -481,7 +506,8 @@ The federated feature relies on a `heartbeat` table in the federated cluster to 
     "Schema": [
         {
             "database": "Logs",
-            "tables": ["A", "B", "C"]
+            "tables": ["A", "B", "C"],
+            "views": ["MyView", "AnotherView"]
         }
     ],
     "PartitionMetadata": {
@@ -599,6 +625,19 @@ The operator supports a federated ADX cluster model to enable organizations to p
   - Entity groups for macro-expand are dynamically constructed based on the current fleet topology, as discovered via heartbeats.
   - This enables the federated cluster to present a single logical view for each table, while queries are transparently federated across all relevant clusters and databases.
   - The federated operator updates KQL functions and entity groups as the fleet topology changes.
+
+- **Named Entity Groups:**  
+  - The federated operator creates persistent named entity groups in ADX using the naming pattern `{SpokeDatabaseName}Spoke` (e.g., `MetricsSpoke`, `LogsSpoke`).
+  - Each entity group contains references to all partition cluster endpoints that have that database: `cluster('ep1').database('db'), cluster('ep2').database('db'), ...`
+  - Entity groups are replicated across configured or discovered hub databases that are present in the hub's data-plane database inventory, ensuring consistent cross-cluster query capabilities.
+  - A discovered database need not already exist on an externally provisioned hub. After the optional provisioning step, the operator lists available hub databases and skips unavailable destinations for entity-group, table, and function updates, logging a warning. Other databases continue synchronizing. Skipped destinations are reconsidered on the next reconciliation, including databases whose asynchronous provisioning has not finished. Database-listing errors still fail reconciliation rather than being treated as an empty inventory.
+  - Spoke entity groups remain available in the selected hub databases even when the corresponding database is absent on the hub, preserving cross-database query capabilities. This does not create the missing hub database or remove existing federation objects.
+  - Since ADX does not support `.create-or-alter` for entity groups, the operator uses a drop-then-create pattern:
+    ```kql
+    .drop entity_group MetricsSpoke
+    .create entity_group MetricsSpoke (cluster('https://cluster1.kusto.net').database('Metrics'), cluster('https://cluster2.kusto.net').database('Metrics'))
+    ```
+  - Named entity groups provide better manageability than inline definitions: they can be inspected with `.show entity_groups`, updated independently, and referenced by multiple functions.
 
 - **Schema Flexibility:**  
   - The dynamic object for database/table topology allows the federated operator to only federate queries to clusters that actually contain the relevant table, improving efficiency and flexibility.

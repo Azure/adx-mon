@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,12 +19,14 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 type LogsServiceOpts struct {
 	WorkerCreator engine.WorkerCreatorFunc
 	HealthChecker interface{ IsHealthy() bool }
+	ProcessBatch  func(context.Context, *types.LogBatch) (int64, error)
 }
 
 type LogsService struct {
@@ -31,6 +34,14 @@ type LogsService struct {
 	outputQueue   chan *types.LogBatch
 	logger        *slog.Logger
 	healthChecker interface{ IsHealthy() bool }
+	processBatch  func(context.Context, *types.LogBatch) (int64, error)
+
+	// closing guards synchronous request processing so Close waits for in
+	// flight work instead of letting shutdown close transforms and sinks
+	// underneath it.
+	mu       sync.RWMutex
+	closed   bool
+	inflight sync.WaitGroup
 
 	wg sync.WaitGroup
 }
@@ -46,6 +57,7 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 			),
 		),
 		healthChecker: opts.HealthChecker,
+		processBatch:  opts.ProcessBatch,
 	}
 }
 
@@ -60,9 +72,29 @@ func (s *LogsService) Open(ctx context.Context) error {
 }
 
 func (s *LogsService) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+
+	// Wait for synchronous requests before the owner closes transforms and
+	// sinks, otherwise in flight work would use closed components.
+	s.inflight.Wait()
+
 	close(s.outputQueue)
 	s.wg.Wait()
 	return nil
+}
+
+// beginRequest reserves the right to process a batch synchronously. It reports
+// false once the service is closing.
+func (s *LogsService) beginRequest() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return false
+	}
+	s.inflight.Add(1)
+	return true
 }
 
 func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
@@ -70,8 +102,8 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if !s.healthChecker.IsHealthy() {
-		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
-		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		status := newErrorStatus("Overloaded. Retry later")
+		writeErrorStatusResponse(w, http.StatusTooManyRequests, status, m)
 		return
 	}
 
@@ -85,14 +117,14 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		n, err := io.ReadFull(r.Body, b)
 		if err != nil {
 			s.logger.Error("Failed to read request body", "Error", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			status := newErrorStatus("Failed to read request body")
+			writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
 			return
 		}
 		if n < int(r.ContentLength) {
 			s.logger.Warn("Short read")
-			w.WriteHeader(http.StatusBadRequest)
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			status := newErrorStatus("Request body shorter than Content-Length header")
+			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
 			return
 		}
 		b = b[:n]
@@ -104,26 +136,63 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		msg := &v1.ExportLogsServiceRequest{}
 		if err := proto.Unmarshal(b, msg); err != nil {
 			s.logger.Error("Failed to unmarshal request body", "Error", err)
-			w.WriteHeader(http.StatusBadRequest)
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			status := newErrorStatus(fmt.Sprintf("Failed to unmarshal request body: %v", err))
+			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
 			return
 		}
 
 		logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
 		logBatch.Reset()
 
-		droppedLogMissingMetadata := s.convertToLogBatch(msg, logBatch)
+		droppedLogMissingMetadata, convertedLogs := s.convertToLogBatch(msg, logBatch)
+		missingMetadata := droppedLogMissingMetadata
 
-		s.outputQueue <- logBatch
+		if convertedLogs == 0 {
+			var status *status.Status
+			if droppedLogMissingMetadata > 0 {
+				metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+				status = newErrorStatus("All logs dropped. Required kusto.database and kusto.table attributes or body fields are missing.")
+			} else {
+				status = newErrorStatus("No logs to process.")
+			}
+
+			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
+			return
+		}
+
+		if s.processBatch != nil {
+			if !s.beginRequest() {
+				types.DisposeLogBatch(logBatch)
+				writeErrorStatusResponse(w, http.StatusServiceUnavailable, newErrorStatus("Shutting down. Retry later"), m)
+				return
+			}
+			rejected, err := s.processBatch(r.Context(), logBatch)
+			s.inflight.Done()
+			if err != nil {
+				writeErrorStatusResponse(w, http.StatusServiceUnavailable, newErrorStatus("Failed to store logs. Retry later"), m)
+				return
+			}
+			droppedLogMissingMetadata += rejected
+		} else {
+			select {
+			case s.outputQueue <- logBatch:
+				// The worker owns the batch after it is enqueued.
+			case <-r.Context().Done():
+				// Context has timed out with the outputQueue not being able to consume. Dispose the logBatch.
+				types.DisposeLogBatch(logBatch)
+				// At this point, either the client has given up or the server timeout middleware will return an error back to the client.
+				return
+			}
+		}
 
 		// The logs have been committed by the OTLP endpoint
 		resp := &v1.ExportLogsServiceResponse{}
 		if droppedLogMissingMetadata > 0 {
 			resp.SetPartialSuccess(&v1.ExportLogsPartialSuccess{
 				RejectedLogRecords: droppedLogMissingMetadata,
-				ErrorMessage:       "Logs lacking kube.database and kube.table attributes or body fields",
+				ErrorMessage:       "Logs rejected: missing routing metadata or table quota",
 			})
-			metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+			metrics.InvalidLogsDropped.WithLabelValues().Add(float64(missingMetadata))
 		}
 
 		respBodyBytes, err := proto.Marshal(resp)
@@ -144,13 +213,13 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		// We're receiving JSON, so we need to unmarshal the JSON
 		// into an OTLP protobuf, then use gRPC to send the OTLP
 		// protobuf to the OTLP endpoint
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
+		status := newErrorStatus("Unsupported Content-Type: application/json")
+		writeErrorStatusResponse(w, http.StatusUnsupportedMediaType, status, m)
 
 	default:
 		logger.Errorf("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
+		status := newErrorStatus(fmt.Sprintf("Unsupported Content-Type: %s", r.Header.Get("Content-Type")))
+		writeErrorStatusResponse(w, http.StatusUnsupportedMediaType, status, m)
 	}
 
 }
@@ -160,13 +229,16 @@ var (
 	ErrMalformedLogs        = errors.New("malformed log records")
 )
 
-// convertToLogBatch populates the LogBatch with the logs from the OTLP message. Returns the number of logs that were lacking kusto routing metadata
-func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBatch *types.LogBatch) int64 {
+// convertToLogBatch populates the LogBatch with the logs from the OTLP message.
+// Returns the number of logs that were lacking kusto routing metadata and the
+// number of logs successfully converted.
+func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBatch *types.LogBatch) (int64, int64) {
 	if msg == nil {
-		return 0
+		return 0, 0
 	}
 
-	var droppedLogMissingMetadata int64 = 0
+	var droppedLogMissingMetadata int64
+	var convertedLogs int64
 	for _, resourceLog := range msg.ResourceLogs {
 		if resourceLog == nil {
 			continue
@@ -218,10 +290,11 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 				metrics.LogKeys.WithLabelValues(dbName, tableName).Inc()
 
 				logBatch.Logs = append(logBatch.Logs, log)
+				convertedLogs++
 			}
 		}
 	}
-	return droppedLogMissingMetadata
+	return droppedLogMissingMetadata, convertedLogs
 }
 
 const defaultMaxDepth = 20

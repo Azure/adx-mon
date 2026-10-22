@@ -9,6 +9,37 @@ kind: ServiceAccount
 metadata:
   name: ingestor
   namespace: adx-mon
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: adx-mon-ingestor-pods
+  namespace: adx-mon
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: adx-mon-ingestor-pods
+  namespace: adx-mon
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: adx-mon-ingestor-pods
+subjects:
+  - kind: ServiceAccount
+    name: ingestor
+    namespace: adx-mon
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -16,43 +47,35 @@ metadata:
   name: adx-mon:ingestor
 rules:
   - apiGroups:
-      - ""
+      - adx-mon.azure.com
     resources:
-      - namespaces
-      - pods
+      - functions
     verbs:
       - get
       - list
-      - watch
       - update
   - apiGroups:
       - adx-mon.azure.com
     resources:
-      - functions
       - managementcommands
       - summaryrules
     verbs:
       - get
       - list
-      - update
-      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions/status
+      - managementcommands/status
+      - summaryrules/status
     verbs:
       - update
-      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions/finalizers
-      - managementcommands/finalizers
-      - summaryrules/finalizers
     verbs:
-      - get
       - update
-      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -108,10 +131,20 @@ spec:
         adx-mon/log-destination: "Logs:Ingestor"
         adx-mon/log-parsers: json
     spec:
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 600
+      securityContext: {}
       serviceAccountName: ingestor
       containers:
         - name: ingestor
           image: ghcr.io/azure/adx-mon/ingestor:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 9090
               name: ingestor

@@ -2,44 +2,42 @@ package adx
 
 import (
 	"context"
-	"flag"
-	"io"
-	"os"
+	"errors"
 	"testing"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	kustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azkustoquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 )
 
 // fakeUploader is an Uploader that does nothing.
 type fakeUploader struct {
-	queue   chan *cluster.Batch
-	closeFn context.CancelFunc
-	db      string
+	queue         chan *cluster.Batch
+	realtimeQueue chan *cluster.Batch
+	closeFn       context.CancelFunc
+	db            string
 }
 
-func (f *fakeUploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	if !isTest() {
-		flag.String("test.v", "true", "fake")
-	}
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Name", Type: "string"},
-	})
-	if err != nil {
-		return nil, err
-	}
-	iter := &kusto.RowIterator{}
-	iter.Mock(rows)
-	return iter, nil
+func (f *fakeUploader) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
+	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{
+		{
+			TableName: "Table_0",
+			Columns: []kustov1.RawColumn{
+				{ColumnName: "Name", DataType: "String", ColumnType: "string"},
+			},
+			Rows: []kustov1.RawRow{{Row: []interface{}{"ok"}}},
+		},
+	}})
 }
 
 func NewFakeUploader(db string) Uploader {
 	return &fakeUploader{
-		db:    db,
-		queue: make(chan *cluster.Batch, 10000),
+		db:            db,
+		queue:         make(chan *cluster.Batch, 10000),
+		realtimeQueue: make(chan *cluster.Batch, 10000),
 	}
 }
 
@@ -58,6 +56,10 @@ func (f *fakeUploader) UploadQueue() chan *cluster.Batch {
 	return f.queue
 }
 
+func (f *fakeUploader) RealtimeUploadQueue() chan *cluster.Batch {
+	return f.realtimeQueue
+}
+
 func (f *fakeUploader) Database() string {
 	return f.db
 }
@@ -67,49 +69,48 @@ func (f *fakeUploader) Endpoint() string {
 }
 
 func (f *fakeUploader) upload(ctx context.Context) {
+	queues := cluster.PriorityQueues{Realtime: f.realtimeQueue, Queued: f.queue}
 	for {
-		select {
-		case <-ctx.Done():
+		batch, ok := queues.Next(ctx, false)
+		if !ok {
 			return
-		case batch := <-f.queue:
-			segments := batch.Segments
-
-			for _, si := range segments {
-				logger.Warnf("Uploading segment %s", si.Path)
-				if err := os.RemoveAll(si.Path); err != nil {
-					logger.Errorf("Failed to remove segment: %s", err.Error())
-				}
-			}
-			batch.Release()
 		}
+
+		for _, si := range batch.Segments {
+			logger.Warnf("Uploading segment %s", si.Path)
+		}
+		if err := batch.Remove(); err != nil {
+			logger.Errorf("Failed to remove batch: %s", err.Error())
+		}
+		batch.Release()
 	}
 }
 
 type fakeKustoMgmt struct {
 	expectedQuery, actualQuery string
+	queries                    []string
 }
 
-func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	f.actualQuery = query.String()
+	f.queries = append(f.queries, f.actualQuery)
+	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{
+		{
+			TableName: "Table_0",
+			Columns: []kustov1.RawColumn{
+				{ColumnName: "Name", DataType: "String", ColumnType: "string"},
+			},
+			Rows: []kustov1.RawRow{{Row: []interface{}{"ok"}}},
+		},
+	}})
+}
 
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Name", Type: "string"},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	iter := &kusto.RowIterator{}
-	rows.Error(io.EOF)
-	iter.Mock(rows)
-	return iter, nil
+func (f *fakeKustoMgmt) IterativeQuery(context.Context, string, azkustodata.Statement, ...azkustodata.QueryOption) (azkustoquery.IterativeDataset, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (f *fakeKustoMgmt) Verify(t *testing.T) {
 	if f.expectedQuery != "" && f.actualQuery != f.expectedQuery {
 		t.Errorf("Expected query %s, got %s", f.expectedQuery, f.actualQuery)
 	}
-}
-func isTest() bool {
-	return flag.Lookup("test.v") != nil
 }

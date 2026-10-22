@@ -2,23 +2,16 @@ package engine
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-)
-
-const (
-	maxQueryTime = 5 * time.Minute
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	"k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type worker struct {
@@ -27,14 +20,77 @@ type worker struct {
 
 	wg          sync.WaitGroup
 	rule        *rules.Rule
-	Region      string
-	tags        map[string]string
+	region      string
 	kustoClient Client
-	AlertAddr   string
-	AlertCli    interface {
+	alertAddr   string
+	alertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	HandlerFn func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	handlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
+	querySlots chan struct{}
+	ctrlCli    client.Client
+	queryTime  time.Duration
+	retryDelay time.Duration
+	clock      clock.Clock
+
+	// criteria/expression evaluation cached at construction
+	matchAllowed bool
+	matchErr     error
+}
+
+// WorkerConfig groups parameters for constructing a worker.
+type WorkerConfig struct {
+	Rule                 *rules.Rule
+	Region               string
+	Tags                 map[string]string
+	KustoClient          Client
+	MaxConcurrentQueries int
+	AlertClient          interface {
+		Create(ctx context.Context, endpoint string, alert alert.Alert) error
+	}
+	AlertAddr        string
+	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
+	CtrlClient       client.Client
+	sharedQuerySlots chan struct{}
+	Clock            clock.Clock
+}
+
+// NewWorker creates a worker and performs one-time match evaluation.
+func NewWorker(cfg *WorkerConfig) *worker {
+	if cfg == nil || cfg.Rule == nil {
+		return nil
+	}
+
+	querySlots := cfg.sharedQuerySlots
+	if querySlots == nil {
+		querySlots = queue.New(cfg.MaxConcurrentQueries)
+	}
+	workerClock := cfg.Clock
+	if workerClock == nil {
+		workerClock = clock.RealClock{}
+	}
+	w := &worker{
+		rule:        cfg.Rule,
+		region:      cfg.Region,
+		kustoClient: cfg.KustoClient,
+		alertCli:    cfg.AlertClient,
+		alertAddr:   cfg.AlertAddr,
+		handlerFn:   cfg.HandlerFn,
+		querySlots:  querySlots,
+		ctrlCli:     cfg.CtrlClient,
+		queryTime:   maxQueryTime,
+		retryDelay:  defaultRetryDelay,
+		clock:       workerClock,
+	}
+	allowed, err := cfg.Rule.Matches(cfg.Tags)
+	w.matchAllowed = allowed
+	w.matchErr = err
+	if err != nil {
+		logger.Errorf("Worker initialization match error for %s/%s: %v", cfg.Rule.Namespace, cfg.Rule.Name, err)
+	} else if !allowed {
+		logger.Infof("Worker %s/%s disabled (criteria/expression not matched) at initialization", cfg.Rule.Namespace, cfg.Rule.Name)
+	}
+	return w
 }
 
 func (e *worker) Run(ctx context.Context) {
@@ -44,129 +100,76 @@ func (e *worker) Run(ctx context.Context) {
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.mu.Unlock()
 
+	// Best-effort: update criteria condition reflecting cached match evaluation
+	e.updateAlertRuleCriteriaCondition(ctx)
+
 	go func() {
 		defer e.wg.Done()
 
-		logger.Infof("Creating query executor for %s/%s in %s executing every %s",
-			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
+		// Calculate the next execution time based on last execution.
+		nextQueryTime := e.calculateNextQueryTime()
 
-		// do-while
-		e.ExecuteQuery(ctx)
+		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
+			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
 
-		ticker := time.NewTicker(e.rule.Interval)
-		defer ticker.Stop()
+		timer := e.clock.NewTimer(nextQueryTime.Sub(e.clock.Now()))
+		defer timer.Stop()
+
+		establishingSchedule := e.rule.LastQueryTime.IsZero()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				e.ExecuteQuery(ctx)
+			case <-timer.C():
+				scheduledQueryTime := nextQueryTime
+				result := e.executeScheduledQuery(ctx)
+				if result.aborted {
+					e.finishAbortedQuery(result)
+					return
+				}
+				e.handleQueryResult(ctx, result)
+
+				if result.retry == nil {
+					// No query ran, so use the current time to keep a skipped rule
+					// from accumulating overdue timer events.
+					nextQueryTime = e.clock.Now().Add(e.rule.Interval)
+				} else if establishingSchedule {
+					// A rule without persisted scheduling state establishes its
+					// cadence from the first query window it actually evaluates.
+					nextQueryTime = result.retry.evaluation.executionTime.Add(e.rule.Interval)
+				} else {
+					nextQueryTime = e.advanceQuerySchedule(scheduledQueryTime, result.retry.evaluation.executionTime)
+				}
+				establishingSchedule = false
+				timer.Reset(nextQueryTime.Sub(e.clock.Now()))
 			}
 		}
 	}()
 }
 
-func (e *worker) ExecuteQuery(ctx context.Context) {
-	// Check if the rule is enabled for this instance by matching any of the alert criteria tags.
-	var matched bool
-	for k, v := range e.rule.Criteria {
-		lowerKey := strings.ToLower(k)
-		if vv, ok := e.tags[lowerKey]; ok {
-			for _, value := range v {
-				if strings.ToLower(vv) == strings.ToLower(value) {
-					matched = true
-					break
-				}
-			}
-		}
-		if matched {
-			break
-		}
+// calculateNextQueryTime determines when the next execution should occur
+// based on the last execution time from the AlertRule status
+func (e *worker) calculateNextQueryTime() time.Time {
+	// If no last query time, this is the first execution
+	if e.rule.LastQueryTime.IsZero() {
+		return e.clock.Now().Add(-time.Second) // Immediate execution
 	}
 
-	// If tags are specified, but none of them matched, skip the query
-	if len(e.rule.Criteria) > 0 && !matched {
-		logger.Infof("Skipping %s/%s on %s/%s because none of the tags matched: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags)
-		return
+	// Calculate next execution time based on last execution + interval
+	lastQueryTime := e.rule.LastQueryTime
+	nextQueryTime := lastQueryTime.Add(e.rule.Interval)
+
+	return nextQueryTime
+}
+
+// advanceQuerySchedule preserves the established cadence for delays shorter
+// than one interval. Once a query starts at least one full interval late, it
+// resets the cadence from the query window it actually evaluates.
+func (e *worker) advanceQuerySchedule(scheduledTime time.Time, executionTime time.Time) time.Time {
+	if !executionTime.Before(scheduledTime.Add(e.rule.Interval)) {
+		return executionTime.Add(e.rule.Interval)
 	}
-
-	// Try to acquire a worker slot
-	queue.Workers <- struct{}{}
-
-	// Release the worker slot
-	defer func() { <-queue.Workers }()
-
-	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
-	defer cancel()
-
-	endTime := time.Now().UTC()
-	queryContext, err := NewQueryContext(e.rule, endTime, e.Region)
-	if err != nil {
-		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
-		return
-	}
-
-	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	err, rows := e.kustoClient.Query(ctx, queryContext, e.HandlerFn)
-	if err != nil {
-		// This failed because we sent too many notifications.
-		if errors.Is(err, alert.ErrTooManyRequests) {
-			err := e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
-				Destination:   e.rule.Destination,
-				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.Region),
-				Summary:       "This alert has been throttled by ICM due to too many notifications.  Please reduce the number of notifications for this alert.",
-				Severity:      3,
-				Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
-				CorrelationID: fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
-			})
-			if err != nil {
-				logger.Errorf("Failed to send alert for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-			}
-			return
-		}
-
-		// This failed because the query failed.
-		logger.Errorf("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
-
-		if !isUserError(err) {
-			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
-			return
-		}
-
-		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-		if err != nil {
-			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-			return
-		}
-
-		endpointBaseName, _ := strings.CutPrefix(e.kustoClient.Endpoint(e.rule.Database), "https://")
-		err = e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
-			Destination:   e.rule.Destination,
-			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
-			Summary:       summary,
-			Severity:      3,
-			Source:        fmt.Sprintf("%s/%s", e.rule.Namespace, e.rule.Name),
-			CorrelationID: fmt.Sprintf("alert-failure/%s/%s/%s", endpointBaseName, e.rule.Namespace, e.rule.Name),
-		})
-
-		if err != nil {
-			logger.Errorf("Failed to send failure alert for %s/%s/%s: %s", endpointBaseName, e.rule.Namespace, e.rule.Name, err)
-			// Only set the notification as failed if we are not able to send a failure alert directly.
-			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-			return
-		} else {
-			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
-		}
-		// Query failed due to user error, so return the query to healthy.
-		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-		return
-	}
-
-	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-	metrics.QueriesRunTotal.WithLabelValues().Inc()
-	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(endTime))
-	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
+	return scheduledTime.Add(e.rule.Interval)
 }
 
 func (e *worker) Close() {
@@ -178,36 +181,4 @@ func (e *worker) Close() {
 	}
 
 	e.wg.Wait()
-}
-
-func isUserError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// User specified a database in their CRD that adx-mon does not have configured.
-	var unknownDB *UnknownDBError
-	if errors.As(err, &unknownDB) {
-		return true
-	}
-
-	// User's query results are missing a required column, or they are the wrong type.
-	var validationErr *NotificationValidationError
-	if errors.As(err, &validationErr) {
-		return true
-	}
-
-	// Look to see if a kusto query error is specific to how the query was defined and not due to problems with adx-mon itself.
-	var kerr *kerrors.HttpError
-	if errors.As(err, &kerr) {
-		if kerr.Kind == kerrors.KClientArgs {
-			return true
-		}
-		lowerErr := strings.ToLower(kerr.Error())
-		if strings.Contains(lowerErr, "sem0001") || strings.Contains(lowerErr, "semantic error") || strings.Contains(lowerErr, "request is invalid") {
-			return true
-		}
-	}
-
-	return false
 }

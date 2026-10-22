@@ -4,16 +4,17 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
+	alertermetrics "github.com/Azure/adx-mon/alerter/metrics"
 	"github.com/Azure/adx-mon/alerter/multikustoclient"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -28,6 +29,7 @@ type AlerterOpts struct {
 	Cloud          string
 	Port           int
 	Concurrency    int
+	EnablePprof    bool
 
 	Tags map[string]string
 
@@ -53,7 +55,6 @@ type ruleStore interface {
 
 type Alerter struct {
 	clients  map[string]KustoClient
-	queue    chan struct{}
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
@@ -63,13 +64,14 @@ type Alerter struct {
 	closeFn   context.CancelFunc
 	CtrlCli   client.Client
 	ruleStore ruleStore
+	metrics   alertermetrics.Service
+
+	alertHandler http.Handler
 }
 
-type KustoClient interface {
-	Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
-	Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error)
-	Endpoint() string
-}
+type KustoClient interface{ Endpoint() string }
+
+type lintClientFactory func(opts *AlerterOpts) (engine.Client, error)
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
 	ruleStore := rules.NewStore(rules.StoreOpts{
@@ -77,9 +79,8 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		CtrlCli: opts.CtrlCli,
 	})
 
-	l2m := &Alerter{
+	l := &Alerter{
 		opts:      opts,
-		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
 		clients:   make(map[string]KustoClient),
@@ -107,13 +108,13 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Interval:  time.Minute,
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
 		}
-		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
+		l.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
 		ruleStore.Register(fakeRule)
 	}
 
 	if opts.AlertAddr == "" {
 		logger.Warnf("No alert address provided, using fake alert handler")
-		http.Handle("/alerts", fakeAlertHandler())
+		l.alertHandler = fakeAlertHandler()
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
 
@@ -121,7 +122,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert client: %w", err)
 	}
-	l2m.alertCli = alertCli
+	l.alertCli = alertCli
 
 	executor := engine.NewExecutor(
 		engine.ExecutorOpts{
@@ -129,15 +130,35 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			AlertAddr:   opts.AlertAddr,
 			Region:      opts.Region,
 			Tags:        opts.Tags,
+			Concurrency: opts.Concurrency,
 			KustoClient: kclient,
 			RuleStore:   ruleStore,
+			CtrlCli:     opts.CtrlCli,
 		})
 
-	l2m.executor = executor
-	return l2m, nil
+	l.executor = executor
+	l.metrics = alertermetrics.NewService()
+	return l, nil
 }
 
 func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
+	return runLint(ctx, opts, path, newLintKustoClient)
+}
+
+func newLintKustoClient(opts *AlerterOpts) (engine.Client, error) {
+	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get auth: %w", err)
+	}
+
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
+	if err != nil {
+		return nil, err
+	}
+	return kclient, nil
+}
+
+func runLint(ctx context.Context, opts *AlerterOpts, path string, newClient lintClientFactory) error {
 	ruleStore, err := rules.FromPath(path, opts.Region)
 	if err != nil {
 		return err
@@ -147,27 +168,33 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 
 	lint := NewLinter()
 
-	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
-	if err != nil {
-		return fmt.Errorf("failed to get auth: %w", err)
+	failedCriteriaCount := 0
+	for _, rule := range ruleStore.Rules() {
+		_, err := rule.Matches(opts.Tags)
+		if err != nil {
+			failedCriteriaCount++
+			logger.Errorf("Rule '%s/%s' failed to evaluate criteria: %v", rule.Namespace, rule.Name, err)
+		}
 	}
 
-	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
+	kclient, err := newClient(opts)
 	if err != nil {
 		return err
 	}
 	executor := engine.NewExecutor(engine.ExecutorOpts{
 		AlertCli:    lint,
 		AlertAddr:   "http://fake.microsoft.com",
+		Concurrency: opts.Concurrency,
 		KustoClient: kclient,
 		RuleStore:   ruleStore,
 		Region:      opts.Region,
 		Tags:        opts.Tags,
+		CtrlCli:     nil, // No Kubernetes client for linting
 	})
 
 	executor.RunOnce(ctx)
-	if lint.HasFailedQueries() {
-		return fmt.Errorf("failed to lint rules")
+	if lint.HasFailedQueries() || failedCriteriaCount > 0 {
+		return lint.Err()
 	}
 	lint.Log()
 	return nil
@@ -181,6 +208,9 @@ func (l *Alerter) Open(ctx context.Context) error {
 	if err := l.ruleStore.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open rule store: %w", err)
 	}
+	if err := l.metrics.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open metrics service: %w", err)
+	}
 
 	if err := l.executor.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open executor: %w", err)
@@ -188,8 +218,7 @@ func (l *Alerter) Open(ctx context.Context) error {
 
 	go func() {
 		logger.Infof("Listening at :%d", l.opts.Port)
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), l.httpMux()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -211,10 +240,29 @@ func (l *Alerter) Open(ctx context.Context) error {
 	return nil
 }
 
+func (l *Alerter) httpMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	if l.opts.EnablePprof {
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	}
+	if l.alertHandler != nil {
+		mux.Handle("/alerts", l.alertHandler)
+	}
+	return mux
+}
+
 func (l *Alerter) Close() error {
 	l.closeFn()
 	if err := l.executor.Close(); err != nil {
 		return fmt.Errorf("failed to close executor: %w", err)
+	}
+	if err := l.metrics.Close(); err != nil {
+		return fmt.Errorf("failed to close metrics service: %w", err)
 	}
 
 	if err := l.ruleStore.Close(); err != nil {

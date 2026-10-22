@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"testing"
+	"time"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
@@ -230,6 +231,98 @@ func TestPromToOtlpRequest(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPromToOtlpRequestCommonLabels(t *testing.T) {
+	exporter := NewPromToOtlpExporter(PromToOtlpExporterOpts{
+		Transformer: &transform.RequestTransformer{},
+	})
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{{
+			Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("cpu")},
+				{Name: []byte("instance"), Value: []byte("node-1")},
+				{Name: []byte("job"), Value: []byte("node-exporter")},
+				{Name: []byte("region"), Value: []byte("eastus")},
+			},
+			Samples: []*prompb.Sample{{Value: 1, Timestamp: basets}},
+		}},
+		CommonLabels: []*prompb.Label{
+			{Name: []byte("adxmon_database"), Value: []byte("Metrics")},
+			{Name: []byte("Cloud"), Value: []byte("Public")},
+			{Name: []byte("Environment"), Value: []byte("prod")},
+			{Name: []byte("Host"), Value: []byte("collector-1")},
+			{Name: []byte("Secret"), Value: []byte("hidden")},
+		},
+		LabelFilter: &prompb.LabelFilter{Drop: []prompb.LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^Secret$"),
+		}}},
+	}
+
+	serialized, count, err := exporter.promToOtlpRequest(req)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	var exportRequest v1.ExportMetricsServiceRequest
+	require.NoError(t, proto.Unmarshal(serialized, &exportRequest))
+	datapoint := exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetGauge().DataPoints[0]
+	validateAttributes(t, datapoint, map[string]string{
+		"Cloud":       "Public",
+		"Environment": "prod",
+		"Host":        "collector-1",
+		"instance":    "node-1",
+		"job":         "node-exporter",
+		"region":      "eastus",
+	})
+}
+
+func TestPromToOtlpRequestMetricRetentionUsesEffectiveLabels(t *testing.T) {
+	exporter := NewPromToOtlpExporter(PromToOtlpExporterOpts{
+		Transformer: &transform.RequestTransformer{
+			DefaultDropMetrics: true,
+			KeepMetricsWithLabelValue: map[*regexp.Regexp]*regexp.Regexp{
+				regexp.MustCompile("^Environment$"): regexp.MustCompile("^prod$"),
+			},
+		},
+	})
+	newRequest := func() *prompb.WriteRequest {
+		return &prompb.WriteRequest{
+			Timeseries: []*prompb.TimeSeries{{
+				Labels:  []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+				Samples: []*prompb.Sample{{Value: 1, Timestamp: basets}},
+			}},
+			CommonLabels: []*prompb.Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+		}
+	}
+
+	t.Run("visible common label keeps metric", func(t *testing.T) {
+		request := newRequest()
+
+		serialized, count, err := exporter.promToOtlpRequest(request)
+
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+		var exportRequest v1.ExportMetricsServiceRequest
+		require.NoError(t, proto.Unmarshal(serialized, &exportRequest))
+		require.Len(t, exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics, 1)
+	})
+
+	t.Run("upstream-filtered common label cannot keep metric", func(t *testing.T) {
+		request := newRequest()
+		request.LabelFilter = &prompb.LabelFilter{Drop: []prompb.LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^Environment$"),
+		}}}
+
+		serialized, count, err := exporter.promToOtlpRequest(request)
+
+		require.NoError(t, err)
+		require.Zero(t, count)
+		var exportRequest v1.ExportMetricsServiceRequest
+		require.NoError(t, proto.Unmarshal(serialized, &exportRequest))
+		require.Empty(t, exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics)
+	})
+}
+
 func TestSendRequest(t *testing.T) {
 	type testcase struct {
 		name           string
@@ -295,7 +388,7 @@ func TestSendRequest(t *testing.T) {
 			tc.exporter.destination = server.URL + "/v1/metrics"
 
 			body := []byte("test body")
-			err := tc.exporter.sendRequest(body, 20)
+			err := tc.exporter.sendRequest(context.Background(), body, 20)
 
 			if tc.expectedStatus == http.StatusOK {
 				require.NoError(t, err)
@@ -303,6 +396,42 @@ func TestSendRequest(t *testing.T) {
 				require.Error(t, err)
 			}
 		})
+	}
+}
+
+func TestPromToOtlpExporterWriteCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+	}))
+	defer server.Close()
+	defer close(releaseRequest)
+
+	exporter := NewPromToOtlpExporter(PromToOtlpExporterOpts{
+		Transformer: &transform.RequestTransformer{},
+		Destination: server.URL,
+		Timeout:     time.Minute,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- exporter.Write(ctx, newWR())
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("outbound request did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("outbound request did not stop after context cancellation")
 	}
 }
 
@@ -379,6 +508,7 @@ func validateSerialized(t *testing.T, serialized []byte) {
 
 func validateAttributes(t *testing.T, datapoint *metricsv1.NumberDataPoint, expectedAttrs map[string]string) {
 	t.Helper()
+	require.Len(t, datapoint.Attributes, len(expectedAttrs))
 
 	attributesMap := make(map[string]string)
 	for _, attr := range datapoint.Attributes {

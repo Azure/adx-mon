@@ -1,14 +1,25 @@
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS builder
+FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 
 # docker build --file tools/crdgen/Dockerfile --build-arg crd=TestTest -t my-crdgen .
 ARG crd
 ARG cmd=create
 
-# Install go and make
-RUN tdnf install -y golang ca-certificates make
+ENV CGO_ENABLED=1
+
+RUN tdnf install -y ca-certificates && update-ca-trust
+
+# compiler + headers
+RUN tdnf install -y \
+  gcc make binutils glibc-devel kernel-headers pkg-config \
+  systemd-devel \
+ && tdnf clean all
+
+# Install Go 1.26.0 to match go.mod requirements
+RUN tdnf install -y golang-1.26.0
+
 
 # Install controller-gen
-RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest && \
+RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 && \
     mv /root/go/bin/controller-gen /usr/local/bin/controller-gen
 
 # install operator-sdk
@@ -20,7 +31,7 @@ ADD . /code
 WORKDIR /code
 
 # controller-gen and operator-sdk expect a specific directory structure, so we need
-# to move some things around. 
+# to move some things around.
 #
 # 1. Create the directory structure config/crd/bases and config/default
 RUN mkdir -p config/crd/bases config/default

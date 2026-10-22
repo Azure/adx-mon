@@ -8,16 +8,18 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Azure/adx-mon/alerter"
-	alertrulev1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2" // imports as package "cli"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Azure/adx-mon/alerter"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/version"
 )
 
 func main() {
@@ -36,6 +38,7 @@ func main() {
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
 			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "Tag in the format of <key>=<value> that applies to execution context"},
+			&cli.BoolFlag{Name: "enable-pprof", Usage: "Enable pprof endpoints."},
 		},
 		Action: realMain,
 		Commands: []*cli.Command{
@@ -69,12 +72,12 @@ func realMain(ctx *cli.Context) error {
 		if len(parts) != 2 {
 			return cli.Exit("Invalid tag format, expected <key>=<value>", 1)
 		}
-		tags[strings.ToLower(parts[0])] = strings.ToLower(parts[1])
+		tags[parts[0]] = parts[1]
 	}
 
 	// Always add region and cloud tags which are required params for alerter currently.
-	tags["region"] = strings.ToLower(ctx.String("region"))
-	tags["cloud"] = strings.ToLower(ctx.String("cloud"))
+	tags["region"] = ctx.String("region")
+	tags["cloud"] = ctx.String("cloud")
 
 	for k, v := range tags {
 		logger.Infof("Using tag %s=%s", k, v)
@@ -105,6 +108,7 @@ func realMain(ctx *cli.Context) error {
 		KustoToken:       ctx.String("auth-token"),
 		Tags:             tags,
 		CtrlCli:          ctrlCli,
+		EnablePprof:      ctx.Bool("enable-pprof"),
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
@@ -125,8 +129,8 @@ func realMain(ctx *cli.Context) error {
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
+	// Block until svc.Close() has drained, so the process does not exit mid-flush.
+	service.WaitForShutdown(sc, func(sig os.Signal) {
 		cancel()
 
 		logger.Infof("Received signal %s, exiting...", sig.String())
@@ -135,16 +139,19 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Error(err.Error())
 		}
-	}()
-	<-svcCtx.Done()
+	})
 	return nil
 }
 
 func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
+	config, err := k8s.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
 	if err != nil {
 		logger.Warnf("No kube config provided, using fake kube client")
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)
+	}
+
+	if config.UserAgent == "" {
+		config.UserAgent = fmt.Sprintf("adx-mon-alerter/%s", version.String())
 	}
 
 	client, err := kubernetes.NewForConfig(config)

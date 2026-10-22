@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -255,7 +254,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						// We're keeping the existing volumeMount since it's already pointing to /mnt/data
 					}
 
-					restConfig, _, err := testutils.GetKubeConfig(ctx, k)
+					restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k)
 					if err != nil {
 						return fmt.Errorf("failed to get kube config: %w", err)
 					}
@@ -263,11 +262,6 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					clientset, err := kubernetes.NewForConfig(restConfig)
 					if err != nil {
 						return fmt.Errorf("failed to create clientset: %w", err)
-					}
-
-					ctrlCli, err := ctrlclient.New(restConfig, ctrlclient.Options{})
-					if err != nil {
-						return fmt.Errorf("failed to create controller client: %w", err)
 					}
 
 					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
@@ -428,7 +422,7 @@ func VerifyIngestorRunning(ctx context.Context, restConfig *rest.Config) (bool, 
 func createFillerContainer(mountPath string) corev1.Container {
 	return corev1.Container{
 		Name:            "storage-filler",
-		Image:           "mcr.microsoft.com/cbl-mariner/base/core:2.0.20250304",
+		Image:           "mcr.microsoft.com/azurelinux/base/core:3.0",
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command: []string{
 			"/bin/bash",

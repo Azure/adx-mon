@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.3
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: summaryrules.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
@@ -42,32 +42,111 @@ spec:
               body:
                 description: Body is the KQL body of the function
                 type: string
+              criteria:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+                  are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+                  started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+                  execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+                type: object
+              criteriaExpression:
+                description: |-
+                  CriteriaExpression is an optional CEL (Common Expression Language) expression that provides a richer way
+                  to determine if the summary rule should execute. The CEL environment is dynamically constructed from the
+                  ingestor's cluster labels (e.g. region, cloud, and any --cluster-labels key/value pairs). All variables are
+                  exposed as strings and can be referenced directly by their label name. For example:
+
+                    criteriaExpression: "region in ['eastus','westus'] && environment == 'prod'"
+
+                  Execution semantics:
+                    * If neither criteria nor criteriaExpression are specified, the rule always executes.
+                    * If only criteriaExpression is specified, it must evaluate to true for the rule to execute.
+                    * If only criteria (map) is specified, existing matching behavior (any key/value match) applies.
+                    * If both are specified, the rule executes when BOTH the criteria map matches AND the expression evaluates to true.
+
+                  An invalid expression (parse or type check error) will be treated as an error and prevent the rule from executing.
+                type: string
               database:
                 description: Database is the name of the database in which the function
                   will be created
                 type: string
+              ingestionDelay:
+                description: |-
+                  IngestionDelay is subtracted from the execution window start and end times to account
+                  for data ingestion latency, ensuring the query only processes fully ingested data.
+                  NOTE: Current implementation also subtracts this delay from the "now" used to decide
+                  whether an interval has elapsed (i.e. scheduling readiness). This effectively lengthens
+                  wall‑clock spacing between executions to Interval + IngestionDelay. If you intend only
+                  to shift the processed window but keep wall‑clock cadence at Interval, this behavior
+                  will be adjusted in a future release.
+                type: string
+                x-kubernetes-validations:
+                - message: ingestionDelay must be a valid duration
+                  rule: self == '' || duration(self) >= duration('0s')
               interval:
                 description: Interval is the cadence at which the rule will be executed
                 type: string
+                x-kubernetes-validations:
+                - message: interval must be a valid positive duration
+                  rule: duration(self) > duration('0s')
               name:
-                description: Name is the name of the rule
+                description: Name is the name of the rule (deprecated and not used
+                  - use `metadata.name` instead)
                 type: string
               table:
                 description: Table is rule output destination
                 type: string
+              backfill:
+                description: Backfill optionally specifies a historical time range to
+                  process.
+                type: object
+                properties:
+                  requestId:
+                    description: RequestID is a user-chosen identifier for this backfill
+                      request. The same RequestID resumes an in-progress backfill; a
+                      new RequestID starts a fresh backfill.
+                    minLength: 1
+                    type: string
+                  startTime:
+                    description: StartTime is the inclusive start of the historical
+                      range to backfill.
+                    format: date-time
+                    type: string
+                  endTime:
+                    description: EndTime is the exclusive end of the historical range
+                      to backfill.
+                    format: date-time
+                    type: string
+                  maxInFlight:
+                    description: MaxInFlight limits the number of concurrent async
+                      operations for backfill windows. Defaults to 1 if unset or zero.
+                      Values greater than 20 are rejected to keep historical processing
+                      throttled.
+                    maximum: 20
+                    type: integer
+                    minimum: 0
+                required:
+                - requestId
+                - startTime
+                - endTime
             required:
             - body
             - database
             - interval
-            - name
             - table
             type: object
           status:
             description: SummaryRuleStatus defines the observed state of Function
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
+                description: |-
+                  Conditions is an array of current observed SummaryRule conditions.
+                  SummaryRule controllers set at minimum the owner condition (SummaryRuleOwner) and may also
+                  use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -123,6 +202,45 @@ spec:
                   - type
                   type: object
                 type: array
+              backfill:
+                description: Backfill tracks the progress of a user-requested historical
+                  backfill.
+                type: object
+                properties:
+                  requestId:
+                    type: string
+                  phase:
+                    type: string
+                    enum:
+                    - Pending
+                    - Running
+                    - Completed
+                    - Failed
+                  observedGeneration:
+                    type: integer
+                    format: int64
+                  nextWindowStart:
+                    type: string
+                    format: date-time
+                  submittedWindows:
+                    type: integer
+                  completedWindows:
+                    type: integer
+                  retriedWindows:
+                    type: integer
+                  activeOperations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        operationId:
+                          type: string
+                        startTime:
+                          type: string
+                        endTime:
+                          type: string
+                  message:
+                    type: string
             type: object
         type: object
     served: true

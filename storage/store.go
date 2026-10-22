@@ -3,17 +3,20 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -23,7 +26,6 @@ import (
 	"github.com/Azure/adx-mon/schema"
 	transform2 "github.com/Azure/adx-mon/transform"
 	gbp "github.com/libp2p/go-buffer-pool"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -40,11 +42,15 @@ var (
 	})
 )
 
+// ErrIntakeMemoryExhausted reports that too many concurrent requests are
+// already buffered. It is retryable: the sender keeps its data.
+var ErrIntakeMemoryExhausted = errors.New("intake memory exhausted")
+
 type Store interface {
 	service.Component
 
 	// WriteTimeSeries writes a batch of time series to the Store.
-	WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error
+	WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error
 
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
@@ -63,43 +69,91 @@ type LocalStore struct {
 	mu         sync.RWMutex
 	repository *wal.Repository
 
-	metricsMu sync.RWMutex
-	metrics   map[string]prometheus.Counter
+	inflightWriteBytes int64
+	unregisterBudget   func()
+	unregisterIntake   func()
+	intake             *MemoryLimiter
 }
 
 type StoreOpts struct {
-	StorageDir     string
-	SegmentMaxSize int64
-	SegmentMaxAge  time.Duration
-	MaxDiskUsage   int64
+	StorageDir             string
+	SegmentMaxSize         int64
+	SegmentMaxAge          time.Duration
+	MaxDiskUsage           int64
+	StartupOpenConcurrency int
+	Backend                Backend
 
 	LiftedLabels     []string
 	LiftedAttributes []string
 	LiftedResources  []string
 	WALFlushInterval time.Duration
 	EnableWALFsync   bool
+
+	// Policy assigns an ingestion priority to each table.  When nil, all tables are queued.
+	Policy *ingestpolicy.Policy
+
+	// Realtime overrides segment rotation settings for realtime tables.
+	Realtime wal.RotationPolicy
+
+	// RealtimeReservedDiskBytes is disk space reserved for realtime tables.  Queued writes are rejected once disk
+	// usage reaches MaxDiskUsage minus this value.
+	RealtimeReservedDiskBytes int64
+
+	// Admission owns per-destination capacity accounting.
+	Admission *wal.Admission
+
+	// MetricComponent labels exported table budget metrics.
+	MetricComponent string
+
+	// MaxIntakeMemory bounds the total bytes buffered across concurrent
+	// imports. Zero disables the ceiling.
+	MaxIntakeMemory int64
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
+	if opts.Backend == "" {
+		opts.Backend = BackendADX
+	}
+
 	return &LocalStore{
-		opts: opts,
+		opts:   opts,
+		intake: NewMemoryLimiter(opts.MaxIntakeMemory),
 		repository: wal.NewRepository(wal.RepositoryOpts{
-			StorageDir:       opts.StorageDir,
-			SegmentMaxSize:   opts.SegmentMaxSize,
-			SegmentMaxAge:    opts.SegmentMaxAge,
-			MaxDiskUsage:     opts.MaxDiskUsage,
-			WALFlushInterval: opts.WALFlushInterval,
-			EnableWALFsync:   opts.EnableWALFsync,
+			StorageDir:                opts.StorageDir,
+			SegmentMaxSize:            opts.SegmentMaxSize,
+			SegmentMaxAge:             opts.SegmentMaxAge,
+			MaxDiskUsage:              opts.MaxDiskUsage,
+			StartupOpenConcurrency:    opts.StartupOpenConcurrency,
+			WALFlushInterval:          opts.WALFlushInterval,
+			EnableWALFsync:            opts.EnableWALFsync,
+			Policy:                    opts.Policy,
+			Realtime:                  opts.Realtime,
+			RealtimeReservedDiskBytes: opts.RealtimeReservedDiskBytes,
+			Admission:                 opts.Admission,
 		}),
-		metrics: make(map[string]prometheus.Counter),
 	}
 }
 
 func (s *LocalStore) Open(ctx context.Context) error {
-	return s.repository.Open(ctx)
+	if err := s.repository.Open(ctx); err != nil {
+		return err
+	}
+	if s.opts.Admission != nil && s.opts.MetricComponent != "" {
+		s.unregisterBudget = metrics.RegisterTableBudget(s.opts.MetricComponent, s.opts.Admission)
+	}
+	if s.opts.MetricComponent != "" {
+		s.unregisterIntake = metrics.RegisterIntakeMemory(s.opts.MetricComponent, s.intake)
+	}
+	return nil
 }
 
 func (s *LocalStore) Close() error {
+	if s.unregisterBudget != nil {
+		s.unregisterBudget()
+	}
+	if s.unregisterIntake != nil {
+		s.unregisterIntake()
+	}
 	return s.repository.Close()
 }
 
@@ -107,11 +161,30 @@ func (s *LocalStore) GetWAL(ctx context.Context, key []byte) (*wal.WAL, error) {
 	return s.repository.Get(ctx, key)
 }
 
+// preAdmit rejects work for a destination that is already over budget, before
+// the caller pays to encode it or to create a WAL for it. Returning early also
+// keeps a rejected destination from accumulating WAL objects and goroutines.
+func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
+	if s.opts.Admission == nil {
+		return nil
+	}
+	d, err := wal.DestinationFromPrefix(string(prefix))
+	if err != nil {
+		return nil
+	}
+	reason, throttled := s.opts.Admission.Throttled(d)
+	if !throttled {
+		return nil
+	}
+	return &wal.TableOverloadedError{Destination: d, Reason: reason, RetryAfter: 5 * time.Second}
+}
+
 func (s *LocalStore) WALCount() int {
 	return s.repository.Count()
 }
 
-func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
+func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error {
+	var outcome WriteOutcome
 	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
 	defer metricsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedLabels)
@@ -119,27 +192,54 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 	b := gbp.Get(256)
 	defer gbp.Put(b)
 
-	for _, v := range ts {
-		key, err := SegmentKey(b[:0], v.Labels, enc.SchemaHash())
+	for _, v := range req.Timeseries {
+		key, err := SegmentKey(b[:0], req, v, enc.SchemaHash())
 		if err != nil {
 			return err
 		}
 
-		wal, err := s.GetWAL(ctx, key)
+		if quota := s.preAdmit(key); quota != nil {
+			s.recordRejection(quota, int64(len(v.Samples)), 0, "metrics")
+			outcome.Rejected += int64(len(v.Samples))
+			outcome.RejectedSeries = append(outcome.RejectedSeries, v)
+			continue
+		}
+
+		w, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
 		}
-
-		s.incMetrics(v.Labels[0].Value, len(v.Samples))
 
 		enc.Reset()
-		if err := enc.MarshalCSV(v); err != nil {
+		if err := enc.MarshalCSV(req, v); err != nil {
 			return err
 		}
 
-		if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
+
+		if s.diskUsageExceeded(w) {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			return wal.ErrMaxDiskUsageExceeded
+		}
+
+		if err := w.Write(ctx, enc.Bytes()); err != nil {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			var quota *wal.TableOverloadedError
+			if errors.As(err, &quota) {
+				s.recordRejection(quota, int64(len(v.Samples)), int64(len(enc.Bytes())), "metrics")
+				outcome.Rejected += int64(len(v.Samples))
+				outcome.RejectedSeries = append(outcome.RejectedSeries, v)
+				continue
+			}
 			return err
 		}
+		outcome.Accepted += int64(len(v.Samples))
+		metrics.SamplesStored.Add(float64(len(v.Samples)))
+		// Decrement the inflight write bytes after writing to avoid double counting.
+		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+	}
+	if outcome.Rejected > 0 {
+		return &outcome
 	}
 	return nil
 }
@@ -165,20 +265,35 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	key = fmt.Appendf(key[:0], "%s_%s", sanitizedDB, sanitizedTable)
 
+	if quota := s.preAdmit(key); quota != nil {
+		s.recordRejection(quota, int64(len(logs.Logs)), 0, "logs")
+		return &WriteOutcome{Rejected: int64(len(logs.Logs))}
+	}
+
 	w, err := s.GetWAL(ctx, key)
 	if err != nil {
 		return err
 	}
-
-	metrics.SamplesStored.WithLabelValues(sanitizedTable).Add(float64(len(logs.Logs)))
 
 	enc.Reset()
 	if err := enc.MarshalLog(logs); err != nil {
 		return err
 	}
 
+	atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
+	defer atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+
+	if s.diskUsageExceeded(w) {
+		return wal.ErrMaxDiskUsageExceeded
+	}
+
 	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
 	if err := w.Write(ctx, enc.Bytes(), wo); err != nil {
+		var quota *wal.TableOverloadedError
+		if errors.As(err, &quota) {
+			s.recordRejection(quota, int64(len(logs.Logs)), int64(len(enc.Bytes())), "logs")
+			return &WriteOutcome{Rejected: int64(len(logs.Logs))}
+		}
 		return err
 	}
 
@@ -186,6 +301,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 }
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
+	var outcome WriteOutcome
 	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
 	defer nativeLogsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedResources)
@@ -230,28 +346,52 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		key = fmt.Appendf(key[:0], "%s_%s_", sanitizedDB, sanitizedTable)
 		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
 
-		wal, err := s.GetWAL(ctx, key)
+		if quota := s.preAdmit(key); quota != nil {
+			s.recordRejection(quota, 1, 0, "logs")
+			outcome.Rejected++
+			continue
+		}
+
+		w, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
 		}
-
-		metrics.SamplesStored.WithLabelValues(table).Inc()
 
 		enc.Reset()
 		if err := enc.MarshalNativeLog(log); err != nil {
 			return err
 		}
+		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 
-		if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		if s.diskUsageExceeded(w) {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			return wal.ErrMaxDiskUsageExceeded
+		}
+
+		if err := w.Write(ctx, enc.Bytes()); err != nil {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			var quota *wal.TableOverloadedError
+			if errors.As(err, &quota) {
+				s.recordRejection(quota, 1, int64(len(enc.Bytes())), "logs")
+				outcome.Rejected++
+				continue
+			}
 			return err
 		}
+		outcome.Accepted++
+
+		// Decrement the inflight write bytes after writing to avoid double counting.
+		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 	}
 
 	if noDestinationCount > 0 {
 		logger.Warnf("Got %d logs without ADX destinations - dropped", noDestinationCount)
-		metrics.InvalidLogsDropped.WithLabelValues("no_destination").Add(float64(noDestinationCount))
+		metrics.InvalidLogsDropped.WithLabelValues().Add(float64(noDestinationCount))
 	}
 
+	if outcome.Rejected > 0 {
+		return &outcome
+	}
 	return nil
 }
 
@@ -276,7 +416,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		key = fmt.Appendf(key[:0], "%s_%s", db, table)
 	}
 
-	wal, err := s.GetWAL(context.Background(), key)
+	w, err := s.GetWAL(context.Background(), key)
 	if err != nil {
 		return 0, err
 	}
@@ -285,12 +425,49 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	defer pool.BytesBufferPool.Put(buf)
 	buf.Reset()
 
-	n, err := io.Copy(buf, body)
+	limit := s.opts.MaxDiskUsage
+	tableScoped := false
+	// In observe-only mode the table budget is reported, not enforced, so it
+	// must not cap the body: rejecting as oversized would make the sender
+	// drop the segment.
+	if s.opts.Admission.Enforced() {
+		if tableLimit := s.opts.Admission.Limit(wal.Destination{Database: db, Table: table}).Bytes; tableLimit > 0 && (limit <= 0 || tableLimit <= limit) {
+			limit = tableLimit
+			tableScoped = true
+		}
+	}
+	var input io.Reader = body
+	if limit > 0 {
+		input = io.LimitReader(body, limit+1)
+	}
+
+	// The body is buffered in full before it can be admitted, so memory is
+	// claimed as it is read rather than reserving the destination's whole
+	// budget, which could exceed the ceiling for a small payload.
+	intake := &intakeReader{r: input, m: s.intake}
+	defer intake.Release()
+
+	n, err := io.Copy(buf, intake)
 	if err != nil {
 		return 0, err
 	}
+	if limit > 0 && n > limit {
+		if tableScoped {
+			// Larger than the destination's entire budget: draining cannot make
+			// room, so report it as permanent for this payload shape.
+			return 0, &wal.SegmentTooLargeError{Destination: wal.Destination{Database: db, Table: table}, Size: n, Limit: limit}
+		}
+		return 0, wal.ErrMaxDiskUsageExceeded
+	}
 
-	return int(n), wal.Append(context.Background(), buf.Bytes())
+	atomic.AddInt64(&s.inflightWriteBytes, n)
+	defer atomic.AddInt64(&s.inflightWriteBytes, -n)
+
+	if s.diskUsageExceeded(w) {
+		return 0, wal.ErrMaxDiskUsageExceeded
+	}
+
+	return int(n), w.Append(context.Background(), buf.Bytes())
 }
 
 func (s *LocalStore) Remove(path string) error {
@@ -313,33 +490,45 @@ func (s *LocalStore) Remove(path string) error {
 	return wal.Remove(path)
 }
 
-func (s *LocalStore) incMetrics(value []byte, n int) {
-	s.metricsMu.RLock()
-	counter := s.metrics[string(value)]
-	s.metricsMu.RUnlock()
-
-	if counter != nil {
-		counter.Add(float64(n))
-		return
-	}
-
-	s.metricsMu.Lock()
-	counter = s.metrics[string(value)]
-	if counter == nil {
-		counter = metrics.SamplesStored.WithLabelValues(string(value))
-		s.metrics[string(value)] = counter
-	}
-	s.metricsMu.Unlock()
-
-	counter.Add(float64(n))
-}
-
 func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
 }
 
+// Size returns the total size of the LocalStore, including the size of the repository (active WAL segments),
+// inflight write bytes, and index size (closed WAL segments).
+// diskUsageExceeded returns true if writes to w must be rejected because disk usage reached the limit for w's
+// ingestion priority.
+// diskUsageExceeded reports whether the aggregate disk limit is reached.
+// Admission owns capacity when enabled, including the global ceiling, so the
+// legacy check is skipped to avoid two systems rejecting on the same budget.
+func (s *LocalStore) diskUsageExceeded(w *wal.WAL) bool {
+	if s.opts.Admission != nil {
+		return false
+	}
+	return s.Size() > s.repository.MaxDiskUsage(w.Priority())
+}
+
+func (s *LocalStore) Size() int64 {
+	if s.opts.Admission != nil {
+		return s.opts.Admission.Usage().Bytes
+	}
+	return s.repository.Size() + atomic.LoadInt64(&s.inflightWriteBytes) + s.Index().TotalSize()
+}
+
+func (s *LocalStore) SegmentCount() int64 {
+	if s.opts.Admission != nil {
+		return s.opts.Admission.Usage().Segments
+	}
+	return int64(s.Index().TotalSegments())
+}
+
 // WriteDebug writes debug information to the given writer.
 func (s *LocalStore) WriteDebug(w io.Writer) error {
+	if s.opts.Admission != nil {
+		for d, status := range s.opts.Admission.Status() {
+			fmt.Fprintf(w, "Table %s: bytes=%d/%d segments=%d/%d throttled=%t rejected=%d\n", d, status.Bytes, status.Limit.Bytes, status.Segments, status.Limit.Segments, status.Throttled, status.RejectedRecords)
+		}
+	}
 	if err := s.repository.WriteDebug(w); err != nil {
 		return err
 	}
@@ -368,17 +557,32 @@ func (s *LocalStore) WriteDebug(w io.Writer) error {
 	return nil
 }
 
-func SegmentKey(dst []byte, labels []*prompb.Label, hash uint64) ([]byte, error) {
+func (s *LocalStore) recordRejection(quota *wal.TableOverloadedError, records, bytes int64, kind string) {
+	if s.opts.Admission.RecordRejection(quota.Destination, records, bytes) {
+		logger.Warnf("Shedding table quota data: table=%s reason=%s records=%d encoded_bytes=%d", quota.Destination, quota.Reason, records, bytes)
+	}
+	metrics.TableQuotaRejectedRecords.WithLabelValues(s.opts.MetricComponent, kind, quota.Reason).Add(float64(records))
+	metrics.TableQuotaRejectedBytes.WithLabelValues(s.opts.MetricComponent, kind, quota.Reason).Add(float64(bytes))
+}
+
+// SegmentKey returns the segment key for series using its effective labels
+// from req, including request-level common labels and the per-series filter.
+func SegmentKey(dst []byte, req *prompb.WriteRequest, series *prompb.TimeSeries, hash uint64) ([]byte, error) {
 	var name, database []byte
-	for _, v := range labels {
+	for v := range req.Labels(series) {
 		if bytes.Equal(v.Name, []byte("adxmon_database")) {
 			database = v.Value
+			if len(name) > 0 {
+				break
+			}
 			continue
 		}
 
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			name = v.Value
-			continue
+			if len(database) > 0 {
+				break
+			}
 		}
 	}
 

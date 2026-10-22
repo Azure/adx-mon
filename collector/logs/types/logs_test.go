@@ -40,6 +40,79 @@ func TestCopy(t *testing.T) {
 	require.Equal(t, "resource.value", copy.resource["resource.key"].(string))
 }
 
+func TestDeleteValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		set    func(*Log, string, any)
+		delete func(*Log, string)
+		get    func(*Log, string) (any, bool)
+	}{
+		{
+			name: "attribute",
+			set: func(l *Log, key string, value any) {
+				l.SetAttributeValue(key, value)
+			},
+			delete: func(l *Log, key string) {
+				l.DeleteAttributeValue(key)
+			},
+			get: func(l *Log, key string) (any, bool) {
+				return l.GetAttributeValue(key)
+			},
+		},
+		{
+			name: "body",
+			set: func(l *Log, key string, value any) {
+				l.SetBodyValue(key, value)
+			},
+			delete: func(l *Log, key string) {
+				l.DeleteBodyValue(key)
+			},
+			get: func(l *Log, key string) (any, bool) {
+				return l.GetBodyValue(key)
+			},
+		},
+		{
+			name: "resource",
+			set: func(l *Log, key string, value any) {
+				l.SetResourceValue(key, value)
+			},
+			delete: func(l *Log, key string) {
+				l.DeleteResourceValue(key)
+			},
+			get: func(l *Log, key string) (any, bool) {
+				return l.GetResourceValue(key)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := NewLog()
+			tt.set(l, "unrelated", "value")
+			tt.delete(l, "missing")
+			value, ok := tt.get(l, "unrelated")
+			require.True(t, ok)
+			require.Equal(t, "value", value)
+			tt.set(l, "target", "value")
+			tt.delete(l, "target")
+
+			_, ok = tt.get(l, "target")
+			require.False(t, ok)
+			value, ok = tt.get(l, "unrelated")
+			require.True(t, ok)
+			require.Equal(t, "value", value)
+
+			previousAssertionsEnabled := assertionsEnabledValue
+			assertionsEnabledValue = true
+			defer func() { assertionsEnabledValue = previousAssertionsEnabled }()
+			l.Freeze()
+			require.Panics(t, func() {
+				tt.delete(l, "target")
+			})
+		})
+	}
+}
+
 func TestROLogInterface(t *testing.T) {
 	l := &Log{
 		timestamp:         12345,

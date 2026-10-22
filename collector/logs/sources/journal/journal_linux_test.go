@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"os"
 	"testing"
 
 	"github.com/Azure/adx-mon/collector/logs"
@@ -191,4 +192,127 @@ func TestJournalMulipleSources(t *testing.T) {
 	<-sink.DoneChan()
 	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
+}
+
+func TestJournalDisjunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+	if !journal.Enabled() {
+		t.Skip("journal is not available - skipping")
+	}
+
+	logger.SetLevel(slog.LevelDebug)
+
+	cursorDir := t.TempDir()
+	testValue := fmt.Sprintf("testValue-%d", rand.Int())
+	branchATag := "COLLECTORE2E_OR_A"
+	branchBTag := "COLLECTORE2E_OR_B"
+	controlTag := "COLLECTORE2E_OR_CONTROL"
+	matchA := fmt.Sprintf("%s=%s", branchATag, testValue)
+	matchB := fmt.Sprintf("%s=%s", branchBTag, testValue)
+
+	const numLogs = 50
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("a-%d", i), journal.PriInfo, map[string]string{branchATag: testValue})
+		require.NoError(t, err)
+	}
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("b-%d", i), journal.PriInfo, map[string]string{branchBTag: testValue})
+		require.NoError(t, err)
+	}
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("control-%d", i), journal.PriInfo, map[string]string{controlTag: testValue})
+		require.NoError(t, err)
+	}
+
+	sink := sinks.NewCountingSink(int64(numLogs * 2))
+	allSinks := []types.Sink{sink}
+	source := New(SourceConfig{
+		Targets: []JournalTargetConfig{{
+			Matches:  []string{matchA, "+", matchB},
+			Database: "testdb",
+			Table:    "testtable",
+		}},
+		CursorDirectory: cursorDir,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
+	})
+
+	service := &logs.Service{
+		Source: source,
+		Sinks:  allSinks,
+	}
+	err := service.Open(context.Background())
+	require.NoError(t, err)
+	defer service.Close()
+
+	count := <-sink.DoneChan()
+	require.EqualValues(t, numLogs*2, count)
+}
+
+func TestJournalInvalidCursor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+	if !journal.Enabled() {
+		t.Skip("journal is not available - skipping")
+	}
+
+	logger.SetLevel(slog.LevelDebug)
+
+	cursorDir := t.TempDir()
+	testtag := "COLLECTORE2E_INVALID_CURSOR"
+	randNum := rand.Int()
+	testValue := fmt.Sprintf("testValue-%d", randNum)
+	journalFields := map[string]string{testtag: testValue}
+	t.Logf("Sending logs - view in journalctl with journalctl %s=%s", testtag, testValue)
+	matchTag := fmt.Sprintf("%s=%s", testtag, testValue)
+
+	numLogs := 500
+	// Send logs first
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFields)
+		require.NoError(t, err)
+	}
+	// Create an invalid cursor file manually
+	// This simulates having a cursor from a previous run that is no longer valid
+	targetConfig := JournalTargetConfig{
+		Matches:  []string{matchTag},
+		Database: "testdb",
+		Table:    "testtable",
+	}
+	cursorFilePath := cursorPath(cursorDir, targetConfig.Matches, targetConfig.Database, targetConfig.Table, "")
+
+	// Write an invalid cursor with the correct format, but not from this system
+	invalidCursor := "s=65a1fbde9961443ab61e48f57b1e1cfb;i=32904c2;b=93046e4a5c424d96ad6e02659ce7dde9;m=7b29e77112;t=639d5fa6bb246;x=1cacd317ebe1eb33"
+	err := os.WriteFile(cursorFilePath, []byte(fmt.Sprintf(`{"cursor":"%s"}`, invalidCursor)), 0644)
+	require.NoError(t, err)
+
+	// Create the journal source with the invalid cursor
+	sink := sinks.NewCountingSink(int64(numLogs))
+	allSinks := []types.Sink{sink}
+	source := New(SourceConfig{
+		Targets:         []JournalTargetConfig{targetConfig},
+		CursorDirectory: cursorDir,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
+	})
+
+	service := &logs.Service{
+		Source: source,
+		Sinks:  allSinks,
+	}
+	ctx := context.Background()
+	err = service.Open(ctx)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Wait for all logs to be processed
+	count := <-sink.DoneChan()
+
+	// Since we had an invalid cursor, the journal should have fallen back to reading from head
+	// and should have read all logs we sent
+	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
+
+	// Verify we got all the logs we expected
+	require.Equal(t, int64(numLogs), count)
 }

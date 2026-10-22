@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -15,6 +16,12 @@ func TestConfig_ValidatePromRemoteWrite_PathRequired(t *testing.T) {
 
 	err := c.Validate()
 	require.Equal(t, "prometheus-remote-write.path must be set", err.Error())
+}
+
+func TestConfig_Validate_InvalidStorageBackend(t *testing.T) {
+	c := Config{StorageBackend: "invalid"}
+	err := c.Validate()
+	require.EqualError(t, err, `unknown storage backend "invalid"`)
 }
 
 func TestConfig_ValidatePromRemoteWrite_PromRemoteWrite(t *testing.T) {
@@ -62,6 +69,259 @@ func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 	}
 
 	require.Equal(t, "prometheus-remote-write.add-labels key must be set", c.Validate().Error())
+}
+
+func TestConfig_Validate_MetadataWatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "metadata watch omitted",
+			cfg:  Config{},
+		},
+		{
+			name: "metadata watch configured",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{},
+			},
+		},
+		{
+			name: "metadata watch kubernetes node",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestConfig_Validate_AddMetadataLabels(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "add metadata labels omitted",
+			cfg:  Config{},
+		},
+		{
+			name: "kubernetes node metadata not requested",
+			cfg: Config{
+				AddMetadataLabels: &AddMetadataLabels{},
+			},
+		},
+		{
+			name: "metadata labels require watcher",
+			cfg: Config{
+				AddMetadataLabels: &AddMetadataLabels{
+					KubernetesNode: &AddMetadataKubernetesNode{},
+				},
+			},
+			wantErr: "metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "invalid kubernetes label key",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				AddMetadataLabels: &AddMetadataLabels{
+					KubernetesNode: &AddMetadataKubernetesNode{
+						Labels: map[string]string{
+							"": "dest",
+						},
+					},
+				},
+			},
+			wantErr: "add-metadata-labels.kubernetes-node.labels key must be set",
+		},
+		{
+			name: "metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				AddMetadataLabels: &AddMetadataLabels{
+					KubernetesNode: &AddMetadataKubernetesNode{
+						Labels: map[string]string{
+							"kubernetes.io/role": "node_role",
+						},
+						Annotations: map[string]string{
+							"cluster-autoscaler.kubernetes.io/safe-to-evict": "safe_to_evict",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "prometheus scrape metadata labels require watcher",
+			cfg: Config{
+				PrometheusScrape: &PrometheusScrape{
+					Database:              "metrics",
+					StaticScrapeTarget:    []*ScrapeTarget{},
+					ScrapeIntervalSeconds: 30,
+					ScrapeTimeout:         30,
+					AddMetadataLabels: &AddMetadataLabels{
+						KubernetesNode: &AddMetadataKubernetesNode{},
+					},
+				},
+			},
+			wantErr: "prometheus-scrape.add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "prometheus scrape metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				PrometheusScrape: &PrometheusScrape{
+					Database:              "metrics",
+					StaticScrapeTarget:    []*ScrapeTarget{},
+					ScrapeIntervalSeconds: 30,
+					ScrapeTimeout:         30,
+					AddMetadataLabels: &AddMetadataLabels{
+						KubernetesNode: &AddMetadataKubernetesNode{
+							Labels: map[string]string{"role": "node_role"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "prometheus remote write metadata labels require watcher",
+			cfg: Config{
+				PrometheusRemoteWrite: []*PrometheusRemoteWrite{
+					{
+						Path:     "/receive",
+						Database: "metrics",
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{},
+						},
+					},
+				},
+			},
+			wantErr: "prometheus-remote-write[/receive].add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "prometheus remote write metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				PrometheusRemoteWrite: []*PrometheusRemoteWrite{
+					{
+						Path:     "/receive",
+						Database: "metrics",
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{
+								Labels: map[string]string{"role": "node_role"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "otel metric metadata labels require watcher",
+			cfg: Config{
+				OtelMetric: []*OtelMetric{
+					{
+						Path:     "/v1/metrics",
+						Database: "metrics",
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{},
+						},
+					},
+				},
+			},
+			wantErr: "otel-metric[0].add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "otel metric metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				OtelMetric: []*OtelMetric{
+					{
+						Path:     "/v1/metrics",
+						Database: "metrics",
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{
+								Labels: map[string]string{"role": "node_role"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "otel log metadata labels require watcher",
+			cfg: Config{
+				OtelLog: &OtelLog{
+					AddMetadataLabels: &AddMetadataLabels{
+						KubernetesNode: &AddMetadataKubernetesNode{},
+					},
+				},
+			},
+			wantErr: "otel-log.add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "otel log metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				OtelLog: &OtelLog{
+					AddMetadataLabels: &AddMetadataLabels{
+						KubernetesNode: &AddMetadataKubernetesNode{
+							Labels: map[string]string{"role": "node_role"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "host log metadata labels require watcher",
+			cfg: Config{
+				HostLog: []*HostLog{
+					{
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{},
+						},
+					},
+				},
+			},
+			wantErr: "host-log[0].add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "host log metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				HostLog: []*HostLog{
+					{
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{
+								Labels: map[string]string{"role": "node_role"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
@@ -281,6 +541,13 @@ func TestConfig_ValidateOtelLog_Transforms(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "Failure_nil_transform",
+			otelLog: &OtelLog{
+				Transforms: []*LogTransform{nil},
+			},
+			wantErr: true,
+		},
+		{
 			name: "Failure_invalid_transform",
 			otelLog: &OtelLog{
 				Transforms: []*LogTransform{
@@ -328,10 +595,10 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Success - single host log with kube discovery enabled",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{
+					{
 						DisableKubeDiscovery: true,
 					},
-					&HostLog{},
+					{},
 				},
 			},
 		},
@@ -339,8 +606,8 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Failure - multiple host logs with kube discovery enabled",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{},
-					&HostLog{},
+					{},
+					{},
 				},
 			},
 			err: "host-log[1].disable-kube-discovery not set for more than one HostLog configuration",
@@ -349,13 +616,13 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Success - valid exporters",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{
+					{
 						DisableKubeDiscovery: true,
 						Exporters: []string{
 							"foo",
 						},
 					},
-					&HostLog{
+					{
 						Exporters: []string{
 							"bar",
 						},
@@ -381,13 +648,13 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Failure - missing exporter",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{
+					{
 						DisableKubeDiscovery: true,
 						Exporters: []string{
 							"foo",
 						},
 					},
-					&HostLog{
+					{
 						Exporters: []string{
 							"bar",
 						},
@@ -993,6 +1260,47 @@ func TestConfig_Validate_PrometheusRemoteWrite(t *testing.T) {
 	}
 }
 
+func TestEndpointRequestTimeouts(t *testing.T) {
+	prom := &PrometheusRemoteWrite{Database: "db", Path: "/receive"}
+	require.NoError(t, prom.Validate())
+	require.Zero(t, prom.RequestTimeoutSeconds)
+	promTimeout, err := prom.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = 30
+	promTimeout, err = prom.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = MaxRequestTimeoutSeconds
+	require.NoError(t, prom.Validate())
+	prom.RequestTimeoutSeconds++
+	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must not exceed 300")
+	prom.RequestTimeoutSeconds = -1
+	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must be greater than 0")
+
+	logs := &OtelLog{}
+	require.NoError(t, logs.Validate())
+	require.Zero(t, logs.RequestTimeoutSeconds)
+	logsTimeout, err := logs.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, logsTimeout)
+	logs.RequestTimeoutSeconds = MaxRequestTimeoutSeconds + 1
+	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must not exceed 300")
+	logs.RequestTimeoutSeconds = -1
+	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must be greater than 0")
+
+	metrics := &OtelMetric{Database: "db", Path: "/v1/metrics"}
+	require.NoError(t, metrics.Validate())
+	require.Zero(t, metrics.RequestTimeoutSeconds)
+	metricsTimeout, err := metrics.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, metricsTimeout)
+	metrics.RequestTimeoutSeconds = MaxRequestTimeoutSeconds + 1
+	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must not exceed 300")
+	metrics.RequestTimeoutSeconds = -1
+	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must be greater than 0")
+}
+
 func TestConfig_Validate_HostLog(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1179,6 +1487,13 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "Failure_nil_transform",
+			config: &HostLog{
+				Transforms: []*LogTransform{nil},
+			},
+			wantErr: true,
 		},
 		{
 			name: "Failure_invalid_transform",
@@ -1391,16 +1706,17 @@ func TestConfig_ReplaceVariables(t *testing.T) {
 			Database: "$(HOSTNAME)_bar",
 			StaticScrapeTarget: []*ScrapeTarget{
 				{
-					URL: "http://$(HOSTNAME):9999",
+					URL: "http://$(HOSTIP):9999",
 				},
 			},
 		},
 	}
 
 	c.ReplaceVariable("$(HOSTNAME)", "FOO")
+	c.ReplaceVariable("$(HOSTIP)", "10.0.0.1")
 	require.Equal(t, "FOO_bar", c.PrometheusRemoteWrite[0].Database)
 	require.Equal(t, "FOO_bar", c.PrometheusScrape.Database)
-	require.Equal(t, "http://FOO:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
+	require.Equal(t, "http://10.0.0.1:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
 	require.Equal(t, "FOO_bar", c.AddLabels["foo"])
 }
 
@@ -1596,6 +1912,192 @@ func TestConfig_ValidateExporters(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestKubeletDiscovery_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  KubeletDiscovery
+		wantErr string
+	}{
+		{
+			name:    "valid config with defaults",
+			config:  KubeletDiscovery{},
+			wantErr: "",
+		},
+		{
+			name: "valid config with all fields set",
+			config: KubeletDiscovery{
+				Host:           "127.0.0.1",
+				Port:           10250,
+				PollInterval:   15,
+				RequestTimeout: 10,
+				TokenPath:      "/var/run/secrets/kubernetes.io/serviceaccount/token",
+				CAPath:         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid config with custom values",
+			config: KubeletDiscovery{
+				Host:           "10.0.0.1",
+				Port:           10255,
+				PollInterval:   30,
+				RequestTimeout: 20,
+				TokenPath:      "/custom/token",
+				CAPath:         "/custom/ca.crt",
+			},
+			wantErr: "",
+		},
+		{
+			name: "invalid port - negative",
+			config: KubeletDiscovery{
+				Port: -1,
+			},
+			wantErr: "kubelet-discovery.port must be between 0 and 65535",
+		},
+		{
+			name: "invalid port - too large",
+			config: KubeletDiscovery{
+				Port: 65536,
+			},
+			wantErr: "kubelet-discovery.port must be between 0 and 65535",
+		},
+		{
+			name: "invalid poll interval - less than 1",
+			config: KubeletDiscovery{
+				PollInterval: -1,
+			},
+			wantErr: "kubelet-discovery.poll-interval must be at least 1 second",
+		},
+		{
+			name: "invalid request timeout - less than 1",
+			config: KubeletDiscovery{
+				RequestTimeout: -1,
+			},
+			wantErr: "kubelet-discovery.request-timeout must be at least 1 second",
+		},
+		{
+			name: "valid edge case - port 0",
+			config: KubeletDiscovery{
+				Port: 0,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid edge case - port 65535",
+			config: KubeletDiscovery{
+				Port: 65535,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid edge case - zero timeouts (use defaults)",
+			config: KubeletDiscovery{
+				PollInterval:   0,
+				RequestTimeout: 0,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid edge case - minimum valid timeouts",
+			config: KubeletDiscovery{
+				PollInterval:   1,
+				RequestTimeout: 1,
+			},
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_KubeletDiscovery(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "kubelet discovery omitted",
+			cfg:  Config{},
+		},
+		{
+			name: "kubelet discovery with defaults",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{},
+			},
+		},
+		{
+			name: "kubelet discovery with valid config",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					Host:           "127.0.0.1",
+					Port:           10250,
+					PollInterval:   15,
+					RequestTimeout: 10,
+					TokenPath:      "/var/run/secrets/kubernetes.io/serviceaccount/token",
+					CAPath:         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+				},
+			},
+		},
+		{
+			name: "kubelet discovery with invalid port",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					Port: -1,
+				},
+			},
+			wantErr: "kubelet-discovery.port must be between 0 and 65535",
+		},
+		{
+			name: "kubelet discovery with invalid poll interval",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					PollInterval: -5,
+				},
+			},
+			wantErr: "kubelet-discovery.poll-interval must be at least 1 second",
+		},
+		{
+			name: "kubelet discovery with invalid request timeout",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					RequestTimeout: -10,
+				},
+			},
+			wantErr: "kubelet-discovery.request-timeout must be at least 1 second",
+		},
+		{
+			name: "kubelet discovery with custom paths",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					TokenPath: "/custom/path/token",
+					CAPath:    "/custom/path/ca.crt",
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }

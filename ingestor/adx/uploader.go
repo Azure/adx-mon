@@ -8,22 +8,29 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
+	azkustoingest "github.com/Azure/azure-kusto-go/azkustoingest"
+	azkustoingestopts "github.com/Azure/azure-kusto-go/azkustoingest/ingestoptions"
+	kgzip "github.com/klauspost/compress/gzip"
 )
 
-const ConcurrentUploads = 50
+const (
+	ConcurrentUploads  = 50
+	batchUploadTimeout = 10 * time.Minute
+)
 
 type Uploader interface {
 	service.Component
@@ -34,24 +41,38 @@ type Uploader interface {
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan *cluster.Batch
 
+	// RealtimeUploadQueue returns a channel for realtime batches.  They are uploaded before queued batches.
+	RealtimeUploadQueue() chan *cluster.Batch
+
 	// Mgmt executes a management query against the database.
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 type uploader struct {
-	KustoCli   *kusto.Client
+	KustoCli   *azkustodata.Client
 	storageDir string
 	database   string
 	opts       UploaderOpts
 	syncer     *Syncer
 
-	queue   chan *cluster.Batch
+	queue         chan *cluster.Batch
+	realtimeQueue chan *cluster.Batch
+
 	closeFn context.CancelFunc
+
+	// realtime and streamer stream realtime batches.  When streamer is nil, realtime batches use queued ingestion.
+	realtime  *RealtimeUploadOpts
+	streamer  streamIngester
+	cooldowns streamingCooldowns
+
+	// queuedUpload ingests a batch with queued ingestion.
+	queuedUpload func(ctx context.Context, reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error
 
 	wg                  sync.WaitGroup
 	mu                  sync.RWMutex
-	ingestors           map[string]ingest.Ingestor
+	ingestor            *azkustoingest.Ingestion
 	requireDirectIngest bool
+	gzipWriterPool      sync.Pool
 }
 
 type UploaderOpts struct {
@@ -61,27 +82,41 @@ type UploaderOpts struct {
 	Dimensions        []string
 	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
+
+	// QueuedReservedWorkersPercent is the percentage of upload workers reserved for queued batches.  Defaults to
+	// cluster.DefaultQueuedReservedWorkersPercent.
+	QueuedReservedWorkersPercent int
+
+	// Realtime enables streaming ingestion of realtime batches.  When nil, realtime batches use queued ingestion.
+	Realtime *RealtimeUploadOpts
 }
 
-func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
+func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
 
-	return &uploader{
-		KustoCli:   kustoCli,
-		syncer:     syncer,
-		storageDir: opts.StorageDir,
-		database:   opts.Database,
-		opts:       opts,
-		queue:      make(chan *cluster.Batch, 10000),
-		ingestors:  make(map[string]ingest.Ingestor),
+	u := &uploader{
+		KustoCli:      kustoCli,
+		syncer:        syncer,
+		storageDir:    opts.StorageDir,
+		database:      opts.Database,
+		opts:          opts,
+		queue:         make(chan *cluster.Batch, 10000),
+		realtimeQueue: make(chan *cluster.Batch, 10000),
+		gzipWriterPool: sync.Pool{
+			New: func() any {
+				return kgzip.NewWriter(nil)
+			},
+		},
 	}
+	u.queuedUpload = u.uploadReader
+	if opts.Realtime != nil && opts.Realtime.Slots != nil {
+		u.realtime = opts.Realtime.withDefaults()
+	}
+	return u
 }
 
 func (n *uploader) Open(ctx context.Context) error {
-	c, closeFn := context.WithCancel(ctx)
-	n.closeFn = closeFn
-
-	if err := n.syncer.Open(c); err != nil {
+	if err := n.syncer.Open(ctx); err != nil {
 		return err
 	}
 
@@ -94,32 +129,80 @@ func (n *uploader) Open(ctx context.Context) error {
 		n.requireDirectIngest = true
 	}
 
-	for i := 0; i < n.opts.ConcurrentUploads; i++ {
-		go n.upload(c)
+	if n.realtime != nil && !n.requireDirectIngest {
+		streamer, err := n.newStreamer()
+		if err != nil {
+			// Realtime batches use queued ingestion rather than failing startup.
+			logger.Errorf("Failed to create streaming ingestion client for %s, realtime batches will use queued ingestion: %s", n.database, err)
+		} else {
+			n.streamer = streamer
+		}
 	}
+
+	n.startWorkers(ctx)
 
 	return nil
 }
 
-func (n *uploader) Close() error {
-	n.closeFn()
+// startWorkers starts the upload workers.  Realtime batches are uploaded before queued batches with a share of
+// workers reserved for queued batches. Close or cancellation of ctx stops intake; active batches keep their own
+// bounded contexts so they can finish even if the service context is canceled before Close.
+func (n *uploader) startWorkers(ctx context.Context) {
+	workerCtx, closeFn := context.WithCancel(ctx)
+	n.closeFn = closeFn
+	// Schedule queued uploads fairly across destinations while preserving the
+	// realtime path and the shutdown behavior for active batches.
+	queued := cluster.FairQueue(workerCtx, n.queue, cluster.FairQueueOpts{
+		Workers:  n.opts.ConcurrentUploads,
+		Pipeline: "adx:" + n.database,
+	})
+	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: queued}
+	n.wg.Add(n.opts.ConcurrentUploads)
+	cluster.RunWorkers(workerCtx, queues, n.opts.ConcurrentUploads, n.opts.QueuedReservedWorkersPercent, func(batch *cluster.Batch) {
+		// Cancellation may race with dequeuing a batch. Do not start that batch after intake stops.
+		if workerCtx.Err() != nil {
+			batch.Release()
+			return
+		}
+		// Preserve request values, but do not inherit shutdown cancellation or the service deadline.
+		uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), batchUploadTimeout)
+		defer cancel()
+		n.uploadBatch(uploadCtx, batch)
+	}, n.wg.Done)
+}
 
-	// Wait for all uploads to finish.
+// Close stops taking new batches and waits for active uploads and cleanup before closing clients.
+// Active batches are bounded by their upload timeouts, not by cancellation of the context passed to Open.
+func (n *uploader) Close() error {
+	// closeFn is nil if Open failed or was never called before workers started.
+	if n.closeFn != nil {
+		n.closeFn()
+	}
+
+	// Wait for all workers to exit, including batch cleanup, before closing their clients.
 	n.wg.Wait()
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	for _, ing := range n.ingestors {
-		ing.Close()
+	if n.ingestor != nil {
+		n.ingestor.Close()
+	}
+	if n.streamer != nil {
+		n.streamer.Close()
+		n.streamer = nil
 	}
 
-	n.ingestors = nil
+	n.ingestor = nil
 	return n.syncer.Close()
 }
 
 func (n *uploader) UploadQueue() chan *cluster.Batch {
 	return n.queue
+}
+
+func (n *uploader) RealtimeUploadQueue() chan *cluster.Batch {
+	return n.realtimeQueue
 }
 
 func (n *uploader) Database() string {
@@ -130,49 +213,56 @@ func (n *uploader) Endpoint() string {
 	return n.KustoCli.Endpoint()
 }
 
-func (n *uploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (n *uploader) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	return n.KustoCli.Mgmt(ctx, n.database, query, options...)
 }
 
-func (n *uploader) uploadReader(reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error {
-	// Ensure we wait for this upload to finish.
-	n.wg.Add(1)
-	defer n.wg.Done()
+func (n *uploader) uploadReader(ctx context.Context, reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error {
+	ctx, cancel := context.WithTimeout(ctx, batchUploadTimeout)
+	defer cancel()
 
-	if err := n.syncer.EnsureTable(table, mapping); err != nil {
+	if err := n.syncer.EnsureTable(ctx, table, mapping); err != nil {
 		return err
 	}
 
-	name, err := n.syncer.EnsureMapping(table, mapping)
+	name, err := n.syncer.EnsureMapping(ctx, table, mapping)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if n.requireDirectIngest {
+		return n.directIngestReader(ctx, reader, table)
+	}
 
 	n.mu.RLock()
-	ingestor := n.ingestors[table]
+	ingestor := n.ingestor
 	n.mu.RUnlock()
 
 	if ingestor == nil {
-		ingestor, err = func() (ingest.Ingestor, error) {
+		ingestor, err = func() (*azkustoingest.Ingestion, error) {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 
-			ingestor = n.ingestors[table]
+			ingestor = n.ingestor
 			if ingestor != nil {
 				return ingestor, nil
 			}
 
-			if n.requireDirectIngest {
-				ingestor = testutils.NewUploadReader(n.KustoCli, database, table)
-				n.ingestors[table] = ingestor
-				return ingestor, nil
+			kcsb := azkustodata.NewConnectionStringBuilder(n.KustoCli.Endpoint())
+			if strings.HasPrefix(n.KustoCli.Endpoint(), "https://") {
+				kcsb.WithDefaultAzureCredential()
 			}
 
-			ingestor, err = ingest.New(n.KustoCli, n.database, table)
+			ingestor, err = azkustoingest.New(kcsb,
+				azkustoingest.WithDefaultDatabase(n.database),
+			)
 			if err != nil {
 				return nil, err
 			}
-			n.ingestors[table] = ingestor
+			n.ingestor = ingestor
 			return ingestor, nil
 		}()
 
@@ -181,20 +271,74 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 		}
 	}
 
-	// Set up a maximum time for completion to be 10 minutes.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	var compressionWG sync.WaitGroup
+	gzipReader := n.newGzipReader(reader, &compressionWG)
+	defer func() {
+		// Stop pipe writes and join the producer before uploadBatch closes its WAL readers.
+		_ = gzipReader.Close()
+		compressionWG.Wait()
+	}()
 
 	// uploadReader our file WITHOUT status reporting.
-	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, gzipReader,
+		azkustoingest.Table(table),
+		azkustoingest.IngestionMappingRef(name, azkustoingest.CSV),
+		azkustoingest.DontCompress(),
+		azkustoingest.CompressionType(azkustoingestopts.GZIP),
+	)
 	if err != nil {
-		return sanitizeErrorString(err)
+		sanitizedErr := sanitizeErrorString(err)
+		logger.Errorf("Queued ingestion submission failed db=%s table=%s mapping=%s queue_len=%d err=%s", database, table, name, len(n.queue), sanitizedErr.Error())
+		return sanitizedErr
 	}
 
 	err = <-res.Wait(ctx)
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// newGzipReader starts a compression producer. The caller must close the pipe and wait for wg before closing reader.
+func (n *uploader) newGzipReader(reader io.Reader, wg *sync.WaitGroup) *io.PipeReader {
+	pr, pw := io.Pipe()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		zw := n.gzipWriterPool.Get().(*kgzip.Writer)
+		defer n.gzipWriterPool.Put(zw)
+		zw.Reset(pw)
+
+		_, err := io.Copy(zw, reader)
+		closeErr := zw.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			if !errors.Is(err, io.ErrClosedPipe) {
+				logger.Errorf("Failed to gzip upload payload: %v", err)
+			}
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.Close()
+	}()
+
+	return pr
+}
+
+func (n *uploader) directIngestReader(ctx context.Context, reader io.Reader, table string) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data: %w", err)
+	}
+
+	stmt := kql.New(".ingest inline into table ").AddTable(table).AddLiteral(" <| ").AddUnsafe(string(data))
+	_, err = n.KustoCli.Mgmt(ctx, n.database, stmt)
+	if err != nil {
+		return fmt.Errorf("failed to ingest data: %w", err)
 	}
 
 	return nil
@@ -207,124 +351,157 @@ func sanitizeErrorString(err error) error {
 	return errors.New(errString)
 }
 
-func (n *uploader) upload(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case batch := <-n.queue:
-			segments := batch.Segments
+// uploadBatch uploads a batch to kusto and removes its segments on success.
+func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
+	if ctx.Err() != nil {
+		batch.Release()
+		return
+	}
+	segments := batch.Segments
 
-			if batch.Database != n.database {
-				logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
+	if batch.Database != n.database {
+		logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
+		batch.Release()
+		return
+	}
+
+	func() {
+		defer batch.Release()
+
+		var (
+			readers        = make([]io.Reader, 0, len(segments))
+			segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
+			database       string
+			table          string
+			schema         string
+			header         string
+			err            error
+		)
+
+		for _, si := range segments {
+			if ctx.Err() != nil {
+				break
+			}
+			database, table, schema, _, err = wal.ParseFilename(si.Path)
+			if err != nil {
+				logger.Errorf("Failed to parse file: %s", err.Error())
+				continue
+			}
+			metrics.SampleLatency.WithLabelValues(database, table).Set(time.Since(si.CreatedAt).Seconds())
+
+			var opts []wal.Option
+			if schema != "" {
+				opts = append(opts, wal.WithSkipHeader)
+			}
+			f, err := wal.NewSegmentReader(si.Path, opts...)
+			if os.IsNotExist(err) {
+				// batches are not disjoint, so the same segments could be included in multiple batches.
+				continue
+			} else if err != nil {
+				logger.Errorf("Failed to open file: %s", err.Error())
 				continue
 			}
 
-			func() {
-				defer batch.Release()
+			segmentReaders = append(segmentReaders, f)
+			readers = append(readers, f)
+		}
 
-				var (
-					readers        = make([]io.Reader, 0, len(segments))
-					segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
-					database       string
-					table          string
-					schema         string
-					header         string
-					err            error
-				)
+		defer func(segmentReaders []*wal.SegmentReader) {
+			for _, sr := range segmentReaders {
+				sr.Close()
+			}
+		}(segmentReaders)
 
-				for _, si := range segments {
-					database, table, schema, _, err = wal.ParseFilename(si.Path)
-					if err != nil {
-						logger.Errorf("Failed to parse file: %s", err.Error())
-						continue
-					}
-					metrics.SampleLatency.WithLabelValues(database, table).Set(time.Since(si.CreatedAt).Seconds())
+		if ctx.Err() != nil {
+			return
+		}
 
-					var opts []wal.Option
-					if schema != "" {
-						opts = append(opts, wal.WithSkipHeader)
-					}
-					f, err := wal.NewSegmentReader(si.Path, opts...)
-					if os.IsNotExist(err) {
-						// batches are not disjoint, so the same segments could be included in multiple batches.
-						continue
-					} else if err != nil {
-						logger.Errorf("Failed to open file: %s", err.Error())
-						continue
-					}
+		if len(segmentReaders) == 0 {
+			if err := batch.Remove(); err != nil {
+				logger.Errorf("Failed to remove batch: %s", err.Error())
+			}
+			return
+		}
 
-					segmentReaders = append(segmentReaders, f)
-					readers = append(readers, f)
-				}
+		samplePath := segmentReaders[0].Path()
+		database, table, schema, _, err = wal.ParseFilename(samplePath)
+		if err != nil {
+			logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
+			return
+		}
 
-				defer func(segmentReaders []*wal.SegmentReader) {
-					for _, sr := range segmentReaders {
-						sr.Close()
-					}
-				}(segmentReaders)
+		mapping := n.opts.DefaultMapping
+		if schema != "" {
+			header, err = n.extractSchema(samplePath)
+			if err != nil {
+				logger.Errorf("Failed to extract schema: %s: %s", samplePath, err.Error())
 
-				if len(segmentReaders) == 0 {
-					if err := batch.Remove(); err != nil {
-						logger.Errorf("Failed to remove batch: %s", err.Error())
-					}
-					return
-				}
-
-				samplePath := segmentReaders[0].Path()
-				database, table, schema, _, err = wal.ParseFilename(samplePath)
-				if err != nil {
-					logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
-					return
-				}
-
-				mapping := n.opts.DefaultMapping
-				if schema != "" {
-					header, err = n.extractSchema(samplePath)
-					if err != nil {
-						logger.Errorf("Failed to extract schema: %s: %s", samplePath, err.Error())
-
-						// This batch is invalid, remove it.
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove batch: %s", err.Error())
-						}
-
-						return
-					}
-
-					mapping, err = adxschema.UnmarshalSchema(header)
-					if err != nil {
-						logger.Errorf("Failed to unmarshal schema: %s: %s", samplePath, err.Error())
-
-						// This batch is invalid, remove it.
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove batch: %s", err.Error())
-						}
-						return
-					}
-				}
-
-				mr := io.MultiReader(readers...)
-
-				now := time.Now()
-				if err := n.uploadReader(mr, database, table, mapping); err != nil {
-					logger.Errorf("Failed to upload file: %s", err.Error())
-					return
-				}
-
-				if logger.IsDebug() {
-					logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())
-				}
-
+				// This batch is invalid, remove it.
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to remove batch: %s", err.Error())
 				}
 
-				metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
-			}()
+				return
+			}
 
+			mapping, err = adxschema.UnmarshalSchema(header)
+			if err != nil {
+				logger.Errorf("Failed to unmarshal schema: %s: %s", samplePath, err.Error())
+
+				// This batch is invalid, remove it.
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove batch: %s", err.Error())
+				}
+				return
+			}
 		}
+
+		var data io.Reader = io.MultiReader(readers...)
+
+		if batch.Priority == ingestpolicy.PriorityRealtime && n.streamer != nil {
+			var outcome streamOutcome
+			outcome, data = n.streamBatch(ctx, batch, table, mapping, data)
+			switch outcome {
+			case streamed:
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove batch: %s", err.Error())
+				}
+				metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
+				return
+			case streamRetry:
+				// The batch is released and retried by the realtime batcher.
+				return
+			}
+		}
+
+		now := time.Now()
+		if ctx.Err() != nil {
+			return
+		}
+		if err := n.queuedUpload(ctx, data, database, table, mapping); err != nil {
+			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
+			return
+		}
+
+		if logger.IsDebug() {
+			logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())
+		}
+
+		if err := batch.Remove(); err != nil {
+			logger.Errorf("Failed to remove batch: %s", err.Error())
+		}
+
+		metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
+	}()
+}
+
+// newStreamer returns a streaming ingestion client for the uploader's endpoint.
+func (n *uploader) newStreamer() (streamIngester, error) {
+	kcsb := azkustodata.NewConnectionStringBuilder(n.KustoCli.Endpoint())
+	if strings.HasPrefix(n.KustoCli.Endpoint(), "https://") {
+		kcsb.WithDefaultAzureCredential()
 	}
+	return azkustoingest.NewStreaming(kcsb, azkustoingest.WithDefaultDatabase(n.database))
 }
 
 func (n *uploader) extractSchema(path string) (string, error) {
@@ -354,24 +531,16 @@ func (n *uploader) extractSchema(path string) (string, error) {
 // https://learn.microsoft.com/en-us/azure/data-explorer/kusto-emulator-overview#limitations
 func (n *uploader) clusterRequiresDirectIngest(ctx context.Context) (bool, error) {
 	stmt := kql.New(".show cluster details")
-	rows, err := n.KustoCli.Mgmt(ctx, n.database, stmt)
+	ds, err := n.KustoCli.Mgmt(ctx, n.database, stmt)
 	if err != nil {
 		return false, fmt.Errorf("failed to query cluster details: %w", err)
 	}
-	defer rows.Stop()
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return false, fmt.Errorf("failed to query cluster details: missing primary result table")
+	}
 
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve cluster details: %w", errFinal)
-		}
-
+	for _, row := range table.Rows() {
 		var cs clusterDetails
 		if err := row.ToStruct(&cs); err != nil {
 			return false, fmt.Errorf("failed to convert row to struct: %w", err)

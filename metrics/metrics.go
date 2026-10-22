@@ -1,11 +1,33 @@
 package metrics
 
 import (
+	"os"
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+func init() {
+	if os.Getenv("METRICS_DEBUG") != "" {
+		DebugMetricsEnabled = true
+	}
+}
+
+const (
+	AlertRuleEvaluationOutcomeSuccess               = "success"
+	AlertRuleEvaluationOutcomeSetupError            = "setup_error"
+	AlertRuleEvaluationOutcomeUserError             = "user_error"
+	AlertRuleEvaluationOutcomeServiceError          = "service_error"
+	AlertRuleEvaluationOutcomeCancelled             = "cancelled" // Explicit cancellation, not evaluation or parent timeout.
+	AlertRuleEvaluationOutcomeNotificationThrottled = "notification_throttled"
+)
+
 var (
+	// DebugMetricsEnabled is a flag to enable debug metrics.  If set, additional metrics will be collected that are
+	// useful for debugging but may be too verbose for regular production use.
+	DebugMetricsEnabled bool
+
 	Namespace = "adxmon"
 
 	// Ingestor metrics
@@ -15,6 +37,13 @@ var (
 		Name:      "health_check",
 		Help:      "Gauge indicating if Ingestor is healthy or not",
 	}, []string{"region"})
+
+	IngestorHealthStatus = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "health_status",
+		Help:      "Gauge indicating current Ingestor health status by unhealthy reason. Value is 1 when healthy and 0 when unhealthy.",
+	}, []string{"region", "unhealthy_reason"})
 
 	RequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
@@ -37,13 +66,6 @@ var (
 		Help:      "Counter of dropped prefixes for an ingestor instance",
 	}, []string{"prefix"})
 
-	SamplesStored = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "samples_stored_total",
-		Help:      "Counter of samples stored for an ingestor instance",
-	}, []string{"metric"})
-
 	IngestorActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -65,27 +87,6 @@ var (
 		Help:      "Gauge indicating the size of the queue for an ingestor instance",
 	}, []string{"queue"})
 
-	IngestorSegmentsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "wal_segments_count",
-		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
-	}, []string{"metric"})
-
-	IngestorSegmentsSizeBytes = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "wal_segments_size_bytes",
-		Help:      "Gauge indicating the size of WAL segments for an ingestor instance",
-	}, []string{"metric"})
-
-	IngestorSegmentsMaxAge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "wal_segments_max_age_seconds",
-		Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
-	}, []string{"metric"})
-
 	MetricsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -106,6 +107,34 @@ var (
 		Name:      "invalid_logs_dropped",
 		Help:      "Counter of the number of invalid logs dropped",
 	}, []string{})
+
+	IngestorRealtimeBatches = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_batches_total",
+		Help:      "Counter of realtime batches by outcome: streamed, retried (retry_<reason>) or ingested with queued ingestion (fallback_<reason>)",
+	}, []string{"database", "table", "outcome"})
+
+	IngestorRealtimeStreamingRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_streaming_requests_total",
+		Help:      "Counter of streaming ingestion requests",
+	}, []string{"database"})
+
+	IngestorRealtimeStreamingDuration = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_streaming_duration_seconds_total",
+		Help:      "Counter of the total duration in seconds of streaming ingestion requests.  Divide by realtime_streaming_requests_total for the average duration",
+	}, []string{"database"})
+
+	IngestorRealtimeIngestLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_ingest_latency_seconds",
+		Help:      "Gauge of the age in seconds of the oldest segment of the most recent realtime batch ingested with streaming ingestion",
+	}, []string{"database", "table"})
 
 	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
@@ -143,6 +172,28 @@ var (
 		Help:      "Gauge indicating if a notification is healthy or not",
 	}, []string{"namespace", "name"})
 
+	AlertRuleEvaluationDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "alert_rule_evaluation_duration_seconds",
+		Help:      "Duration of AlertRule evaluations in seconds, including query result processing and notification handling.",
+		Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
+	})
+
+	AlertRuleEvaluationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "alert_rule_evaluations_total",
+		Help:      "Counter of AlertRule evaluations by outcome.",
+	}, []string{"outcome"})
+
+	AlertsGeneratedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "alerts_generated_total",
+		Help:      "Counter of alerts successfully generated by AlertRule evaluations.",
+	})
+
 	// Collector metrics
 	CollectorHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
@@ -156,13 +207,6 @@ var (
 		Subsystem: "collector",
 		Name:      "logs_received_total",
 		Help:      "Counter of the number of logs received by the proxy",
-	}, []string{"database", "table"})
-
-	LogsProxyUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "collector",
-		Name:      "logs_uploaded_total",
-		Help:      "Counter of the number of logs uploaded",
 	}, []string{"database", "table"})
 
 	LogKeys = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -220,4 +264,114 @@ var (
 		Name:      "exporter_failed_total",
 		Help:      "Counter of the number of telemetry points that failed to be sent by an exporter",
 	}, []string{"exporter", "endpoint"})
+
+	SamplesStored = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "samples_stored_total",
+		Help:      "Counter of samples stored for an collector instance",
+	})
 )
+
+var (
+	// Lazy-initialized segment metrics to avoid exposing them in both services
+	// When metrics do not have dimensions but are shared between services, they need to be lazily
+	// initialized to avoid multiple services exposing them.
+	ingestorSegmentsOnce      sync.Once
+	ingestorSegmentsTotal     prometheus.Gauge
+	ingestorSegmentsSizeBytes prometheus.Gauge
+	ingestorSegmentsMaxAge    prometheus.Gauge
+
+	collectorSegmentsOnce      sync.Once
+	collectorSegmentsTotal     prometheus.Gauge
+	collectorSegmentsSizeBytes prometheus.Gauge
+	collectorSegmentsMaxAge    prometheus.Gauge
+)
+
+// NewIngestorSegmentMetrics creates the ingestor-specific WAL segment metrics.
+// These are created lazily to ensure collector instances don't expose ingestor metrics.
+// This function is safe to call multiple times - metrics are only created once.
+func NewIngestorSegmentMetrics() (segmentsTotal, segmentsSizeBytes, segmentsMaxAge prometheus.Gauge) {
+	ingestorSegmentsOnce.Do(func() {
+		ingestorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "ingestor",
+			Name:      "wal_segments_count",
+			Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
+		})
+		ingestorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "ingestor",
+			Name:      "wal_segments_size_bytes",
+			Help:      "Gauge indicating the size of WAL segments for an ingestor instance",
+		})
+		ingestorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "ingestor",
+			Name:      "wal_segments_max_age_seconds",
+			Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
+		})
+	})
+	return ingestorSegmentsTotal, ingestorSegmentsSizeBytes, ingestorSegmentsMaxAge
+}
+
+// NewCollectorSegmentMetrics creates the collector-specific WAL segment metrics.
+// These are created lazily to ensure ingestor instances don't expose collector metrics.
+// This function is safe to call multiple times - metrics are only created once.
+func NewCollectorSegmentMetrics() (segmentsTotal, segmentsSizeBytes, segmentsMaxAge prometheus.Gauge) {
+	collectorSegmentsOnce.Do(func() {
+		collectorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "collector",
+			Name:      "wal_segments_count",
+			Help:      "Gauge indicating the number of WAL segments for a collector instance",
+		})
+		collectorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "collector",
+			Name:      "wal_segments_size_bytes",
+			Help:      "Gauge indicating the size of WAL segments for a collector instance",
+		})
+		collectorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "collector",
+			Name:      "wal_segments_max_age_seconds",
+			Help:      "Gauge indicating the max age of WAL segments for a collector instance",
+		})
+	})
+	return collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge
+}
+
+var (
+	ingestorSegmentsSizeByPriorityOnce  sync.Once
+	ingestorSegmentsSizeByPriority      *prometheus.GaugeVec
+	collectorSegmentsSizeByPriorityOnce sync.Once
+	collectorSegmentsSizeByPriority     *prometheus.GaugeVec
+)
+
+// NewIngestorSegmentSizeByPriorityMetric creates the ingestor WAL segment size by ingestion priority metric.  It is
+// safe to call multiple times.
+func NewIngestorSegmentSizeByPriorityMetric() *prometheus.GaugeVec {
+	ingestorSegmentsSizeByPriorityOnce.Do(func() {
+		ingestorSegmentsSizeByPriority = newSegmentSizeByPriorityMetric("ingestor")
+	})
+	return ingestorSegmentsSizeByPriority
+}
+
+// NewCollectorSegmentSizeByPriorityMetric creates the collector WAL segment size by ingestion priority metric.  It is
+// safe to call multiple times.
+func NewCollectorSegmentSizeByPriorityMetric() *prometheus.GaugeVec {
+	collectorSegmentsSizeByPriorityOnce.Do(func() {
+		collectorSegmentsSizeByPriority = newSegmentSizeByPriorityMetric("collector")
+	})
+	return collectorSegmentsSizeByPriority
+}
+
+func newSegmentSizeByPriorityMetric(subsystem string) *prometheus.GaugeVec {
+	return promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: subsystem,
+		Name:      "wal_segments_size_bytes_by_priority",
+		Help:      "Gauge indicating the size of closed WAL segments by ingestion priority",
+	}, []string{"priority"})
+}

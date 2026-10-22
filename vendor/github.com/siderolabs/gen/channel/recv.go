@@ -4,28 +4,6 @@
 
 package channel
 
-import "context"
-
-// RecvWithContext tries to receive a value from a channel which is aborted if the context is canceled.
-//
-// Function returns true if the value was received, false if the context was canceled or the channel was closed.
-//
-// Deprecated: use plain old select instead.
-func RecvWithContext[T any](ctx context.Context, ch <-chan T) (T, bool) {
-	select {
-	case <-ctx.Done():
-		var zero T
-
-		return zero, false
-	case val, ok := <-ch:
-		if !ok {
-			return val, false
-		}
-
-		return val, true
-	}
-}
-
 // RecvState is the state of a channel after receiving a value.
 type RecvState int
 

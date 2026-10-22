@@ -13,11 +13,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func getBootTime() (time.Time, error) {
+func getBootTimeOffset() (time.Duration, error) {
 	timeval, err := unix.SysctlTimeval("kern.boottime")
 	if err != nil {
-		return time.Time{}, fmt.Errorf("could not get boot time: %w", err)
+		return 0, fmt.Errorf("could not get boot time: %w", err)
 	}
 
-	return time.Unix(timeval.Unix()), nil
+	return time.Until(time.Unix(timeval.Unix())), nil
 }

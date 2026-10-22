@@ -5,15 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/schema"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"github.com/cespare/xxhash"
 )
 
@@ -29,7 +29,7 @@ type columnDef struct {
 }
 
 type mgmt interface {
-	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 type Syncer struct {
@@ -41,7 +41,16 @@ type Syncer struct {
 	mappings map[string]schema.SchemaMapping
 	st       SampleType
 
+	// inflight serializes concurrent schema work for the same entity without
+	// blocking other tables behind a database-wide lock.
+	inflightMu sync.Mutex
+	inflight   map[string]*sync.Mutex
+
 	tables map[string]struct{}
+
+	// streamingMu serializes enabling streaming ingestion policies.  streamingPolicies records the result per table.
+	streamingMu       sync.Mutex
+	streamingPolicies map[string]streamingPolicyState
 
 	defaultMapping schema.SchemaMapping
 	cancelFn       context.CancelFunc
@@ -65,11 +74,12 @@ func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMappi
 	return &Syncer{
 		KustoCli: kustoCli,
 
-		database:       database,
-		defaultMapping: defaultMapping,
-		mappings:       make(map[string]schema.SchemaMapping),
-		st:             st,
-		tables:         make(map[string]struct{}),
+		database:          database,
+		defaultMapping:    defaultMapping,
+		mappings:          make(map[string]schema.SchemaMapping),
+		st:                st,
+		tables:            make(map[string]struct{}),
+		streamingPolicies: make(map[string]streamingPolicyState),
 	}
 }
 
@@ -82,10 +92,6 @@ func (s *Syncer) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.ensureIngestionPolicy(ctx); err != nil {
-		return err
-	}
-
 	ctx, s.cancelFn = context.WithCancel(ctx)
 
 	s.wg.Add(1)
@@ -95,58 +101,71 @@ func (s *Syncer) Open(ctx context.Context) error {
 }
 
 func (s *Syncer) Close() error {
-	s.cancelFn()
+	// cancelFn is nil if Open failed or was never called.
+	if s.cancelFn != nil {
+		s.cancelFn()
+	}
 	s.wg.Wait()
 	return nil
 }
 
 func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 	query := fmt.Sprintf(".show database %s ingestion mappings", s.database)
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(query)
-	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	stmt := kql.New("").AddUnsafe(query)
+	ds, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return err
 	}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return fmt.Errorf("failed to load ingestion mappings: missing primary result table")
+	}
 
-	for {
-		row, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			return nil
-		} else if err1 != nil {
-			return err1
-		} else if err2 != nil {
-			return err2
-		}
-
+	for _, row := range table.Rows() {
 		var v IngestionMapping
 		if err := row.ToStruct(&v); err != nil {
-			return err
+			return fmt.Errorf("failed to load ingestion mappings: %w", err)
 		}
 
 		var sm schema.SchemaMapping
 		if err := json.Unmarshal([]byte(v.Mapping), &sm); err != nil {
-			return err
+			return fmt.Errorf("failed to load ingestion mappings: %w", err)
 		}
 
 		logger.Infof("Loaded %s ingestion mapping %s", s.database, v.Name)
-
 		s.mappings[v.Name] = sm
 	}
+
+	return nil
 }
 
 // EnsureDefaultTable creates a table with the default schema mapping if it does not exist.
-func (s *Syncer) EnsureDefaultTable(table string) error {
-	return s.EnsureTable(table, s.defaultMapping)
+func (s *Syncer) EnsureDefaultTable(ctx context.Context, table string) error {
+	return s.EnsureTable(ctx, table, s.defaultMapping)
 }
 
 // EnsureTable creates a table with the specified schema mapping if it does not exist.
-func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
+func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.SchemaMapping) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.RLock()
-	if _, ok := s.tables[table]; ok {
-		s.mu.RUnlock()
+	_, exists := s.tables[table]
+	s.mu.RUnlock()
+	if exists {
 		return nil
 	}
+
+	entry := s.mappingLock("table:" + table)
+	entry.Lock()
+	defer entry.Unlock()
+
+	s.mu.RLock()
+	_, exists = s.tables[table]
 	s.mu.RUnlock()
+	if exists {
+		return nil
+	}
 
 	var columns []columnDef
 
@@ -174,22 +193,11 @@ func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 		logger.Debugf("Creating table %s %s", table, sb.String())
 	}
 
-	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
+	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+	_, err := s.KustoCli.Mgmt(ctx, s.database, showStmt)
 	if err != nil {
 		return err
-	}
-
-	for {
-		_, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			break
-		} else if err1 != nil {
-			return err1
-		} else if err2 != nil {
-			return err2
-		}
 	}
 
 	s.mu.Lock()
@@ -199,13 +207,54 @@ func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 	return nil
 }
 
-// EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
-func (s *Syncer) EnsureDefaultMapping(table string) (string, error) {
-	return s.EnsureMapping(table, s.defaultMapping)
+// streamingPolicyRetryInterval is how long a failure to enable a table's streaming ingestion policy is cached before
+// it is retried.
+const streamingPolicyRetryInterval = 10 * time.Minute
+
+type streamingPolicyState struct {
+	enabled bool
+	err     error
+	retryAt time.Time
+}
+
+// EnsureStreamingPolicy enables the streaming ingestion policy on table if it has not been enabled by this syncer.
+// Failures are cached for streamingPolicyRetryInterval so a missing permission does not issue a management command
+// for every batch.  A failure does not necessarily prevent streaming ingestion since the policy may be enabled at the
+// database level.
+func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error {
+	s.streamingMu.Lock()
+	defer s.streamingMu.Unlock()
+
+	state := s.streamingPolicies[table]
+	if state.enabled {
+		return nil
+	}
+	if state.err != nil && time.Now().Before(state.retryAt) {
+		return state.err
+	}
+
+	stmt := kql.New(".alter table ").AddTable(table).AddLiteral(" policy streamingingestion enable")
+	if _, err := s.KustoCli.Mgmt(ctx, s.database, stmt); err != nil {
+		err = fmt.Errorf("enable streaming ingestion policy for %s.%s: %w", s.database, table, err)
+		s.streamingPolicies[table] = streamingPolicyState{err: err, retryAt: time.Now().Add(streamingPolicyRetryInterval)}
+		return err
+	}
+
+	logger.Infof("Enabled streaming ingestion policy for %s.%s", s.database, table)
+	s.streamingPolicies[table] = streamingPolicyState{enabled: true}
+	return nil
 }
 
 // EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
-func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (string, error) {
+func (s *Syncer) EnsureDefaultMapping(ctx context.Context, table string) (string, error) {
+	return s.EnsureMapping(ctx, table, s.defaultMapping)
+}
+
+// EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
+func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema.SchemaMapping) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var columns []columnDef
 
 	for _, v := range mapping {
@@ -224,10 +273,22 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 
 	name := fmt.Sprintf("%s_%d", string(kind), xxhash.Sum64(b.Bytes()))
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	_, exists := s.mappings[name]
+	s.mu.RUnlock()
+	if exists {
+		return name, nil
+	}
 
-	if _, ok := s.mappings[name]; ok {
+	// Serialize only callers racing on this same mapping.
+	entry := s.mappingLock(name)
+	entry.Lock()
+	defer entry.Unlock()
+
+	s.mu.RLock()
+	_, exists = s.mappings[name]
+	s.mu.RUnlock()
+	if exists {
 		return name, nil
 	}
 
@@ -247,25 +308,31 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 
 	logger.Infof("Creating ingestion mapping for table %s %s", table, sb.String())
 
-	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
+	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
-	if err != nil {
+	if _, err = s.KustoCli.Mgmt(ctx, s.database, showStmt); err != nil {
 		return "", err
 	}
 
-	for {
-		_, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			break
-		} else if err1 != nil {
-			return "", err1
-		} else if err2 != nil {
-			return "", err2
-		}
-	}
+	s.mu.Lock()
 	s.mappings[name] = mapping
+	s.mu.Unlock()
 	return name, nil
+}
+
+// mappingLock returns the lock guarding a single mapping name.
+func (s *Syncer) mappingLock(name string) *sync.Mutex {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if s.inflight == nil {
+		s.inflight = make(map[string]*sync.Mutex)
+	}
+	entry, ok := s.inflight[name]
+	if !ok {
+		entry = &sync.Mutex{}
+		s.inflight[name] = entry
+	}
+	return entry
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
@@ -304,10 +371,16 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			name: "prom_rate",
 			body: `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
 		T
-		| invoke prom_increase(interval=interval)
-		| extend Value=Value/((Timestamp-prev(Timestamp))/1s)
-		| where isnotnull(Value)
-		| where isnan(Value) == false}`},
+		| where isnan(Value) == false
+		| partition hint.strategy=shuffle by SeriesId (
+			order by Timestamp asc
+			| extend prevVal=prev(Value), prevTs=prev(Timestamp)
+			| extend sampleGap=(Timestamp-prevTs)/1s
+			| extend inc=case(isnull(prevVal), real(null), Value-prevVal < 0, next(Value)-Value, Value-prevVal)
+			| extend Value=iff(sampleGap > 0, inc/sampleGap, real(null))
+			| project Timestamp, SeriesId, Labels, Value
+		)
+		| where isfinite(Value)}`},
 
 		{
 
@@ -324,32 +397,11 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
 			| project-away prevVal, diff, h
 		)}`},
-		{
-
-			name: "CountCardinality",
-			body: `.create-or-alter function CountCardinality () {
-				union withsource=table *
-				| where Timestamp >= ago(1h) and Timestamp < ago(5m)
-				| summarize Value=toreal(dcount(SeriesId)) by table
-				| extend SeriesId=hash_xxhash64(table)
-				| extend Timestamp=bin(now(), 1m)
-				| extend Labels=bag_pack_columns(table)
-				| project Timestamp, SeriesId, Labels, Value
-		}`},
-	}
-
-	// This table is used to store the cardinality of all series in the database.  It's updated by the CountCardinality function
-	// but we can't create the function unless a table exists.
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-		".create table AdxmonIngestorTableCardinalityCount (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real)")
-	_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
-		return err
 	}
 
 	for _, fn := range functions {
 		logger.Infof("Creating function %s", fn.name)
-		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
+		stmt := kql.New("").AddUnsafe(fn.body)
 		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 		if err != nil {
 			return err
@@ -359,45 +411,6 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 }
 
 func (s *Syncer) ensureOTLPLogsFunctions(ctx context.Context) error {
-	return nil
-}
-
-func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
-	type ingestionPolicy struct {
-		MaximumBatchingTimeSpan string `json:"MaximumBatchingTimeSpan"`
-		MaximumNumberOfItems    int    `json:"MaximumNumberOfItems"`
-		MaximumRawDataSizeMB    int    `json:"MaximumRawDataSizeMB"`
-	}
-
-	p := &ingestionPolicy{
-		MaximumBatchingTimeSpan: "00:00:30",
-		MaximumNumberOfItems:    500,
-		MaximumRawDataSizeMB:    1000,
-	}
-
-	// Optimize logs for throughput instead of latency
-	if s.st == OTLPLogs {
-		p = &ingestionPolicy{
-			MaximumBatchingTimeSpan: "00:05:00",
-			MaximumNumberOfItems:    500,
-			MaximumRawDataSizeMB:    4096,
-		}
-	}
-
-	b, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-
-	logger.Infof("Creating ingestion batching policy: Database=%s MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
-		s.database, p.MaximumBatchingTimeSpan, p.MaximumNumberOfItems, p.MaximumRawDataSizeMB)
-
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-		fmt.Sprintf(".alter-merge database %s policy ingestionbatching\n```%s\n```", s.database, string(b)))
-	_, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -457,27 +470,24 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 }
 
 func (s *Syncer) loadTables(ctx context.Context) ([]Table, error) {
-	stmt := kusto.NewStmt(".show tables | project TableName")
-	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	stmt := kql.New(".show tables | project TableName")
+	ds, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return nil, err
 	}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return nil, fmt.Errorf("failed to load tables: missing primary result table")
+	}
 
-	var tables []Table
-	for {
-		row, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			return tables, nil
-		} else if err1 != nil {
-			return tables, err1
-		} else if err2 != nil {
-			return tables, err2
-		}
-
+	var out []Table
+	for _, row := range table.Rows() {
 		var v Table
 		if err := row.ToStruct(&v); err != nil {
-			return tables, err
+			return nil, fmt.Errorf("failed to load tables: %w", err)
 		}
-		tables = append(tables, v)
+		out = append(out, v)
 	}
+
+	return out, nil
 }

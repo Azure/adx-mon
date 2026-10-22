@@ -36,18 +36,55 @@ Prometheus metric names will be transformed from `snake_case` to `TitleCase`. As
 
 ```yaml
 adx-mon/scrape: "true"
-adx-mon/port: "8080"
+adx-mon/port: "8080"      # Can use numeric ports
+adx-mon/path: "/metrics"
+```
+
+To override the collector's default scrape interval for a pod, add `adx-mon/scrape-interval`:
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/port: "metrics"
+adx-mon/scrape-interval: "30s"
+```
+
+The interval applies to every metrics endpoint discovered on that pod, including endpoints in `adx-mon/targets`.
+Use a positive Go duration such as `500ms`, `15s`, or `2m`. A missing or empty annotation uses the collector's
+global `prometheus-scrape.scrape-interval` (configured in seconds). Invalid, zero, or negative durations log a warning
+and use that global default. Updates to the annotation take effect when pod discovery observes them; removing it
+restores the default interval.
+
+You can also use **named ports** for better readability:
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/port: "metrics"   # Use the named port from your container spec
+adx-mon/path: "/metrics"
+```
+
+For multiple endpoints, use the `targets` annotation:
+
+```yaml
+adx-mon/scrape: "true"
+# Mix named and numeric ports as needed
+adx-mon/targets: "/metrics:metrics,/health:9000"
+```
+
+You can also scrape HTTPS endpoints by setting the `scheme` annotation. Authentication uses the service token from within the Collector pod.
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/scheme: "https"
 adx-mon/path: "/metrics"
 ```
 
 ### Logs
 
-ADX-Mon collector supports discovering logs from pods. To configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`.
+ADX-Mon collector supports discovering logs from pods. To enable log collection and configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`. You do not need `adx-mon/scrape` for logs; add it only if you also want to scrape the pod's metrics endpoints.
 
 By default, collector parses each log line as plaintext, but an optional list of log-parsers can be defined as a comma separated list. It currently supports json-formatted log lines in addition to plaintext.
 
 ```yaml
-adx-mon/scrape: "true"
 adx-mon/log-destination: "Logs:Collector"
 adx-mon/log-parsers: json
 ```
@@ -95,6 +132,8 @@ Any ADX compatible visualization tool can be used to visualize collected telemet
 
 As part of the quick-start script, one can set up an Azure Managed Grafana (AMG) instance. After configuring ADX-Mon on the AKS cluster the script will prompt you about it, and you can provide the name of an existing Grafana instance you have access to or decide to create one.
 You will also be prompted about importing pre-built dashboards to monitor the AKS cluster.
+
+Before configuring data sources or importing dashboards, the script checks the Grafana API up to 30 times, waiting 30 seconds between attempts. This allows a newly provisioned instance to become available. Data-source creation and each dashboard import are retried up to three times, with 10 seconds between attempts. If retries are exhausted, the script reports the error and exits unsuccessfully rather than reporting a successful setup.
 
 > Note: The script tries to create the AMG instance in the same resource group as the ADX cluster. 
 

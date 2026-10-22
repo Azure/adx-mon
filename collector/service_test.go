@@ -2,10 +2,24 @@ package collector
 
 import (
 	"context"
+	"errors"
+	stdhttp "net/http"
+	"net/http/httptest"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
+	"github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/otlp"
+	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/storage"
+	connect "github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,266 +27,372 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestRequestTimeoutInterceptor(t *testing.T) {
+	interceptor := requestTimeoutInterceptor(10 * time.Millisecond)
+	wrapped := interceptor.WrapUnary(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	_, err := wrapped(context.Background(), nil)
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.True(t, errors.As(err, &connectErr))
+	require.Equal(t, connect.CodeDeadlineExceeded, connectErr.Code())
+}
+
+func TestHTTPWriteTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		enablePprof bool
+		handlers    []*http.HttpHandler
+		want        time.Duration
+	}{
+		{name: "default", want: 30 * time.Second},
+		{name: "pprof", enablePprof: true, want: 60 * time.Second},
+		{
+			name:     "short endpoint retains default",
+			handlers: []*http.HttpHandler{{Timeout: 15 * time.Second}},
+			want:     30 * time.Second,
+		},
+		{
+			name: "longest endpoint plus grace",
+			handlers: []*http.HttpHandler{
+				{Timeout: 45 * time.Second},
+				{Timeout: 5 * time.Minute},
+			},
+			want: 5*time.Minute + httpWriteTimeoutGrace,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, httpWriteTimeout(tt.enablePprof, tt.handlers))
+		})
+	}
+}
+
+func TestRequestWriteTimeout(t *testing.T) {
+	require.Equal(t, 30*time.Second, requestWriteTimeout(30*time.Second, 15*time.Second))
+	require.Equal(t, 5*time.Minute+httpWriteTimeoutGrace, requestWriteTimeout(30*time.Second, 5*time.Minute))
+}
+
 const MetricListenAddr = ":9090"
 
+var serviceBackends = []struct {
+	name    string
+	backend storage.Backend
+}{
+	{name: "adx", backend: storage.BackendADX},
+	{name: "clickhouse", backend: storage.BackendClickHouse},
+}
+
+func runCollectorBackends(t *testing.T, fn func(t *testing.T, backend storage.Backend)) {
+	t.Helper()
+	for _, tt := range serviceBackends {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			fn(t, tt.backend)
+		})
+	}
+}
+
 func TestService_Open(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset()
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			ScrapeInterval: 10 * time.Second,
-		},
-		DisableGzip: true,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset()
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				ScrapeInterval: 10 * time.Second,
+			},
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 0, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 0, len(s.scraper.Targets()))
 }
 
 func TestService_Open_Static(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset()
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset()
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+					{Addr: "http://localhost:9090/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 2, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_NoMatchingHost(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 1, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 1, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_Matching(t *testing.T) {
-	dir := t.TempDir()
-	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
-	pod.Annotations = map[string]string{
-		"adx-mon/scrape": "true",
-	}
-	pod.Status.PodIP = "172.31.1.18"
-	pod.Spec.Containers = []v1.Container{
-		{
-			Name: "container",
-			Ports: []v1.ContainerPort{
-				{
-					ContainerPort: 9000,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+		pod.Annotations = map[string]string{
+			"adx-mon/scrape":          "true",
+			"adx-mon/scrape-interval": "45s",
+		}
+		pod.Status.PodIP = "172.31.1.18"
+		pod.Spec.Containers = []v1.Container{
+			{
+				Name: "container",
+				Ports: []v1.ContainerPort{
+					{
+						ContainerPort: 9000,
+					},
 				},
 			},
-		},
-	}
-	cli := fake.NewSimpleClientset(pod)
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{
-					Addr:      "http://localhost:8080/metrics",
-					Namespace: "namespace",
-					Pod:       "pod",
-					Container: "container",
+		}
+		cli := fake.NewSimpleClientset(pod)
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{
+						Addr:      "http://localhost:8080/metrics",
+						Namespace: "namespace",
+						Pod:       "pod",
+						Container: "container",
+					},
 				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		targets := s.scraper.Targets()
+		require.Equal(t, 2, len(targets))
+		require.Equal(t, "http://172.31.1.18:9000/metrics", targets[0].Addr)
+		require.Equal(t, "container", targets[0].Container)
+		require.Equal(t, "default", targets[0].Namespace)
+		require.Equal(t, 45*time.Second, targets[0].ScrapeInterval)
+
+		require.Equal(t, "http://localhost:8080/metrics", targets[1].Addr)
+		require.Equal(t, "namespace", targets[1].Namespace)
+		require.Equal(t, "pod", targets[1].Pod)
+		require.Equal(t, "container", targets[1].Container)
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	targets := s.scraper.Targets()
-	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[0].Addr)
-	require.Equal(t, "container", targets[0].Container)
-	require.Equal(t, "default", targets[0].Namespace)
-
-	require.Equal(t, "http://localhost:8080/metrics", targets[1].Addr)
-	require.Equal(t, "namespace", targets[1].Namespace)
-	require.Equal(t, "pod", targets[1].Pod)
-	require.Equal(t, "container", targets[1].Container)
 
 }
 
 func TestService_Open_HostPort(t *testing.T) {
-	dir := t.TempDir()
-	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
-	pod.Annotations = map[string]string{
-		"adx-mon/scrape": "true",
-		"adx-mon/port":   "10254",
-	}
-	pod.Status.PodIP = "172.31.1.18"
-	pod.Spec.Containers = []v1.Container{
-		{
-			Name: "container",
-			Ports: []v1.ContainerPort{
-				{
-					ContainerPort: 9000,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+		pod.Annotations = map[string]string{
+			"adx-mon/scrape": "true",
+			"adx-mon/port":   "10254",
+		}
+		pod.Status.PodIP = "172.31.1.18"
+		pod.Spec.Containers = []v1.Container{
+			{
+				Name: "container",
+				Ports: []v1.ContainerPort{
+					{
+						ContainerPort: 9000,
+					},
 				},
-			},
-			ReadinessProbe: &v1.Probe{
-				ProbeHandler: v1.ProbeHandler{
-					HTTPGet: &v1.HTTPGetAction{
-						Port: intstr.FromInt(10254),
+				ReadinessProbe: &v1.Probe{
+					ProbeHandler: v1.ProbeHandler{
+						HTTPGet: &v1.HTTPGetAction{
+							Port: intstr.FromInt(10254),
+						},
 					},
 				},
 			},
-		},
-	}
-	cli := fake.NewSimpleClientset(pod)
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-		},
-		DisableGzip: true,
+		}
+		cli := fake.NewSimpleClientset(pod)
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+			},
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		targets := s.scraper.Targets()
+		require.Equal(t, 1, len(targets))
+		require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
+		require.Equal(t, "default", targets[0].Namespace)
+		require.Equal(t, "pod1", targets[0].Pod)
+		require.Equal(t, "container", targets[0].Container)
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	targets := s.scraper.Targets()
-	require.Equal(t, 1, len(targets))
-	require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
-	require.Equal(t, "default", targets[0].Namespace)
-	require.Equal(t, "pod1", targets[0].Pod)
-	require.Equal(t, "container", targets[0].Container)
 }
 
 func TestService_Open_MatchingPort(t *testing.T) {
-	dir := t.TempDir()
-	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
-	pod.Annotations = map[string]string{
-		"adx-mon/scrape": "true",
-		"adx-mon/port":   "8080",
-	}
-	pod.Spec.Containers = []v1.Container{
-		{
-			Name: "container",
-			Ports: []v1.ContainerPort{
-				{
-					ContainerPort: 8080,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+		pod.Annotations = map[string]string{
+			"adx-mon/scrape": "true",
+			"adx-mon/port":   "8080",
+		}
+		pod.Spec.Containers = []v1.Container{
+			{
+				Name: "container",
+				Ports: []v1.ContainerPort{
+					{
+						ContainerPort: 8080,
+					},
 				},
 			},
-		},
-	}
-	pod.Status.PodIP = "172.31.1.18"
-	cli := fake.NewSimpleClientset(pod)
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+		}
+		pod.Status.PodIP = "172.31.1.18"
+		cli := fake.NewSimpleClientset(pod)
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		targets := s.scraper.Targets()
+		require.Equal(t, 2, len(targets))
+		require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
+		require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
+		require.Equal(t, "container", targets[1].Container)
+		require.Equal(t, "default", targets[1].Namespace)
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	targets := s.scraper.Targets()
-	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
-	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
-	require.Equal(t, "container", targets[1].Container)
-	require.Equal(t, "default", targets[1].Namespace)
 }
 
 func TestMakeTargets(t *testing.T) {
@@ -405,6 +525,162 @@ func TestMakeTargetsFromListNegative(t *testing.T) {
 	require.Equal(t, 0, len(targets))
 }
 
+func TestMakeTargets_NamedPort(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "metrics", // Use named port instead of numeric
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics", // Named port
+					ContainerPort: 8080,
+				},
+				{
+					Name:          "health", // Another named port
+					ContainerPort: 9000,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 1, len(targets))
+	require.Equal(t, "http://1.2.3.4:8080/metrics", targets[0].Addr)
+	require.Equal(t, "foo", targets[0].Namespace)
+	require.Equal(t, "bar", targets[0].Pod)
+	require.Equal(t, "container", targets[0].Container)
+}
+
+func TestMakeTargets_NamedPortInTargets(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape":  "true",
+		"adx-mon/targets": "/metrics:metrics,/health:health", // Use named ports
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics",
+					ContainerPort: 8080,
+				},
+				{
+					Name:          "health",
+					ContainerPort: 9000,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 2, len(targets))
+
+	// Sort by port for consistent testing
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Addr < targets[j].Addr
+	})
+
+	require.Equal(t, "http://1.2.3.4:8080/metrics", targets[0].Addr)
+	require.Equal(t, "http://1.2.3.4:9000/health", targets[1].Addr)
+}
+
+func TestMakeTargets_MixedNamedAndNumericPorts(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape":  "true",
+		"adx-mon/targets": "/metrics:metrics,/health:9001", // Mix named and numeric ports
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics",
+					ContainerPort: 8080,
+				},
+				{
+					ContainerPort: 9001, // No name for this port
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 2, len(targets))
+
+	// Sort by port for consistent testing
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Addr < targets[j].Addr
+	})
+
+	require.Equal(t, "http://1.2.3.4:8080/metrics", targets[0].Addr)
+	require.Equal(t, "http://1.2.3.4:9001/health", targets[1].Addr)
+}
+
+func TestMakeTargets_NamedPortNotFound(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "nonexistent", // Named port that doesn't exist
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics",
+					ContainerPort: 8080,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 0, len(targets)) // Should not find any targets
+}
+
+func TestAddTargetFromMap_NamedPort(t *testing.T) {
+	targetMap := map[string]string{
+		"metrics": "/metrics",
+		"8080":    "/health",
+	}
+
+	cp := &v1.ContainerPort{
+		Name:          "metrics",
+		ContainerPort: 9090,
+	}
+
+	// Test named port resolution
+	target, added := addTargetFromMap("1.2.3.4", "http", "metrics", "namespace", "pod", "container", targetMap, cp)
+	require.True(t, added)
+	require.Equal(t, "http://1.2.3.4:9090/metrics", target.Addr) // Should resolve to numeric port
+	require.Equal(t, "namespace", target.Namespace)
+	require.Equal(t, "pod", target.Pod)
+	require.Equal(t, "container", target.Container)
+
+	// targetMap should have the named port removed
+	_, exists := targetMap["metrics"]
+	require.False(t, exists)
+
+	// Test numeric port (unchanged behavior)
+	target2, added2 := addTargetFromMap("1.2.3.4", "http", "8080", "namespace", "pod", "container", targetMap, cp)
+	require.True(t, added2)
+	require.Equal(t, "http://1.2.3.4:8080/health", target2.Addr) // Should use numeric port as-is
+}
+
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
 	m := map[string]string{}
 	for k, v := range labels {
@@ -421,4 +697,98 @@ func fakePod(namespace, name string, labels map[string]string, node string) *v1.
 			NodeName: node,
 		},
 	}
+}
+
+func TestService_RealtimeTablesAreTransferredPromptly(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		transfers []string
+	)
+	server := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		mu.Lock()
+		transfers = append(transfers, r.URL.Query().Get("filename"))
+		mu.Unlock()
+		w.WriteHeader(stdhttp.StatusAccepted)
+	}))
+	defer server.Close()
+
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
+	require.NoError(t, err)
+
+	s, err := NewService(&ServiceOpts{
+		StorageDir:         t.TempDir(),
+		StorageBackend:     storage.BackendADX,
+		ListenAddr:         "127.0.0.1:0",
+		Endpoint:           server.URL,
+		InsecureSkipVerify: true,
+		DisableGzip:        true,
+		MaxSegmentAge:      time.Hour,
+		Realtime: &RealtimeOpts{
+			Policy:            policy,
+			MaxSegmentAge:     50 * time.Millisecond,
+			MaxBatchLatency:   50 * time.Millisecond,
+			MaxBatchBytes:     1024 * 1024,
+			ReservedDiskBytes: 1024 * 1024,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Open(context.Background()))
+	t.Cleanup(func() { s.Close() })
+
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{}}}
+	start := time.Now()
+	require.NoError(t, s.store.WriteOTLPLogs(context.Background(), "Logs", "Realtime", logs))
+	require.NoError(t, s.store.WriteOTLPLogs(context.Background(), "Logs", "Queued", logs))
+
+	// The realtime table is rotated, batched and transferred within its realtime latency rather than waiting for its
+	// queued max segment age, the 4MB minimum transfer size or the periodic scan.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(transfers) > 0
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Less(t, time.Since(start), 3*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, transfers, 1)
+	require.True(t, strings.HasPrefix(transfers[0], "Logs_Realtime_"), transfers[0])
+}
+
+// Admission replaces the store's disk checks, so the collector must give it the
+// realtime reservation or queued backlog can fill the reserved space.
+func TestService_AdmissionPreservesRealtimeDiskReservation(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
+	require.NoError(t, err)
+
+	const (
+		maxDiskUsage = 64 * 1024
+		reserved     = 32 * 1024
+	)
+	s, err := NewService(&ServiceOpts{
+		StorageDir:     t.TempDir(),
+		StorageBackend: storage.BackendADX,
+		ListenAddr:     "127.0.0.1:0",
+		Endpoint:       "https://127.0.0.1:1",
+		MaxSegmentSize: 1024,
+		MaxDiskUsage:   maxDiskUsage,
+		Realtime:       &RealtimeOpts{Policy: policy, ReservedDiskBytes: reserved},
+	})
+	require.NoError(t, err)
+	store := s.store.(*storage.LocalStore)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, store.Open(ctx))
+	defer store.Close()
+
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{
+		Value: &commonv1.AnyValue_StringValue{StringValue: strings.Repeat("a", 512)},
+	}}}}
+	var queuedErr error
+	for i := 0; i < 10000 && queuedErr == nil; i++ {
+		queuedErr = store.WriteOTLPLogs(ctx, "Logs", "Queued", logs)
+	}
+	require.ErrorIs(t, queuedErr, wal.ErrMaxDiskUsageExceeded)
+	require.LessOrEqual(t, store.Size(), int64(maxDiskUsage-reserved))
+	require.NoError(t, store.WriteOTLPLogs(ctx, "Logs", "Realtime", logs))
 }

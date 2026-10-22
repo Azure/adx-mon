@@ -171,13 +171,226 @@ func TestRequestTransformer_WalkLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			labels := make(map[string]string)
-			tt.transformer.WalkLabels(ts, func(k, v []byte) {
+			tt.transformer.WalkLabels(&prompb.WriteRequest{}, ts, func(k, v []byte) {
 				labels[string(k)] = string(v)
 			})
 			require.Equal(t, tt.expectedLabels, labels)
 		})
 	}
 
+}
+
+func TestRequestTransformer_TransformTimeSeries_DynamicLabeler(t *testing.T) {
+	dl := newFakeDynamicLabeler(map[string]string{"dyn_label": "dyn_value"})
+
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
+			{Name: []byte("__name__"), Value: []byte("cpu")},
+			{Name: []byte("region"), Value: []byte("eastus")},
+		},
+	}
+
+	f := &transform.RequestTransformer{DynamicLabeler: dl}
+
+	res := f.TransformTimeSeries(ts)
+
+	require.True(t, dl.appendNamesCalled, "expected AppendLabelNamesBytes to be called during init")
+	require.Equal(t, 1, dl.appendPromLabelsCalled, "expected AppendPromLabels to be called once")
+
+	val, ok := findLabelValue(res.Labels, "dyn_label")
+	require.True(t, ok)
+	require.Equal(t, "dyn_value", val)
+
+	region, ok := findLabelValue(res.Labels, "region")
+	require.True(t, ok)
+	require.Equal(t, "eastus", region)
+}
+
+func TestRequestTransformer_TransformWriteRequest_DynamicLabeler(t *testing.T) {
+	dl := newFakeDynamicLabeler(map[string]string{"dyn": "value"})
+
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}},
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("mem")}}},
+		},
+	}
+
+	f := &transform.RequestTransformer{DynamicLabeler: dl}
+
+	res := f.TransformWriteRequest(req)
+
+	require.Equal(t, 2, len(res.Timeseries))
+	require.True(t, dl.appendNamesCalled)
+	require.Equal(t, 2, dl.appendPromLabelsCalled)
+
+	for _, ts := range res.Timeseries {
+		val, ok := findLabelValue(ts.Labels, "dyn")
+		require.True(t, ok)
+		require.Equal(t, "value", val)
+	}
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_DynamicLabeler(t *testing.T) {
+	dl := newFakeDynamicLabeler(map[string]string{"dyn": "value"})
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}},
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("memory")}}},
+		},
+	}
+	transformer := &transform.RequestTransformer{DynamicLabeler: dl}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Len(t, result.Timeseries, 2)
+	require.Zero(t, dl.appendPromLabelsCalled, "the lazy path must not append labels to individual series")
+	value, found := findLabelValue(result.CommonLabels, "dyn")
+	require.True(t, found)
+	require.Equal(t, "value", value)
+	for _, series := range result.Timeseries {
+		_, found := findLabelValue(series.Labels, "dyn")
+		require.False(t, found)
+	}
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_AddLabels(t *testing.T) {
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("cpu")},
+				{Name: []byte("Host"), Value: []byte("source-host")},
+				{Name: []byte("region"), Value: []byte("eastus")},
+			}},
+			{Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("memory")},
+				{Name: []byte("Host"), Value: []byte("source-host")},
+				{Name: []byte("region"), Value: []byte("westus")},
+			}},
+		},
+	}
+	transformer := &transform.RequestTransformer{AddLabels: map[string]string{
+		"adxmon_database": "Metrics",
+		"Host":            "collector-host",
+	}}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Len(t, result.CommonLabels, 2)
+	require.Equal(t, "collector-host", mustFindLabelValue(t, result.CommonLabels, "Host"))
+	require.Equal(t, "Metrics", mustFindLabelValue(t, result.CommonLabels, "adxmon_database"))
+	for _, series := range result.Timeseries {
+		_, found := findLabelValue(series.Labels, "Host")
+		require.False(t, found)
+
+		labels := make(map[string]string)
+		for label := range result.Labels(series) {
+			labels[string(label.Name)] = string(label.Value)
+		}
+		require.Equal(t, "collector-host", labels["Host"])
+		require.Equal(t, "Metrics", labels["adxmon_database"])
+	}
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_PerMetricFilter(t *testing.T) {
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}},
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("memory")}}},
+		},
+		CommonLabels: []*prompb.Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+	}
+	transformer := &transform.RequestTransformer{DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+		regexp.MustCompile("^cpu$"): regexp.MustCompile("^Environment$"),
+	}}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Equal(t, []string{"__name__"}, effectiveLabelNames(result, result.Timeseries[0]))
+	require.Equal(t, []string{"__name__", "Environment"}, effectiveLabelNames(result, result.Timeseries[1]))
+	require.Equal(t, "prod", string(result.CommonLabels[0].Value), "the shared labels must remain immutable")
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_ReusesFilterPolicy(t *testing.T) {
+	transformer := &transform.RequestTransformer{DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+		regexp.MustCompile("^cpu$"): regexp.MustCompile("^Environment$"),
+	}}
+	newRequest := func() *prompb.WriteRequest {
+		return &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{{
+			Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+		}}}
+	}
+
+	first := transformer.TransformWriteRequestWithCommonLabels(newRequest())
+	second := transformer.TransformWriteRequestWithCommonLabels(newRequest())
+
+	require.NotNil(t, first.LabelFilter)
+	require.Same(t, first.LabelFilter, second.LabelFilter)
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_UsesAddedDatabaseForAllowList(t *testing.T) {
+	req := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{{
+		Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+	}}}
+	transformer := &transform.RequestTransformer{
+		AddLabels:       map[string]string{"adxmon_database": "Metrics"},
+		AllowedDatabase: map[string]struct{}{"Metrics": {}},
+	}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Len(t, result.Timeseries, 1)
+	require.Equal(t, "Metrics", mustFindLabelValue(t, result.CommonLabels, "adxmon_database"))
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_MatchesMaterializedOutput(t *testing.T) {
+	newTransformer := func() *transform.RequestTransformer {
+		return &transform.RequestTransformer{
+			AddLabels: map[string]string{
+				"adxmon_database": "Metrics",
+				"Host":            "collector-host",
+			},
+			DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+				regexp.MustCompile("^cpu$"): regexp.MustCompile("^Environment$"),
+			},
+		}
+	}
+	newSeries := func(name string, includeEnvironment bool) *prompb.TimeSeries {
+		labels := []*prompb.Label{
+			{Name: []byte("__name__"), Value: []byte(name)},
+			{Name: []byte("Host"), Value: []byte("source-host")},
+			{Name: []byte("region"), Value: []byte("eastus")},
+		}
+		if includeEnvironment {
+			labels = append(labels, &prompb.Label{Name: []byte("Environment"), Value: []byte("prod")})
+		}
+		prompb.Sort(labels)
+		return &prompb.TimeSeries{
+			Labels:  labels,
+			Samples: []*prompb.Sample{{Timestamp: 1, Value: 1}},
+		}
+	}
+
+	materialized := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{
+		newSeries("cpu", true),
+		newSeries("memory", true),
+	}}
+	newTransformer().TransformWriteRequest(materialized)
+
+	lazy := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			newSeries("cpu", false),
+			newSeries("memory", false),
+		},
+		CommonLabels: []*prompb.Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+	}
+	newTransformer().TransformWriteRequestWithCommonLabels(lazy)
+
+	materializedBytes, err := materialized.Marshal()
+	require.NoError(t, err)
+	lazyBytes, err := lazy.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, materializedBytes, lazyBytes)
 }
 
 func TestRequestTransformer_TransformWriteRequest_DropLabels(t *testing.T) {
@@ -653,6 +866,61 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropL
 	require.Equal(t, []byte("3"), res.Timeseries[0].Labels[1].Value)
 }
 
+type fakeDynamicLabeler struct {
+	labels                 map[string]string
+	appendNamesCalled      bool
+	appendPromLabelsCalled int
+}
+
+func newFakeDynamicLabeler(labels map[string]string) *fakeDynamicLabeler {
+	return &fakeDynamicLabeler{labels: labels}
+}
+
+func (f *fakeDynamicLabeler) AppendLabelNamesBytes(names [][]byte) [][]byte {
+	f.appendNamesCalled = true
+	for k := range f.labels {
+		names = append(names, []byte(k))
+	}
+	return names
+}
+
+func (f *fakeDynamicLabeler) WalkLabels(callback func(key, value []byte)) {
+	for k, v := range f.labels {
+		callback([]byte(k), []byte(v))
+	}
+}
+
+func (f *fakeDynamicLabeler) AppendPromLabels(ts *prompb.TimeSeries) {
+	f.appendPromLabelsCalled++
+	for k, v := range f.labels {
+		ts.AppendLabel([]byte(k), []byte(v))
+	}
+}
+
+func findLabelValue(labels []*prompb.Label, key string) (string, bool) {
+	for _, l := range labels {
+		if string(l.Name) == key {
+			return string(l.Value), true
+		}
+	}
+	return "", false
+}
+
+func mustFindLabelValue(t *testing.T, labels []*prompb.Label, key string) string {
+	t.Helper()
+	value, found := findLabelValue(labels, key)
+	require.True(t, found, "label %q not found", key)
+	return value
+}
+
+func effectiveLabelNames(request *prompb.WriteRequest, series *prompb.TimeSeries) []string {
+	var names []string
+	for label := range request.Labels(series) {
+		names = append(names, string(label.Name))
+	}
+	return names
+}
+
 func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 	b.ReportAllocs()
 	f := &transform.RequestTransformer{
@@ -787,7 +1055,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.f.ShouldDropMetric(tt.args.v, tt.args.name); got != tt.want {
+			if got := tt.f.ShouldDropMetric(&prompb.WriteRequest{}, tt.args.v, tt.args.name); got != tt.want {
 				t.Errorf("RequestTransformer.ShouldDropMetric() = %v, want %v", got, tt.want)
 			}
 		})

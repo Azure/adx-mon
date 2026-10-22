@@ -8,13 +8,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"testing"
 	"time"
 
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -22,32 +26,68 @@ import (
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/davecgh/go-spew/spew"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSeriesKey(t *testing.T) {
 	tests := []struct {
-		Database []byte
-		Labels   []*prompb.Label
-		Expect   []byte
+		Database   []byte
+		TimeSeries *prompb.TimeSeries
+		Expect     []byte
 	}{
 		{
-			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0).Labels,
-			Expect: []byte("adxmetrics_Foo_0"),
+			TimeSeries: newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0),
+			Expect:     []byte("adxmetrics_Foo_0"),
 		},
 		{
-			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "OverrideDB"}, 0, 0).Labels,
-			Expect: []byte("OverrideDB_Foo_0"),
+			TimeSeries: newTimeSeries("foo", map[string]string{"adxmon_database": "OverrideDB"}, 0, 0),
+			Expect:     []byte("OverrideDB_Foo_0"),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.Expect), func(t *testing.T) {
 			b := make([]byte, 256)
-			key, err := storage.SegmentKey(b[:0], tt.Labels, 0)
+			key, err := segmentKey(b[:0], tt.TimeSeries, 0)
 			require.NoError(t, err)
 			require.Equal(t, string(tt.Expect), string(key))
 		})
 	}
+}
+
+func TestSeriesKeyWithCommonLabels(t *testing.T) {
+	series := &prompb.TimeSeries{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}}
+	request := &prompb.WriteRequest{
+		Timeseries:   []*prompb.TimeSeries{series},
+		CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("Metrics")}},
+	}
+
+	key, err := storage.SegmentKey(nil, request, series, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, "Metrics_Cpu_0", string(key))
+}
+
+func TestSeriesKeyWithCommonLabelsAndFilter(t *testing.T) {
+	series := &prompb.TimeSeries{
+		Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+	}
+	request := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{series},
+		CommonLabels: []*prompb.Label{
+			{Name: []byte("adxmon_database"), Value: []byte("Metrics")},
+			{Name: []byte("database_alias"), Value: []byte("ignored")},
+		},
+		LabelFilter: &prompb.LabelFilter{Drop: []prompb.LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^database_alias$"),
+		}}},
+	}
+
+	key, err := storage.SegmentKey(nil, request, series, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, "Metrics_Cpu_0", string(key))
 }
 
 func TestStore_Open(t *testing.T) {
@@ -59,6 +99,7 @@ func TestStore_Open(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -66,25 +107,28 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
-	key1, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key1, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
-	key2, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key2, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	path := w.Path()
 
@@ -107,15 +151,17 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 }
 
-func TestStore_WriteTimeSeries(t *testing.T) {
+func TestStore_Open_StartupOpenConcurrency(t *testing.T) {
 	b := make([]byte, 256)
 	database := "adxmetrics"
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
+		StorageDir:             dir,
+		SegmentMaxSize:         1024,
+		SegmentMaxAge:          time.Minute,
+		MaxDiskUsage:           1024 * 1024,
+		StartupOpenConcurrency: 10,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -123,129 +169,284 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
+
+	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
+	key1, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
+	w, err = s.GetWAL(ctx, key1)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
+
+	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
+	key2, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
+	w, err = s.GetWAL(ctx, key2)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	path := w.Path()
 
-	require.Equal(t, 1, s.WALCount())
+	require.Equal(t, 2, s.WALCount())
 	require.NoError(t, s.Close())
-
-	b, _ = os.ReadFile(path)
 
 	r, err := wal.NewSegmentReader(path)
 	require.NoError(t, err)
-	data, err := io.ReadAll(r)
+	_, err = io.ReadAll(r)
 	require.NoError(t, err)
-	require.Equal(t, "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n", string(data))
+
+	s = storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:             dir,
+		SegmentMaxSize:         1024,
+		SegmentMaxAge:          time.Minute,
+		StartupOpenConcurrency: 10,
+	})
+
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+	require.Equal(t, 2, s.WALCount())
+}
+
+func TestStore_WriteTimeSeries(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend storage.Backend
+	}{
+		{
+			name:    "adx",
+			backend: storage.BackendADX,
+		},
+		{
+			name:    "clickhouse",
+			backend: storage.BackendClickHouse,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database := "adxmetrics"
+			ctx := context.Background()
+
+			s := storage.NewLocalStore(storage.StoreOpts{
+				StorageDir:     dir,
+				SegmentMaxSize: 1024,
+				SegmentMaxAge:  time.Minute,
+				MaxDiskUsage:   1024 * 1024,
+				Backend:        tt.backend,
+			})
+
+			require.NoError(t, s.Open(context.Background()))
+			require.Equal(t, 0, s.WALCount())
+
+			ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
+			keyBuf := make([]byte, 256)
+			key, err := segmentKey(keyBuf[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
+			require.NoError(t, err)
+
+			w, err := s.GetWAL(ctx, key)
+			require.NoError(t, err)
+			require.NotNil(t, w)
+
+			require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
+
+			path := w.Path()
+
+			require.Equal(t, 1, s.WALCount())
+			require.NoError(t, s.Close())
+
+			r, err := wal.NewSegmentReader(path)
+			require.NoError(t, err)
+			data, err := io.ReadAll(r)
+			require.NoError(t, err)
+
+			expected := "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n"
+			require.Equal(t, expected, string(data))
+		})
+	}
 }
 
 func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
-	b := make([]byte, 256)
 	logger.SetLevel(slog.LevelDebug)
-	database := "adxlogs"
-	ctx := context.Background()
-	dir := t.TempDir()
-	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
-	})
+	tests := []struct {
+		name    string
+		backend storage.Backend
+	}{
+		{name: "adx", backend: storage.BackendADX},
+		{name: "clickhouse", backend: storage.BackendClickHouse},
+	}
 
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-	require.Equal(t, 0, s.WALCount())
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			b := make([]byte, 256)
+			database := "adxlogs"
+			ctx := context.Background()
+			dir := t.TempDir()
+			s := storage.NewLocalStore(storage.StoreOpts{
+				StorageDir:     dir,
+				SegmentMaxSize: 1024,
+				SegmentMaxAge:  time.Minute,
+				MaxDiskUsage:   1024 * 1024,
+				Backend:        tt.backend,
+			})
 
-	require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{
-		Logs: make([]*logsv1.LogRecord, 1),
-	}))
-	time.Sleep(200 * time.Millisecond)
-	require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{}))
+			require.NoError(t, s.Open(context.Background()))
+			t.Cleanup(func() {
+				if s != nil {
+					s.Close()
+				}
+			})
+			require.Equal(t, 0, s.WALCount())
 
-	key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
-	w, err := s.GetWAL(ctx, key)
-	require.NoError(t, err)
-	require.NotNil(t, w)
+			require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{
+				Logs: make([]*logsv1.LogRecord, 1),
+			}))
+			time.Sleep(200 * time.Millisecond)
+			require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{}))
 
-	path := w.Path()
+			key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
+			w, err := s.GetWAL(ctx, key)
+			require.NoError(t, err)
+			require.NotNil(t, w)
 
-	require.Equal(t, 1, s.WALCount())
-	require.NoError(t, s.Close())
+			path := w.Path()
 
-	f, err := os.Open(path)
-	require.NoError(t, err)
-	defer f.Close()
-	b, _ = os.ReadFile(path)
+			require.Equal(t, 1, s.WALCount())
+			require.NoError(t, s.Close())
+			s = nil
 
-	iter, err := wal.NewSegmentIterator(f)
-	require.NoError(t, err)
-	n, err := iter.Verify()
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
+			f, err := os.Open(path)
+			require.NoError(t, err)
+			defer f.Close()
 
-	r, err := wal.NewSegmentReader(path)
-	require.NoError(t, err)
-	data, err := io.ReadAll(r)
-	require.NoError(t, err)
-	spew.Dump(data)
+			iter, err := wal.NewSegmentIterator(f)
+			require.NoError(t, err)
+			n, err := iter.Verify()
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			r, err := wal.NewSegmentReader(path)
+			require.NoError(t, err)
+			data, err := io.ReadAll(r)
+			require.NoError(t, err)
+			spew.Dump(data)
+		})
+	}
 }
 
 func TestStore_WriteNativeLogs_Empty(t *testing.T) {
-	b := make([]byte, 256)
 	logger.SetLevel(slog.LevelDebug)
-	database := "adxlogs"
-	ctx := context.Background()
+	tests := []struct {
+		name    string
+		backend storage.Backend
+	}{
+		{name: "adx", backend: storage.BackendADX},
+		{name: "clickhouse", backend: storage.BackendClickHouse},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			b := make([]byte, 256)
+			database := "adxlogs"
+			ctx := context.Background()
+			dir := t.TempDir()
+			s := storage.NewLocalStore(storage.StoreOpts{
+				StorageDir:     dir,
+				SegmentMaxSize: 1024,
+				SegmentMaxAge:  time.Minute,
+				MaxDiskUsage:   1024 * 1024,
+				Backend:        tt.backend,
+			})
+
+			require.NoError(t, s.Open(context.Background()))
+			t.Cleanup(func() {
+				if s != nil {
+					s.Close()
+				}
+			})
+			require.Equal(t, 0, s.WALCount())
+
+			log := types.NewLog()
+			log.SetAttributeValue(types.AttributeDatabaseName, database)
+			log.SetAttributeValue(types.AttributeTableName, "foo")
+
+			require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
+				Logs: []*types.Log{log},
+			}))
+			time.Sleep(200 * time.Millisecond)
+			require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
+
+			key := fmt.Appendf(b[:0], "%s_%s_%s", database, "foo", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
+			w, err := s.GetWAL(ctx, key)
+			require.NoError(t, err)
+			require.NotNil(t, w)
+
+			path := w.Path()
+
+			require.Equal(t, 1, s.WALCount())
+			require.NoError(t, s.Close())
+			s = nil
+
+			f, err := os.Open(path)
+			require.NoError(t, err)
+			defer f.Close()
+
+			iter, err := wal.NewSegmentIterator(f)
+			require.NoError(t, err)
+			n, err := iter.Verify()
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			r, err := wal.NewSegmentReader(path)
+			require.NoError(t, err)
+			data, err := io.ReadAll(r)
+			require.NoError(t, err)
+			spew.Dump(data)
+		})
+	}
+}
+
+func TestStore_WriteNativeLogs_DropsLogsWithoutDestination(t *testing.T) {
+	metrics.InvalidLogsDropped.Reset()
+	t.Cleanup(metrics.InvalidLogsDropped.Reset)
+
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
+	t.Cleanup(func() {
+		s.Close()
+	})
+
+	missingDatabase := types.NewLog()
+	missingDatabase.SetAttributeValue(types.AttributeTableName, "foo")
+
+	missingTable := types.NewLog()
+	missingTable.SetAttributeValue(types.AttributeDatabaseName, "adxlogs")
+
+	require.NoError(t, s.WriteNativeLogs(context.Background(), &types.LogBatch{
+		Logs: []*types.Log{missingDatabase, missingTable},
+	}))
 	require.Equal(t, 0, s.WALCount())
 
-	log := types.NewLog()
-	log.SetAttributeValue(types.AttributeDatabaseName, database)
-	log.SetAttributeValue(types.AttributeTableName, "foo")
-
-	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
-		Logs: []*types.Log{log},
-	}))
-	time.Sleep(200 * time.Millisecond)
-	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
-
-	key := fmt.Appendf(b[:0], "%s_%s_%s", database, "foo", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
-	w, err := s.GetWAL(ctx, key)
-	require.NoError(t, err)
-	require.NotNil(t, w)
-
-	path := w.Path()
-
-	require.Equal(t, 1, s.WALCount())
-	require.NoError(t, s.Close())
-
-	f, err := os.Open(path)
-	require.NoError(t, err)
-	defer f.Close()
-	b, _ = os.ReadFile(path)
-
-	iter, err := wal.NewSegmentIterator(f)
-	require.NoError(t, err)
-	n, err := iter.Verify()
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
-
-	r, err := wal.NewSegmentReader(path)
-	require.NoError(t, err)
-	data, err := io.ReadAll(r)
-	require.NoError(t, err)
-	spew.Dump(data)
+	var m dto.Metric
+	require.NoError(t, metrics.InvalidLogsDropped.WithLabelValues().Write(&m))
+	require.Equal(t, float64(2), m.Counter.GetValue())
 }
 
 func TestStore_SkipNonCSV(t *testing.T) {
@@ -288,6 +489,7 @@ func TestStore_Import_Append(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024 * 1025,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	seg1, err := wal.NewSegment(dir, "Database_Metric")
@@ -340,13 +542,18 @@ func TestStore_Import_Append(t *testing.T) {
 
 }
 
+func segmentKey(dst []byte, series *prompb.TimeSeries, hash uint64) ([]byte, error) {
+	request := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{series}}
+	return storage.SegmentKey(dst, request, series, hash)
+}
+
 func BenchmarkSegmentKey(b *testing.B) {
 	buf := make([]byte, 256)
-	labels := newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0).Labels
+	series := newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		storage.SegmentKey(buf[:0], labels, 0)
+		segmentKey(buf[:0], series, 0)
 	}
 }
 
@@ -357,6 +564,7 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 		StorageDir:     dir,
 		SegmentMaxSize: 100 * 1024 * 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   100 * 1024 * 1024 * 1024,
 	})
 
 	require.NoError(b, s.Open(context.Background()))
@@ -367,8 +575,9 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 	for i := 0; i < 2500; i++ {
 		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	}
+	req := &prompb.WriteRequest{Timeseries: batch}
 	for i := 0; i < b.N; i++ {
-		require.NoError(b, s.WriteTimeSeries(context.Background(), batch))
+		require.NoError(b, s.WriteTimeSeries(context.Background(), req))
 	}
 }
 
@@ -402,4 +611,102 @@ type shortReader struct{}
 
 func (s shortReader) Read(p []byte) (n int, err error) {
 	return 0, io.ErrUnexpectedEOF
+}
+
+func TestStore_RealtimeDiskReservation(t *testing.T) {
+	testRealtimeDiskReservation(t, nil)
+}
+
+// Admission replaces the repository's disk checks, so it must preserve the
+// realtime reservation whether or not table budgets are enforced.
+func TestStore_RealtimeDiskReservationWithAdmission(t *testing.T) {
+	for _, enforce := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enforce=%t", enforce), func(t *testing.T) {
+			testRealtimeDiskReservation(t, func(policy *ingestpolicy.Policy, maxDiskUsage, reserved int64) *wal.Admission {
+				return wal.NewAdmission(wal.AdmissionOpts{
+					Global:                wal.Usage{Bytes: maxDiskUsage},
+					Enforce:               enforce,
+					Policy:                policy,
+					RealtimeReservedBytes: reserved,
+				})
+			})
+		})
+	}
+}
+
+func testRealtimeDiskReservation(t *testing.T, newAdmission func(policy *ingestpolicy.Policy, maxDiskUsage, reserved int64) *wal.Admission) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
+	require.NoError(t, err)
+
+	const (
+		maxDiskUsage = 64 * 1024
+		reserved     = 32 * 1024
+	)
+	var admission *wal.Admission
+	if newAdmission != nil {
+		admission = newAdmission(policy, maxDiskUsage, reserved)
+	}
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:                t.TempDir(),
+		SegmentMaxSize:            1024,
+		SegmentMaxAge:             time.Minute,
+		MaxDiskUsage:              maxDiskUsage,
+		Policy:                    policy,
+		RealtimeReservedDiskBytes: reserved,
+		Admission:                 admission,
+	})
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+
+	ctx := context.Background()
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{
+		Value: &commonv1.AnyValue_StringValue{StringValue: string(bytes.Repeat([]byte("a"), 512))},
+	}}}}
+
+	// Fill the disk with queued data until queued writes are rejected.
+	var queuedErr error
+	for i := 0; i < 10000 && queuedErr == nil; i++ {
+		queuedErr = s.WriteOTLPLogs(ctx, "Logs", "Queued", logs)
+	}
+	require.ErrorIs(t, queuedErr, wal.ErrMaxDiskUsageExceeded)
+	// Queued data stops within one write of the queued limit, leaving the reservation free.
+	require.LessOrEqual(t, s.Size(), int64(maxDiskUsage-reserved))
+	require.GreaterOrEqual(t, s.Size(), int64(maxDiskUsage-reserved-2048))
+
+	// Realtime writes can use the reserved space.
+	require.NoError(t, s.WriteOTLPLogs(ctx, "Logs", "Realtime", logs))
+	require.ErrorIs(t, s.WriteOTLPLogs(ctx, "Logs", "Queued", logs), wal.ErrMaxDiskUsageExceeded)
+
+	// Realtime writes are rejected once the full limit is reached.
+	var realtimeErr error
+	for i := 0; i < 10000 && realtimeErr == nil; i++ {
+		realtimeErr = s.WriteOTLPLogs(ctx, "Logs", "Realtime", logs)
+	}
+	require.ErrorIs(t, realtimeErr, wal.ErrMaxDiskUsageExceeded)
+	require.GreaterOrEqual(t, s.Size(), int64(maxDiskUsage-2048))
+}
+
+func TestStore_NoRealtimeTablesUsesFullDisk(t *testing.T) {
+	const maxDiskUsage = 64 * 1024
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:                t.TempDir(),
+		SegmentMaxSize:            1024,
+		SegmentMaxAge:             time.Minute,
+		MaxDiskUsage:              maxDiskUsage,
+		RealtimeReservedDiskBytes: 32 * 1024,
+	})
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{
+		Value: &commonv1.AnyValue_StringValue{StringValue: string(bytes.Repeat([]byte("a"), 512))},
+	}}}}
+
+	var err error
+	for i := 0; i < 10000 && err == nil; i++ {
+		err = s.WriteOTLPLogs(context.Background(), "Logs", "Queued", logs)
+	}
+	require.ErrorIs(t, err, wal.ErrMaxDiskUsageExceeded)
+	// Without realtime tables the reservation does not apply.
+	require.GreaterOrEqual(t, s.Size(), int64(maxDiskUsage-2048))
 }

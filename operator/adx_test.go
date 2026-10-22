@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +15,10 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
@@ -30,6 +33,114 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+type fakeCredential struct{}
+
+func (fakeCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{Token: "fake", ExpiresOn: time.Now().Add(time.Hour)}, nil
+}
+
+func TestWrapHeartbeatStageError(t *testing.T) {
+	t.Parallel()
+
+	timeout := 30 * time.Second
+
+	tests := []struct {
+		name        string
+		stage       string
+		err         error
+		wantMessage string
+	}{
+		{
+			name:        "deadline exceeded",
+			stage:       "show databases",
+			err:         context.DeadlineExceeded,
+			wantMessage: "show databases timed out after 30s: context deadline exceeded",
+		},
+		{
+			name:        "canceled",
+			stage:       "show database schema for db1",
+			err:         context.Canceled,
+			wantMessage: "show database schema for db1 canceled: context canceled",
+		},
+		{
+			name:        "generic failure",
+			stage:       "ingest heartbeat into Federation.Operator",
+			err:         errors.New("boom"),
+			wantMessage: "ingest heartbeat into Federation.Operator failed: boom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := wrapHeartbeatStageError(tt.stage, timeout, tt.err)
+			require.EqualError(t, err, tt.wantMessage)
+			require.ErrorIs(t, err, tt.err)
+		})
+	}
+}
+
+func TestBuildHeartbeatQuery(t *testing.T) {
+	t.Parallel()
+
+	query, err := buildHeartbeatQuery("HeartbeatTable", "1h30m")
+	require.NoError(t, err)
+	require.Equal(t, `HeartbeatTable | where Timestamp > ago(timespan(01:30:00.0000000)) | summarize arg_max(Timestamp, Schema) by ClusterEndpoint`, query.String())
+
+	_, err = buildHeartbeatQuery("Heartbeat", "not-a-duration")
+	require.EqualError(t, err, `invalid heartbeat TTL "not-a-duration": time: invalid duration "not-a-duration"`)
+}
+
+func TestEnsureDatabasesHandlesNilFederation(t *testing.T) {
+	t.Parallel()
+
+	cluster := &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test",
+			Endpoint:    "https://example.kusto.windows.net",
+			Provision: &adxmonv1.ADXClusterProvisionSpec{
+				SubscriptionId: "00000000-0000-0000-0000-000000000000",
+				ResourceGroup:  "rg-test",
+				Location:       "eastus",
+			},
+		},
+	}
+
+	created, err := ensureDatabases(context.Background(), cluster, fakeCredential{})
+	require.NoError(t, err)
+	require.False(t, created)
+}
+
+func TestEnsureDatabasesSkipsWithoutProvision(t *testing.T) {
+	t.Parallel()
+
+	cluster := &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test",
+			Endpoint:    "https://example.kusto.windows.net",
+		},
+	}
+
+	created, err := ensureDatabases(context.Background(), cluster, fakeCredential{})
+	require.NoError(t, err)
+	require.False(t, created)
+}
+
+func TestEnsureDatabasesRequiresSubscriptionAndResourceGroup(t *testing.T) {
+	t.Parallel()
+
+	cluster := &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test",
+			Endpoint:    "https://example.kusto.windows.net",
+			Provision:   &adxmonv1.ADXClusterProvisionSpec{},
+		},
+	}
+
+	_, err := ensureDatabases(context.Background(), cluster, fakeCredential{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing subscriptionId or resourceGroup")
+}
 
 func TestGetIMDSMetadata(t *testing.T) {
 	tests := []struct {
@@ -316,6 +427,7 @@ func TestDiffIdentities(t *testing.T) {
 		cluster     *adxmonv1.ADXCluster               // The current configuration, or the desired state
 		wantUpdated bool
 		wantIDs     []string
+		wantType    *armkusto.IdentityType
 	}{
 		{
 			// Scenario: Adding a new user-assigned identity via the CRD when none existed before.
@@ -365,7 +477,8 @@ func TestDiffIdentities(t *testing.T) {
 				},
 			},
 			wantUpdated: true,
-			wantIDs:     []string{},
+			wantIDs:     nil,
+			wantType:    to.Ptr(armkusto.IdentityTypeNone),
 		},
 		{
 			// Scenario: No change in user-assigned identities between CRD, applied, and Azure state.
@@ -419,7 +532,8 @@ func TestDiffIdentities(t *testing.T) {
 		},
 		{
 			// Scenario: The identity type is not user-assigned (e.g., system-assigned only).
-			// Tests that the operator does not attempt to update user-assigned identities in this case.
+			// Tests that the operator transitions the cluster to user-assigned identities when requested
+			// without removing the existing system identity.
 			name: "identity type not user assigned",
 			resp: armkusto.ClustersClientGetResponse{
 				Cluster: armkusto.Cluster{
@@ -428,9 +542,7 @@ func TestDiffIdentities(t *testing.T) {
 					},
 				},
 			},
-			applied: &adxmonv1.AppliedProvisionState{
-				UserAssignedIdentities: []string{"/id1"},
-			},
+			applied: &adxmonv1.AppliedProvisionState{},
 			cluster: &adxmonv1.ADXCluster{
 				Spec: adxmonv1.ADXClusterSpec{
 					Provision: &adxmonv1.ADXClusterProvisionSpec{
@@ -438,8 +550,31 @@ func TestDiffIdentities(t *testing.T) {
 					},
 				},
 			},
-			wantUpdated: false,
+			wantUpdated: true,
+			wantIDs:     []string{"/id1"},
+			wantType:    to.Ptr(armkusto.IdentityTypeSystemAssignedUserAssigned),
+		},
+		{
+			name: "removing managed identity preserves system assignment",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type:                   to.Ptr(armkusto.IdentityTypeSystemAssignedUserAssigned),
+						UserAssignedIdentities: makeUserAssignedIdentitiesMap("/managed"),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{"/managed"},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{},
+				},
+			},
+			wantUpdated: true,
 			wantIDs:     nil,
+			wantType:    to.Ptr(armkusto.IdentityTypeSystemAssigned),
 		},
 	}
 
@@ -448,17 +583,76 @@ func TestDiffIdentities(t *testing.T) {
 			clusterUpdate := armkusto.Cluster{
 				Identity: tt.resp.Identity,
 			}
-			updated := diffIdentities(tt.resp, tt.applied, tt.cluster, &clusterUpdate)
+			var updated bool
+			clusterUpdate, updated = diffIdentities(tt.resp, tt.applied, tt.cluster, clusterUpdate)
 			require.Equal(t, tt.wantUpdated, updated)
 			if tt.wantIDs == nil {
 				require.Nil(t, clusterUpdate.Identity.UserAssignedIdentities)
-				return
+			} else {
+				var gotIDs []string
+				for id := range clusterUpdate.Identity.UserAssignedIdentities {
+					gotIDs = append(gotIDs, id)
+				}
+				require.ElementsMatch(t, tt.wantIDs, gotIDs)
 			}
-			var gotIDs []string
-			for id := range clusterUpdate.Identity.UserAssignedIdentities {
-				gotIDs = append(gotIDs, id)
+			if tt.wantType != nil {
+				require.NotNil(t, clusterUpdate.Identity.Type)
+				require.Equal(t, *tt.wantType, *clusterUpdate.Identity.Type)
 			}
-			require.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
+}
+
+func TestMergeDatabaseSpecs(t *testing.T) {
+	tests := []struct {
+		name       string
+		userDbs    []adxmonv1.ADXClusterDatabaseSpec
+		discovered []adxmonv1.ADXClusterDatabaseSpec
+		wantMerged []adxmonv1.ADXClusterDatabaseSpec
+	}{
+		{
+			name: "adds discovered databases",
+			userDbs: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "userdb", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+			discovered: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "federateddb"},
+			},
+			wantMerged: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "federateddb"},
+				{DatabaseName: "userdb", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		{
+			name: "overrides empty telemetry",
+			userDbs: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "logs"},
+			},
+			discovered: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+			},
+			wantMerged: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+			},
+		},
+		{
+			name: "preserves explicit telemetry",
+			userDbs: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+			discovered: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "metrics"},
+			},
+			wantMerged: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged := mergeDatabaseSpecs(tt.userDbs, tt.discovered)
+			require.Equal(t, tt.wantMerged, merged)
 		})
 	}
 }
@@ -535,9 +729,10 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 	require.True(t, created)
 
 	// Create some tables in the partitioned cluster
-	ep := kusto.NewConnectionStringBuilder(kustainerPartitionedCluster.ConnectionUrl())
-	client, err := kusto.New(ep)
+	ep := azkustodata.NewConnectionStringBuilder(kustainerPartitionedCluster.ConnectionUrl())
+	client, err := azkustodata.New(ep)
 	require.NoError(t, err)
+	defer client.Close()
 
 	for _, tableName := range []string{"Table1", "Table2"} {
 		stmt := kql.New("").AddUnsafe(fmt.Sprintf(".create table %s (x: int)", tableName))
@@ -575,41 +770,268 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 	require.NotZero(t, result)
 }
 
-func TestParseHeartbeatRows(t *testing.T) {
-	rawSchema := `{"database":"db1","tables":["t1","t2"]}`
-	rawMeta := map[string]string{"geo": "us"}
-	rows := []HeartbeatRow{
+func TestProcessHeartbeatRow(t *testing.T) {
+	state := NewFederationState()
+	rawSchema := `[{"database":"db1","tables":["t1","t2"],"views":["v1"]}]`
+	row := HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep1",
+		Schema:          json.RawMessage(rawSchema),
+	}
+	state.processHeartbeatRow(row)
+
+	require.Equal(t, 1, state.EndpointCount)
+	require.Contains(t, state.DBSet, "db1")
+	require.Contains(t, state.SpokeDBEndpoints, "db1")
+	require.Contains(t, state.SpokeDBEndpoints["db1"], "ep1")
+	require.Contains(t, state.DBTableEndpoints, "db1")
+	require.Contains(t, state.DBTableEndpoints["db1"]["t1"], "ep1")
+	require.Contains(t, state.DBTableEndpoints["db1"]["t2"], "ep1")
+	require.Contains(t, state.DBTableEndpoints["db1"]["v1"], "ep1")
+	require.Empty(t, state.ParseErrors)
+}
+
+func TestProcessHeartbeatRowInvalidSchema(t *testing.T) {
+	state := NewFederationState()
+	row := HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep1",
+		Schema:          json.RawMessage(`invalid json`),
+	}
+	state.processHeartbeatRow(row)
+
+	require.Equal(t, 0, state.EndpointCount)
+	require.Len(t, state.ParseErrors, 1)
+	require.Contains(t, state.ParseErrors[0], "ep1")
+}
+
+func TestFederationStateMultipleEndpoints(t *testing.T) {
+	state := NewFederationState()
+
+	// First endpoint with db1
+	state.processHeartbeatRow(HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep1",
+		Schema:          json.RawMessage(`[{"database":"db1","tables":["t1","t2"]}]`),
+	})
+
+	// Second endpoint with db1 and db2
+	state.processHeartbeatRow(HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep2",
+		Schema:          json.RawMessage(`[{"database":"db1","tables":["t2"]},{"database":"db2","tables":["t3"]}]`),
+	})
+
+	require.Equal(t, 2, state.EndpointCount)
+	require.Len(t, state.DBSet, 2)
+	require.Contains(t, state.DBSet, "db1")
+	require.Contains(t, state.DBSet, "db2")
+
+	// t1 only on ep1
+	require.ElementsMatch(t, state.DBTableEndpoints["db1"]["t1"], []string{"ep1"})
+	// t2 on both ep1 and ep2
+	require.ElementsMatch(t, state.DBTableEndpoints["db1"]["t2"], []string{"ep1", "ep2"})
+	// t3 only on ep2
+	require.ElementsMatch(t, state.DBTableEndpoints["db2"]["t3"], []string{"ep2"})
+
+	// SpokeDBEndpoints
+	require.ElementsMatch(t, state.SpokeDBEndpoints["db1"], []string{"ep1", "ep2"})
+	require.ElementsMatch(t, state.SpokeDBEndpoints["db2"], []string{"ep2"})
+}
+
+// schemaToSpokeDBEndpoints is a helper for tests that converts the old schemaByEndpoint format
+// to the new spokeDBEndpoints format used by generateEntityGroupDefinitions
+func schemaToSpokeDBEndpoints(schemaByEndpoint map[string][]ADXClusterSchema) map[string][]string {
+	spokeDBEndpoints := make(map[string][]string)
+	for endpoint, schemas := range schemaByEndpoint {
+		for _, schema := range schemas {
+			spokeDBEndpoints[schema.Database] = append(spokeDBEndpoints[schema.Database], endpoint)
+		}
+	}
+	return spokeDBEndpoints
+}
+
+func TestGenerateEntityGroupDefinitions(t *testing.T) {
+	tests := []struct {
+		name             string
+		schemaByEndpoint map[string][]ADXClusterSchema
+		hubDatabases     []string
+		wantEntityGroups map[string][]string // hubDB -> expected entity group statements
+		wantReplication  int                 // expected number of hub DBs with entity groups
+		wantGroupsPerHub int                 // expected number of entity groups per hub DB (each group = 2 statements: drop + create)
+	}{
 		{
-			Timestamp:         time.Now(),
-			ClusterEndpoint:   "ep1",
-			Schema:            json.RawMessage(rawSchema),
-			PartitionMetadata: rawMeta,
+			name: "single spoke database, multiple hub databases",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+				"https://cluster2.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+			},
+			hubDatabases:     []string{"HubDB1", "HubDB2", "HubDB3"},
+			wantReplication:  3,
+			wantGroupsPerHub: 1,
+		},
+		{
+			name: "multiple spoke databases, single hub database",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {
+					{Database: "Metrics", Tables: []string{"t1"}},
+					{Database: "Logs", Tables: []string{"l1"}},
+				},
+			},
+			hubDatabases:     []string{"HubDB"},
+			wantReplication:  1,
+			wantGroupsPerHub: 2,
+		},
+		{
+			name: "multiple spoke databases, multiple hub databases",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {
+					{Database: "Metrics", Tables: []string{"t1"}},
+					{Database: "Logs", Tables: []string{"l1"}},
+				},
+				"https://cluster2.kusto.net": {
+					{Database: "Metrics", Tables: []string{"t2"}},
+				},
+			},
+			hubDatabases:     []string{"Hub1", "Hub2"},
+			wantReplication:  2,
+			wantGroupsPerHub: 2, // MetricsSpoke and LogsSpoke
+		},
+		{
+			name:             "empty schemas",
+			schemaByEndpoint: map[string][]ADXClusterSchema{},
+			hubDatabases:     []string{"HubDB"},
+			wantReplication:  0,
+			wantGroupsPerHub: 0,
+		},
+		{
+			name: "empty hub databases",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+			},
+			hubDatabases:     []string{},
+			wantReplication:  0,
+			wantGroupsPerHub: 0,
 		},
 	}
-	schemaByEndpoint, metaByEndpoint := parseHeartbeatRows(rows)
-	require.Contains(t, schemaByEndpoint, "ep1")
-	require.Equal(t, "db1", schemaByEndpoint["ep1"].Database)
-	require.Equal(t, rawMeta, metaByEndpoint["ep1"])
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spokeDBEndpoints := schemaToSpokeDBEndpoints(tt.schemaByEndpoint)
+			result := generateEntityGroupDefinitions(spokeDBEndpoints, tt.hubDatabases)
+
+			// Check replication count
+			require.Len(t, result, tt.wantReplication)
+
+			// Check entity groups per hub (each entity group generates 2 statements: drop + create)
+			for hubDB, entityGroups := range result {
+				require.Len(t, entityGroups, tt.wantGroupsPerHub*2, "hub database %s should have %d statements (%d entity groups x 2 statements each)", hubDB, tt.wantGroupsPerHub*2, tt.wantGroupsPerHub)
+			}
+		})
+	}
 }
 
-func TestExtractDatabasesFromSchemas(t *testing.T) {
-	schemas := map[string]ADXClusterSchema{
-		"ep1": {Database: "db1"},
-		"ep2": {Database: "db2"},
+func TestGenerateEntityGroupDefinitions_Naming(t *testing.T) {
+	schemaByEndpoint := map[string][]ADXClusterSchema{
+		"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+		"https://cluster2.kusto.net": {{Database: "Logs", Tables: []string{"l1"}}},
 	}
-	dbs := extractDatabasesFromSchemas(schemas)
-	require.Contains(t, dbs, "db1")
-	require.Contains(t, dbs, "db2")
+	hubDatabases := []string{"HubDB"}
+
+	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
+	result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
+	require.Contains(t, result, "HubDB")
+
+	entityGroups := result["HubDB"]
+	// 2 entity groups x 2 statements each (drop + create) = 4 statements
+	require.Len(t, entityGroups, 4)
+
+	// Check naming pattern: {SpokeDatabaseName}Spoke
+	// Statements should be in order: drop LogsSpoke, create LogsSpoke, drop MetricsSpoke, create MetricsSpoke
+	// (sorted by database name: Logs < Metrics)
+	foundMetricsDrop := false
+	foundMetricsCreate := false
+	foundLogsDrop := false
+	foundLogsCreate := false
+	for _, stmt := range entityGroups {
+		if stmt == ".drop entity_group MetricsSpoke" {
+			foundMetricsDrop = true
+		}
+		if strings.Contains(stmt, ".create entity_group MetricsSpoke") {
+			foundMetricsCreate = true
+			require.Contains(t, stmt, "cluster('https://cluster1.kusto.net').database('Metrics')")
+		}
+		if stmt == ".drop entity_group LogsSpoke" {
+			foundLogsDrop = true
+		}
+		if strings.Contains(stmt, ".create entity_group LogsSpoke") {
+			foundLogsCreate = true
+			require.Contains(t, stmt, "cluster('https://cluster2.kusto.net').database('Logs')")
+		}
+	}
+	require.True(t, foundMetricsDrop, "should have .drop MetricsSpoke")
+	require.True(t, foundMetricsCreate, "should have .create MetricsSpoke")
+	require.True(t, foundLogsDrop, "should have .drop LogsSpoke")
+	require.True(t, foundLogsCreate, "should have .create LogsSpoke")
 }
 
-func TestMapTablesToEndpoints(t *testing.T) {
-	schemas := map[string]ADXClusterSchema{
-		"ep1": {Database: "db1", Tables: []string{"t1", "t2"}},
-		"ep2": {Database: "db1", Tables: []string{"t2"}},
+func TestGenerateEntityGroupDefinitions_MultipleEndpoints(t *testing.T) {
+	// Test that a spoke database with multiple endpoints includes all of them
+	schemaByEndpoint := map[string][]ADXClusterSchema{
+		"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+		"https://cluster2.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+		"https://cluster3.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
 	}
-	m := mapTablesToEndpoints(schemas)
-	require.ElementsMatch(t, m["db1"]["t1"], []string{"ep1"})
-	require.ElementsMatch(t, m["db1"]["t2"], []string{"ep1", "ep2"})
+	hubDatabases := []string{"HubDB"}
+
+	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
+	result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
+	require.Contains(t, result, "HubDB")
+	// 1 entity group x 2 statements (drop + create) = 2 statements
+	require.Len(t, result["HubDB"], 2)
+
+	// First statement should be drop, second should be create
+	require.Equal(t, ".drop entity_group MetricsSpoke", result["HubDB"][0])
+
+	createStmt := result["HubDB"][1]
+	require.Contains(t, createStmt, ".create entity_group MetricsSpoke")
+	require.Contains(t, createStmt, "cluster('https://cluster1.kusto.net').database('Metrics')")
+	require.Contains(t, createStmt, "cluster('https://cluster2.kusto.net').database('Metrics')")
+	require.Contains(t, createStmt, "cluster('https://cluster3.kusto.net').database('Metrics')")
+}
+
+func TestGenerateEntityGroupDefinitions_DeterministicOrdering(t *testing.T) {
+	// Run multiple times to ensure deterministic output
+	schemaByEndpoint := map[string][]ADXClusterSchema{
+		"https://clusterC.kusto.net": {{Database: "DBZ", Tables: []string{"t1"}}},
+		"https://clusterA.kusto.net": {{Database: "DBA", Tables: []string{"t1"}}},
+		"https://clusterB.kusto.net": {{Database: "DBM", Tables: []string{"t1"}}},
+	}
+	hubDatabases := []string{"Hub3", "Hub1", "Hub2"}
+
+	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
+	var previousResult map[string][]string
+	for i := 0; i < 5; i++ {
+		result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
+		if previousResult != nil {
+			require.Equal(t, previousResult, result, "results should be deterministic across runs")
+		}
+		previousResult = result
+	}
+
+	// Also verify that entity groups within each hub are sorted by spoke database name
+	// Each entity group generates 2 statements (drop + create), so 3 groups = 6 statements
+	result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
+	for _, entityGroups := range result {
+		require.Len(t, entityGroups, 6) // 3 entity groups x 2 statements each
+		// Should be sorted: DBASpoke, DBMSpoke, DBZSpoke (with drop then create for each)
+		require.Equal(t, ".drop entity_group DBASpoke", entityGroups[0])
+		require.Contains(t, entityGroups[1], ".create entity_group DBASpoke")
+		require.Equal(t, ".drop entity_group DBMSpoke", entityGroups[2])
+		require.Contains(t, entityGroups[3], ".create entity_group DBMSpoke")
+		require.Equal(t, ".drop entity_group DBZSpoke", entityGroups[4])
+		require.Contains(t, entityGroups[5], ".create entity_group DBZSpoke")
+	}
 }
 
 func TestGenerateKustoFunctionDefinitions(t *testing.T) {
@@ -624,15 +1046,77 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	foundT1 := false
 	foundT2 := false
 	for _, f := range funcs["db1"] {
-		if strings.Contains(f, ".create-or-alter function t1()") {
+		if strings.Contains(f, ".create-or-alter function with (skipvalidation=true) t1()") {
 			foundT1 = true
+			// Verify it references the named entity group, not an inline list
+			// Note: stored entity groups are referenced without the "entity_group" keyword
+			require.Contains(t, f, "macro-expand isfuzzy=true best_effort=true db1Spoke as X")
+			require.NotContains(t, f, "entity_group")
+			require.Contains(t, f, "X.t1")
 		}
-		if strings.Contains(f, ".create-or-alter function t2()") {
+		if strings.Contains(f, ".create-or-alter function with (skipvalidation=true) t2()") {
 			foundT2 = true
+			// Verify it references the named entity group, not an inline list
+			// Note: stored entity groups are referenced without the "entity_group" keyword
+			require.Contains(t, f, "macro-expand isfuzzy=true best_effort=true db1Spoke as X")
+			require.NotContains(t, f, "entity_group")
+			require.Contains(t, f, "X.t2")
 		}
 	}
 	require.True(t, foundT1)
 	require.True(t, foundT2)
+}
+
+func TestFormatNameList(t *testing.T) {
+	tests := []struct {
+		name  string
+		names []string
+		limit int
+		want  string
+	}{
+		{
+			name:  "empty",
+			names: nil,
+			limit: 10,
+			want:  "none",
+		},
+		{
+			name:  "under limit",
+			names: []string{"a", "b"},
+			limit: 10,
+			want:  "a,b",
+		},
+		{
+			name:  "at limit",
+			names: []string{"a", "b"},
+			limit: 2,
+			want:  "a,b",
+		},
+		{
+			name:  "over limit",
+			names: []string{"a", "b", "c"},
+			limit: 2,
+			want:  "a,b,+1 more",
+		},
+		{
+			name:  "zero limit returns all names",
+			names: []string{"a", "b", "c"},
+			limit: 0,
+			want:  "a,b,c",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, formatNameList(tt.names, tt.limit))
+		})
+	}
+}
+
+func TestAppendBoundedNames(t *testing.T) {
+	require.Equal(t, []string{"a", "b", "c"}, appendBoundedNames([]string{"a"}, []string{"b", "c", "d"}, 3))
+	require.Equal(t, []string{"a"}, appendBoundedNames([]string{"a"}, []string{"b"}, 1))
+	require.Equal(t, []string{"a"}, appendBoundedNames([]string{"a"}, []string{"b"}, 0))
 }
 
 func TestSplitKustoScripts(t *testing.T) {
@@ -654,4 +1138,93 @@ func TestSplitKustoScripts(t *testing.T) {
 	require.Contains(t, joined, "//\na\n")
 	require.Contains(t, joined, "//\nb\n")
 	require.Contains(t, joined, "//\nc\n")
+}
+
+func TestFederationSkipsUnavailableHubDatabases(t *testing.T) {
+	t.Parallel()
+
+	// Logs and Metrics must still synchronize when a spoke advertises databases
+	// absent from an externally provisioned hub (or still being provisioned).
+	configured := []adxmonv1.ADXClusterDatabaseSpec{{DatabaseName: "Federation"}, {DatabaseName: "MissingConfigured"}}
+	discovered := []adxmonv1.ADXClusterDatabaseSpec{{DatabaseName: "Logs"}, {DatabaseName: "Metrics"}, {DatabaseName: "containers"}, {DatabaseName: "StorageTelemetry"}}
+	desired := mergeDatabaseSpecs(configured, discovered)
+	tables := map[string]map[string][]string{
+		"Logs":             {"Containerd": {"https://spoke"}},
+		"Metrics":          {"GoInfo": {"https://spoke"}},
+		"containers":       {"ContainerLog": {"https://spoke"}},
+		"StorageTelemetry": {"StorageLog": {"https://spoke"}},
+	}
+	spokes := map[string][]string{"Logs": {"https://spoke"}, "Metrics": {"https://spoke"}, "containers": {"https://spoke"}}
+	available := []string{"Metrics", "Federation", "Logs", "Unrelated"}
+
+	destinations, selected, skipped := selectFederationDestinations(desired, tables, available)
+	require.Equal(t, []string{"Federation", "Logs", "Metrics"}, destinations)
+	require.Equal(t, []string{"MissingConfigured", "StorageTelemetry", "containers"}, skipped)
+	require.Len(t, selected, 2)
+	require.Equal(t, tables["Logs"], selected["Logs"])
+	require.Equal(t, tables["Metrics"], selected["Metrics"])
+	groups := generateEntityGroupDefinitions(spokes, destinations)
+	require.Len(t, groups, 3)
+	require.NotContains(t, groups, "containers")
+	// Cross-database spoke references do not require a same-name hub database.
+	require.Contains(t, strings.Join(groups["Logs"], "\n"), "containersSpoke")
+	functions := generateKustoFunctionDefinitions(selected)
+	require.Len(t, functions, 2)
+	require.Contains(t, strings.Join(functions["Logs"], "\n"), "Containerd()")
+	require.Contains(t, strings.Join(functions["Metrics"], "\n"), "GoInfo()")
+
+	// A later reconciliation includes a newly created database without losing
+	// its original heartbeat schema or requiring a controller restart.
+	available = append(available, "containers")
+	destinations, selected, skipped = selectFederationDestinations(desired, tables, available)
+	require.Contains(t, destinations, "containers")
+	require.Equal(t, tables["containers"], selected["containers"])
+	require.NotContains(t, skipped, "containers")
+	require.Len(t, tables, 4)
+	require.Len(t, desired, 6)
+}
+
+func TestFederationNoAvailableDestinations(t *testing.T) {
+	t.Parallel()
+	desired := []adxmonv1.ADXClusterDatabaseSpec{{DatabaseName: "Logs"}}
+	tables := map[string]map[string][]string{"Logs": {"Containerd": {"https://spoke"}}}
+	destinations, selected, skipped := selectFederationDestinations(desired, tables, nil)
+	require.Empty(t, destinations)
+	require.Empty(t, selected)
+	require.Equal(t, []string{"Logs"}, skipped)
+	require.Empty(t, generateEntityGroupDefinitions(map[string][]string{"Logs": {"https://spoke"}}, destinations))
+	require.Empty(t, generateKustoFunctionDefinitions(selected))
+}
+
+func TestEnsureHubTables(t *testing.T) {
+	testutils.IntegrationTest(t)
+	ctx := context.Background()
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	ep := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	client, err := azkustodata.New(ep)
+	require.NoError(t, err)
+	defer client.Close()
+
+	database := "NetDefaultDB"
+	tables := map[string]string{"MirrorTable": "", "MirrorView": ""}
+
+	for tbl := range tables {
+		exists, err := tableExists(ctx, client, database, tbl)
+		require.NoError(t, err)
+		require.False(t, exists)
+	}
+
+	require.NoError(t, ensureHubTables(ctx, client, database, tables))
+
+	for tbl := range tables {
+		exists, err := tableExists(ctx, client, database, tbl)
+		require.NoError(t, err)
+		require.True(t, exists)
+	}
+
+	// Re-run to confirm it remains idempotent when tables already exist.
+	require.NoError(t, ensureHubTables(ctx, client, database, tables))
 }

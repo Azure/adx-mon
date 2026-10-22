@@ -7,7 +7,7 @@ go: true
 clear-output-folder: false
 version: "^3.0.0"
 license-header: MICROSOFT_MIT_NO_VERSION
-input-file: "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/e515b6251fdc21015282d2e84b85beec7c091763/specification/storage/data-plane/Microsoft.BlobStorage/preview/2020-10-02/blob.json"
+input-file: "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/07c350e6126e53f3a25fe75536c4b3324f91475b/specification/storage/data-plane/Microsoft.BlobStorage/stable/2025-11-05/blob.json"
 credential-scope: "https://storage.azure.com/.default"
 output-folder: ../generated
 file-prefix: "zz_"
@@ -19,7 +19,101 @@ modelerfour:
   seal-single-value-enum-by-default: true
   lenient-model-deduplication: true
 export-clients: true
-use: "@autorest/go@4.0.0-preview.45"
+use: "@autorest/go@4.0.0-preview.65"
+```
+
+### Add a Properties field to the BlobPrefix definition
+```yaml
+directive:
+- from: swagger-document
+  where: $.definitions
+  transform: >
+    $.BlobPrefix.properties["Properties"] = {
+      "type": "object",
+      "$ref": "#/definitions/BlobPropertiesInternal"
+    };
+```
+
+### Add Owner,Group,Permissions,Acl,ResourceType in ListBlob Response
+``` yaml
+directive:  
+- from: swagger-document    
+  where: $.definitions
+  transform: >
+    $.BlobPropertiesInternal.properties["Owner"] = {
+      "type" : "string",
+    };
+    $.BlobPropertiesInternal.properties["Group"] = {
+      "type" : "string",
+    };
+    $.BlobPropertiesInternal.properties["Permissions"] = {
+      "type" : "string",
+    };
+    $.BlobPropertiesInternal.properties["Acl"] = {
+      "type" : "string",
+    };
+    $.BlobPropertiesInternal.properties["ResourceType"] = {
+      "type" : "string",
+    };
+
+```
+
+### Add permissions in ListBlobsInclude
+``` yaml
+directive:  
+- from: swagger-document    
+  where: $.parameters.ListBlobsInclude    
+  transform: >        
+    $.items.enum.push("permissions");
+```
+
+### Updating service version to 2025-11-05
+```yaml
+directive:
+- from: 
+  - zz_appendblob_client.go
+  - zz_blob_client.go
+  - zz_blockblob_client.go
+  - zz_container_client.go
+  - zz_pageblob_client.go
+  - zz_service_client.go
+  where: $
+  transform: >-
+    return $.
+      replaceAll(`[]string{"2025-07-05"}`, `[]string{ServiceVersion}`);
+```
+
+### Fix CRC Response Header in PutBlob response
+``` yaml
+directive:
+- from: swagger-document
+  where: $["x-ms-paths"]["/{containerName}/{blob}?BlockBlob"].put.responses["201"].headers
+  transform: >
+      $["x-ms-content-crc64"] = {
+        "x-ms-client-name": "ContentCRC64",
+        "type": "string",
+        "format": "byte",
+        "description": "Returned for a block blob so that the client can check the integrity of message content."
+      };
+```
+
+### Undo breaking change with BlobName 
+``` yaml
+directive:
+- from: zz_models.go
+  where: $
+  transform: >-
+    return $.
+      replace(/Name\s+\*BlobName/g, `Name *string`);
+```
+
+### Removing UnmarshalXML for BlobItems to create customer UnmarshalXML function
+```yaml
+directive:
+- from: swagger-document
+  where: $.definitions
+  transform: >
+    $.BlobItemInternal["x-ms-go-omit-serde-methods"] = true;
 ```
 
 ### Remove pager methods and export various generated methods in container client
@@ -244,7 +338,9 @@ directive:
 
 ``` yaml
 directive:
-- from: zz_models.go
+- from:
+  - zz_models.go
+  - zz_options.go
   where: $
   transform: >-
     return $.
@@ -255,7 +351,7 @@ directive:
       replace(/SourceIfMatch\s+\*string/g, `SourceIfMatch *azcore.ETag`).
       replace(/SourceIfNoneMatch\s+\*string/g, `SourceIfNoneMatch *azcore.ETag`);
 
-- from: zz_response_types.go
+- from: zz_responses.go
   where: $
   transform: >-
     return $.
@@ -326,11 +422,13 @@ directive:
 
 ``` yaml
 directive:
-  - from: zz_service_client.go
-    where: $
-    transform: >-
-      return $.
-        replace(/req.Raw\(\).URL.RawQuery \= reqQP.Encode\(\)/, `req.Raw().URL.RawQuery = strings.Replace(reqQP.Encode(), "+", "%20", -1)`)
+- from: 
+  - zz_service_client.go
+  - zz_container_client.go
+  where: $
+  transform: >-
+    return $.
+      replace(/req.Raw\(\).URL.RawQuery \= reqQP.Encode\(\)/g, `req.Raw().URL.RawQuery = strings.Replace(reqQP.Encode(), "+", "%20", -1)`);
 ```
 
 ### Change `where` parameter in blob filtering to be required
@@ -407,8 +505,8 @@ directive:
   where: $
   transform: >-
     return $.
-      replace(/if\s+!runtime\.HasStatusCode\(resp,\s+http\.StatusOK\)\s+\{\s*\n\t\treturn\s+ServiceClientSubmitBatchResponse\{\}\,\s+runtime\.NewResponseError\(resp\)\s*\n\t\}/g, 
-      `if !runtime.HasStatusCode(resp, http.StatusAccepted) {\n\t\treturn ServiceClientSubmitBatchResponse{}, runtime.NewResponseError(resp)\n\t}`);
+      replace(/if\s+!runtime\.HasStatusCode\(httpResp,\s+http\.StatusOK\)\s+\{\s+err\s+=\s+runtime\.NewResponseError\(httpResp\)\s+return ServiceClientSubmitBatchResponse\{\}\,\s+err\s+}/g, 
+      `if !runtime.HasStatusCode(httpResp, http.StatusAccepted) {\n\t\terr = runtime.NewResponseError(httpResp)\n\t\treturn ServiceClientSubmitBatchResponse{}, err\n\t}`);
 ```
 
 ### Convert time to GMT for If-Modified-Since and If-Unmodified-Since request headers

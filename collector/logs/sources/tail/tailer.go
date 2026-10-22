@@ -11,17 +11,21 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/tenebris-tech/tail"
 )
 
 type TailerConfig struct {
-	Target          FileTailTarget
-	UpdateChan      <-chan FileTailTarget
-	AckGenerator    func(*types.Log) func()
-	WorkerCreator   engine.WorkerCreatorFunc
-	CursorDirectory string
-	WorkerName      string
+	Target            FileTailTarget
+	UpdateChan        <-chan FileTailTarget
+	AckGenerator      func(*types.Log) func()
+	WorkerCreator     engine.WorkerCreatorFunc
+	CursorDirectory   string
+	WorkerName        string
+	RealtimePolicy    *ingestpolicy.Policy
+	RealtimeBatchWait time.Duration
 }
 
 // Tailer is a specific instance of a file being tailed.
@@ -41,7 +45,7 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 
 	batchQueue := make(chan *types.Log, 512)
 	outputQueue := make(chan *types.LogBatch, 1)
-	tailConfig := tail.Config{Follow: true, ReOpen: true, Poll: true}
+	tailConfig := tail.Config{Follow: true, ReOpen: true, Poll: true, Logger: &tailLogger{}}
 	existingCursorPath := cursorPath(config.CursorDirectory, config.Target.FilePath)
 	fileId, position, err := readCursor(existingCursorPath)
 	if err == nil {
@@ -92,6 +96,13 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 		OutputQueue:  outputQueue,
 		AckGenerator: config.AckGenerator,
 	}
+	if config.RealtimePolicy != nil && config.RealtimePolicy.HasRealtime() {
+		wait := config.RealtimeBatchWait
+		if wait <= 0 {
+			wait = 100 * time.Millisecond
+		}
+		batchConfig.RealtimeWait = realtimeBatchWait(config.RealtimePolicy, wait)
+	}
 
 	tailer.wg.Add(1)
 	go func() {
@@ -107,6 +118,17 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 	}()
 
 	return tailer, nil
+}
+
+func realtimeBatchWait(policy *ingestpolicy.Policy, wait time.Duration) func(*types.Log) time.Duration {
+	return func(log *types.Log) time.Duration {
+		database := types.StringOrEmpty(log.GetAttributeValue(types.AttributeDatabaseName))
+		table := types.StringOrEmpty(log.GetAttributeValue(types.AttributeTableName))
+		if policy.Priority(schema.NormalizeAdxIdentifier(database), schema.NormalizeAdxIdentifier(table)) == ingestpolicy.PriorityRealtime {
+			return wait
+		}
+		return 0
+	}
 }
 
 // Stop stops the tailer and cleans up resources.

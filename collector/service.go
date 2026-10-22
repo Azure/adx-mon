@@ -3,34 +3,47 @@ package collector
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
+	stdhttp "net/http"
 	"net/http/pprof"
 	"regexp"
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
+	"github.com/Azure/adx-mon/collector/metadata"
 	metricsHandler "github.com/Azure/adx-mon/collector/metrics"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/debug"
 	"github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
+	connect "github.com/bufbuild/connect-go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Service struct {
-	opts *ServiceOpts
+	opts           *ServiceOpts
+	storageBackend storage.Backend
+	health         *cluster.Health
 
 	cancel context.CancelFunc
 
 	// metricsSvc is the internal metrics component for collector specific metrics.
-	metricsSvc metrics.Service
+	metricsSvc metricsHandler.Service
+
+	// podInformer is the pod informer for pod discovery.
+	podInformer k8s.PodInformerInterface
 
 	// workerSvcs are the collection services that can be opened and closed.
 	workerSvcs []service.Component
@@ -58,9 +71,15 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	ListenAddr string
-	NodeName   string
-	Endpoint   string
+	ListenAddr     string
+	NodeName       string
+	Endpoint       string
+	StorageBackend storage.Backend
+
+	KubeNode *metadata.KubeNode
+
+	// PodInformer is the pod informer used for discovery (optional)
+	PodInformer k8s.PodInformerInterface
 
 	// LogCollectionHandlers is the list of log collection handlers
 	LogCollectionHandlers []LogCollectorOpts
@@ -100,7 +119,12 @@ type ServiceOpts struct {
 	MaxDiskUsage int64
 
 	// MaxSegmentCount is the maximum number of segments files allowed on disk before signaling back-pressure.
-	MaxSegmentCount int64
+	MaxSegmentCount      int64
+	MaxTableDiskUsage    int64
+	MaxTableSegmentCount int64
+	DisableTableLimits   bool
+	EnforceTableLimits   bool
+	TableLimits          []wal.TableLimit
 
 	// StorageDir is the directory where the WAL will be stored
 	StorageDir string
@@ -130,6 +154,40 @@ type ServiceOpts struct {
 
 	// DisableGzip disables gzip compression for the transfer endpoint.
 	DisableGzip bool
+
+	// Realtime configures realtime ingestion.  When nil or without realtime tables, all tables are queued.
+	Realtime *RealtimeOpts
+
+	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.
+	QueuedReservedWorkersPercent int
+}
+
+// DefaultMaxDiskUsage is the max disk usage when ServiceOpts.MaxDiskUsage is not set.
+const DefaultMaxDiskUsage int64 = 10 * 1024 * 1024 * 1024
+
+// RealtimeOpts configures realtime ingestion in the collector.
+type RealtimeOpts struct {
+	// Policy assigns ingestion priorities to tables.
+	Policy *ingestpolicy.Policy
+
+	// MaxSegmentAge is the max age of realtime WAL segments before they are rotated.
+	MaxSegmentAge time.Duration
+
+	// MaxBatchLatency is the max time a closed realtime segment waits to be batched before it is transferred.
+	MaxBatchLatency time.Duration
+	// LogBatchWait is the pod-tail batch wait for realtime destinations.
+	LogBatchWait time.Duration
+
+	// MaxBatchBytes is the max size of a realtime transfer batch in WAL bytes.
+	MaxBatchBytes int64
+
+	// ReservedDiskBytes is disk space reserved for realtime segments.
+	ReservedDiskBytes int64
+}
+
+// enabled returns true if realtime tables are configured.
+func (o *RealtimeOpts) enabled() bool {
+	return o != nil && o.Policy.HasRealtime()
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -137,6 +195,8 @@ type OtlpMetricsHandlerOpts struct {
 	Path string
 	// Optional. GrpcPort is the port where the metrics OTLP/GRPC handler will listen.
 	GrpcPort int
+	// RequestTimeout is the maximum duration for an OTLP metrics request.
+	RequestTimeout time.Duration
 
 	MetricOpts MetricsHandlerOpts
 }
@@ -144,8 +204,50 @@ type OtlpMetricsHandlerOpts struct {
 type PrometheusRemoteWriteHandlerOpts struct {
 	// Path is the path where the handler will be registered.
 	Path string
+	// RequestTimeout is the maximum duration for a remote write request.
+	RequestTimeout time.Duration
 
 	MetricOpts MetricsHandlerOpts
+}
+
+const httpWriteTimeoutGrace = time.Second
+
+func requestWriteTimeout(baseline, requestTimeout time.Duration) time.Duration {
+	if requestTimeout > 0 {
+		return max(baseline, requestTimeout+httpWriteTimeoutGrace)
+	}
+	return baseline
+}
+
+func httpWriteTimeout(enablePprof bool, handlers []*http.HttpHandler) time.Duration {
+	writeTimeout := 30 * time.Second
+	if enablePprof {
+		writeTimeout = 60 * time.Second
+	}
+
+	for _, handler := range handlers {
+		writeTimeout = requestWriteTimeout(writeTimeout, handler.Timeout)
+	}
+
+	return writeTimeout
+}
+
+func requestTimeoutInterceptor(timeout time.Duration) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if timeout <= 0 {
+				return next(ctx, req)
+			}
+
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			response, err := next(ctx, req)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, ctx.Err())
+			}
+			return response, err
+		}
+	})
 }
 
 type MetricsHandlerOpts struct {
@@ -167,6 +269,8 @@ type MetricsHandlerOpts struct {
 	DefaultDropMetrics       bool
 
 	RemoteWriteClients []remote.RemoteWriteClient
+
+	DynamicLabeler metadata.MetricLabeler
 }
 
 func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
@@ -177,10 +281,16 @@ func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
 		KeepMetrics:               o.KeepMetrics,
 		KeepMetricsWithLabelValue: o.KeepMetricsLabelValues,
 		DefaultDropMetrics:        o.DefaultDropMetrics,
+		DynamicLabeler:            o.DynamicLabeler,
 	}
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
+	backend := opts.StorageBackend
+	if backend == "" {
+		backend = storage.BackendADX
+	}
+
 	maxSegmentAge := 30 * time.Second
 	if opts.MaxSegmentAge.Seconds() > 0 {
 		maxSegmentAge = opts.MaxSegmentAge
@@ -196,7 +306,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		maxSegmentCount = opts.MaxSegmentCount
 	}
 
-	maxDiskUsage := int64(10 * 1024 * 1024 * 1024) // 10 GB
+	maxDiskUsage := DefaultMaxDiskUsage
 	if opts.MaxDiskUsage > 0 {
 		maxDiskUsage = opts.MaxDiskUsage
 	}
@@ -207,20 +317,48 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MaxDiskUsage:     maxDiskUsage,
 	})
 
-	store := storage.NewLocalStore(storage.StoreOpts{
+	budgetOpts, err := wal.ResolveAdmissionWithEnforcement(wal.Usage{Bytes: maxDiskUsage, Segments: maxSegmentCount}, opts.MaxTableDiskUsage, opts.MaxTableSegmentCount, opts.DisableTableLimits, opts.EnforceTableLimits, opts.TableLimits)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Realtime.enabled() {
+		// Admission replaces the repository's disk checks, so it must also
+		// hold back the space reserved for realtime tables.
+		budgetOpts.Policy = opts.Realtime.Policy
+		budgetOpts.RealtimeReservedBytes = opts.Realtime.ReservedDiskBytes
+	}
+
+	storeOpts := storage.StoreOpts{
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
-		MaxDiskUsage:     opts.MaxDiskUsage,
+		MaxDiskUsage:     maxDiskUsage,
+		Admission:        wal.NewAdmission(budgetOpts),
+		MetricComponent:  "collector",
+		Backend:          backend,
 		LiftedLabels:     opts.LiftLabels,
 		LiftedAttributes: opts.LiftAttributes,
 		LiftedResources:  opts.LiftResources,
 		WALFlushInterval: opts.WALFlushInterval,
-	})
+	}
+	var realtimeBatch cluster.RealtimeBatchOpts
+	if opts.Realtime.enabled() {
+		storeOpts.Policy = opts.Realtime.Policy
+		storeOpts.Realtime = wal.RotationPolicy{SegmentMaxAge: opts.Realtime.MaxSegmentAge}
+		storeOpts.RealtimeReservedDiskBytes = opts.Realtime.ReservedDiskBytes
+		realtimeBatch = cluster.RealtimeBatchOpts{
+			MaxBatchLatency: opts.Realtime.MaxBatchLatency,
+			MaxBatchBytes:   opts.Realtime.MaxBatchBytes,
+		}
+	}
+	store := storage.NewLocalStore(storeOpts)
 
 	var httpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
+	if opts.KubeNode != nil {
+		workerSvcs = append(workerSvcs, opts.KubeNode)
+	}
 
 	for _, handlerOpts := range opts.PromMetricsHandlers {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
@@ -232,6 +370,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		httpHandlers = append(httpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
+			Timeout: handlerOpts.RequestTimeout,
 		})
 	}
 
@@ -248,24 +387,30 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			httpHandlers = append(httpHandlers, &http.HttpHandler{
 				Path:    handlerOpts.Path,
 				Handler: oltpMetricsService.Handler,
+				Timeout: handlerOpts.RequestTimeout,
 			})
 		}
 
 		if handlerOpts.GrpcPort > 0 {
-			path, handler := metricsv1connect.NewMetricsServiceHandler(oltpMetricsService)
+			path, handler := metricsv1connect.NewMetricsServiceHandler(
+				oltpMetricsService,
+				connect.WithInterceptors(requestTimeoutInterceptor(handlerOpts.RequestTimeout)),
+			)
 
 			grpcHandlers = append(grpcHandlers, &http.GRPCHandler{
 				Port:    handlerOpts.GrpcPort,
 				Path:    path,
 				Handler: handler,
+				Timeout: handlerOpts.RequestTimeout,
 			})
 		}
 	}
 
 	var (
-		replicator    service.Component
-		transferQueue chan *cluster.Batch
-		partitioner   cluster.MetricPartitioner
+		replicator            service.Component
+		transferQueue         chan *cluster.Batch
+		realtimeTransferQueue chan *cluster.Batch
+		partitioner           cluster.MetricPartitioner
 	)
 	if opts.Endpoint != "" {
 		// This is a static partitioner that forces all entries to be assigned to the remote endpoint.
@@ -275,18 +420,20 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}
 
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-			Hostname:               opts.NodeName,
-			Partitioner:            partitioner,
-			Health:                 health,
-			SegmentRemover:         store,
-			InsecureSkipVerify:     opts.InsecureSkipVerify,
-			MaxTransferConcurrency: opts.MaxTransferConcurrency,
-			DisableGzip:            opts.DisableGzip,
+			Hostname:                     opts.NodeName,
+			Partitioner:                  partitioner,
+			Health:                       health,
+			SegmentRemover:               store,
+			InsecureSkipVerify:           opts.InsecureSkipVerify,
+			MaxTransferConcurrency:       opts.MaxTransferConcurrency,
+			DisableGzip:                  opts.DisableGzip,
+			QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)
 		}
 		transferQueue = r.TransferQueue()
+		realtimeTransferQueue = r.RealtimeTransferQueue()
 		replicator = r
 	} else {
 		partitioner = remotePartitioner{
@@ -296,22 +443,38 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 		r := cluster.NewFakeReplicator()
 		transferQueue = r.TransferQueue()
+		realtimeTransferQueue = r.RealtimeTransferQueue()
 		replicator = r
 	}
 
-	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      time.Minute,
-		Partitioner:        partitioner,
-		Segmenter:          store.Index(),
-		MinUploadSize:      4 * 1024 * 1024,
-		MaxBatchSegments:   opts.MaxBatchSegments,
-		UploadQueue:        transferQueue,
-		TransferQueue:      transferQueue,
-		PeerHealthReporter: health,
-	})
+	// Create collector-specific WAL segment metrics lazily to avoid exposing ingestor metrics
+	collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge := metrics.NewCollectorSegmentMetrics()
 
-	health.QueueSizer = batcher
+	batcher, err := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:              opts.StorageDir,
+		MaxSegmentAge:           time.Minute,
+		Partitioner:             partitioner,
+		Segmenter:               store.Index(),
+		MinUploadSize:           4 * 1024 * 1024,
+		MaxBatchSegments:        opts.MaxBatchSegments,
+		MaxTableBatches:         max(10, opts.MaxTransferConcurrency*2),
+		UploadQueue:             transferQueue,
+		TransferQueue:           transferQueue,
+		RealtimeUploadQueue:     realtimeTransferQueue,
+		RealtimeTransferQueue:   realtimeTransferQueue,
+		Realtime:                realtimeBatch,
+		PeerHealthReporter:      health,
+		SegmentsCountMetric:     collectorSegmentsTotal,
+		SegmentsSizeBytesMetric: collectorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    collectorSegmentsMaxAge,
+
+		SegmentsSizeByPriorityMetric: metrics.NewCollectorSegmentSizeByPriorityMetric(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create batcher: %w", err)
+	}
+
+	health.QueueSizer = &storeQueueSizer{Batcher: batcher, store: store}
 
 	var scraper *Scraper
 	if opts.Scraper != nil {
@@ -321,6 +484,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 		scraper = NewScraper(opts.Scraper)
 	}
+
+	// Store the informer reference for cleanup during Close()
+	podInformer := opts.PodInformer
 
 	for _, handlerOpts := range opts.LogCollectionHandlers {
 		svc, err := handlerOpts.Create(store)
@@ -341,12 +507,15 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	svc := &Service{
-		opts: opts,
-		metricsSvc: metrics.NewService(metrics.ServiceOpts{
+		opts:           opts,
+		storageBackend: backend,
+		health:         health,
+		metricsSvc: metricsHandler.NewService(metricsHandler.ServiceOpts{
 			PeerHealthReport: health,
 		}),
 		store:        store,
 		scraper:      scraper,
+		podInformer:  podInformer,
 		workerSvcs:   workerSvcs,
 		httpHandlers: httpHandlers,
 		grpcHandlers: grpcHandlers,
@@ -356,6 +525,14 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	return svc, nil
 }
+
+type storeQueueSizer struct {
+	cluster.Batcher
+	store *storage.LocalStore
+}
+
+func (s *storeQueueSizer) SegmentsSize() int64  { return s.store.Size() }
+func (s *storeQueueSizer) SegmentsTotal() int64 { return s.store.SegmentCount() }
 
 func (s *Service) Open(ctx context.Context) error {
 	ctx, s.cancel = context.WithCancel(ctx)
@@ -407,15 +584,16 @@ func (s *Service) Open(ctx context.Context) error {
 
 	opts := &http.ServerOpts{
 		MaxConns:     s.opts.MaxConnections,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: httpWriteTimeout(s.opts.EnablePprof, s.httpHandlers),
 		Listener:     listener,
 	}
 
 	primaryHttp := http.NewServer(opts)
 
 	primaryHttp.RegisterHandler("/metrics", promhttp.Handler())
+	primaryHttp.RegisterHandlerFunc("/readyz", s.HandleReady)
+	primaryHttp.RegisterHandlerFunc("/debug/store", s.HandleDebugStore)
 	if s.opts.EnablePprof {
-		opts.WriteTimeout = 60 * time.Second
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/", pprof.Index)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/cmdline", pprof.Cmdline)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/profile", pprof.Profile)
@@ -424,7 +602,7 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	for _, handler := range s.httpHandlers {
-		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
+		primaryHttp.RegisterHandler(handler.Path, handler.WithTimeout())
 	}
 	s.httpServers = append(s.httpServers, primaryHttp)
 
@@ -434,8 +612,9 @@ func (s *Service) Open(ctx context.Context) error {
 			return err
 		}
 		server := http.NewServer(&http.ServerOpts{
-			MaxConns: s.opts.MaxConnections,
-			Listener: listener,
+			MaxConns:     s.opts.MaxConnections,
+			WriteTimeout: requestWriteTimeout(30*time.Second, handler.Timeout),
+			Listener:     listener,
 		})
 		server.RegisterHandler(handler.Path, handler.Handler)
 		s.httpServers = append(s.httpServers, server)
@@ -480,7 +659,43 @@ func (s *Service) Close() error {
 	s.batcher.Close()
 	s.replicator.Close()
 	s.store.Close()
+	if closer, ok := s.podInformer.(service.Component); ok {
+		closer.Close()
+	}
 	return nil
+}
+
+func (s *Service) HandleReady(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	unhealthyReason := ""
+	if s.health != nil {
+		unhealthyReason = s.health.UnhealthyReason()
+	}
+
+	if unhealthyReason == "" {
+		w.WriteHeader(stdhttp.StatusOK)
+		fmt.Fprintf(w, "status=ok backend=%s\n", s.storageBackend)
+		return
+	}
+
+	w.WriteHeader(stdhttp.StatusServiceUnavailable)
+	fmt.Fprintf(w, "status=not_ready reason=%s backend=%s\n", unhealthyReason, s.storageBackend)
+}
+
+func (s *Service) HandleDebugStore(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	if _, err := fmt.Fprintf(w, "backend=%s\n", s.storageBackend); err != nil {
+		logger.Errorf("failed to write backend header: %s", err)
+		return
+	}
+
+	if debugWriter, ok := s.store.(debug.DebugWriter); ok {
+		if err := debugWriter.WriteDebug(w); err != nil {
+			logger.Errorf("failed to write store debug info: %s", err)
+		}
+	}
 }
 
 func tlsListenerFunc(cert tls.Certificate) func(addr string) (net.Listener, error) {
@@ -521,7 +736,7 @@ type StoreRequestWriter struct {
 }
 
 func (s *StoreRequestWriter) Write(ctx context.Context, req *prompb.WriteRequest) error {
-	return s.store.WriteTimeSeries(ctx, req.Timeseries)
+	return s.store.WriteTimeSeries(ctx, req)
 }
 
 func (s *StoreRequestWriter) CloseIdleConnections() {
@@ -532,7 +747,7 @@ type StoreRemoteClient struct {
 }
 
 func (s *StoreRemoteClient) Write(ctx context.Context, wr *prompb.WriteRequest) error {
-	return s.store.WriteTimeSeries(ctx, wr.Timeseries)
+	return s.store.WriteTimeSeries(ctx, wr)
 }
 
 func (s *StoreRemoteClient) CloseIdleConnections() {

@@ -27,11 +27,11 @@ func (s *StoreSink) Open(ctx context.Context) error {
 
 func (s *StoreSink) Send(ctx context.Context, batch *types.LogBatch) error {
 	err := s.store.WriteNativeLogs(ctx, batch)
-	if err != nil {
-		return err
+	_, failure := storage.SplitOutcome(err)
+	if failure == nil {
+		batch.Ack()
 	}
-	batch.Ack()
-	return nil
+	return err
 }
 
 func (s *StoreSink) Close() error {
@@ -41,3 +41,7 @@ func (s *StoreSink) Close() error {
 func (s *StoreSink) Name() string {
 	return "StoreSink"
 }
+
+// Durable reports that this sink owns the durability of the batch: once it
+// accepts, the producer must not be asked to resend.
+func (s *StoreSink) Durable() bool { return true }

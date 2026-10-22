@@ -38,6 +38,7 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 		line = bytes.ReplaceAll(line, []byte{'\t'}, []byte{' '})
 
 		var nn int
+
 		nn, err = w.KmsgWriter.Write(line)
 
 		if nn == len(line) {

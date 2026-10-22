@@ -13,14 +13,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func getBootTime() (time.Time, error) {
+func getBootTimeOffset() (time.Duration, error) {
 	var sysinfo unix.Sysinfo_t
 
 	err := unix.Sysinfo(&sysinfo)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("could not get boot time: %w", err)
+		return 0, fmt.Errorf("could not get boot time: %w", err)
 	}
 
 	// sysinfo only has seconds
-	return time.Now().Add(-1 * (time.Duration(sysinfo.Uptime) * time.Second)), nil
+	return -1 * (time.Duration(sysinfo.Uptime) * time.Second), nil
 }

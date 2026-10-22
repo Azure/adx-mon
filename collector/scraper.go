@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"sort"
 	"strconv"
@@ -12,13 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/collector/metadata"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -56,7 +57,7 @@ type ScraperOpts struct {
 	// DisableDiscovery disables the discovery of scrape targets.
 	DisableDiscovery bool
 
-	PodInformer *k8s.PodInformer
+	PodInformer k8s.PodInformerInterface
 
 	// Targets is a list of static scrape targets.
 	Targets []ScrapeTarget
@@ -67,6 +68,8 @@ type ScraperOpts struct {
 	RemoteClients []remote.RemoteWriteClient
 
 	HealthChecker interface{ IsHealthy() bool }
+
+	DynamicLabeler metadata.MetricLabeler
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -77,6 +80,7 @@ func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
 		DropMetrics:               s.DropMetrics,
 		KeepMetrics:               s.KeepMetrics,
 		KeepMetricsWithLabelValue: s.KeepMetricsWithLabelValue,
+		DynamicLabeler:            s.DynamicLabeler,
 	}
 }
 
@@ -86,6 +90,9 @@ type ScrapeTarget struct {
 	Namespace string
 	Pod       string
 	Container string
+
+	// ScrapeInterval overrides the global interval. Zero inherits the default.
+	ScrapeInterval time.Duration
 }
 
 func (t ScrapeTarget) path() string {
@@ -101,12 +108,31 @@ func (t ScrapeTarget) String() string {
 }
 
 func (t ScrapeTarget) Equals(other ScrapeTarget) bool {
-	return t.Addr == other.Addr && t.Namespace == other.Namespace && t.Pod == other.Pod && t.Container == other.Container && t.Static == other.Static
+	return t == other
+}
+
+// scrapeTargetKey separates pod incarnations and endpoints, including static
+// endpoints with identical labels. Scheduling options are not part of identity.
+type scrapeTargetKey struct {
+	podUID    types.UID
+	static    bool
+	namespace string
+	pod       string
+	container string
+	addr      string
+}
+
+func (t ScrapeTarget) key(uid types.UID, static bool) scrapeTargetKey {
+	return scrapeTargetKey{uid, static, t.Namespace, t.Pod, t.Container, t.Addr}
+}
+
+func (k scrapeTargetKey) belongsTo(p *v1.Pod) bool {
+	return !k.static && k.podUID == p.UID && k.namespace == p.Namespace && k.pod == p.Name
 }
 
 type Scraper struct {
 	opts                 ScraperOpts
-	podInformer          *k8s.PodInformer
+	podInformer          k8s.PodInformerInterface
 	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
@@ -119,7 +145,9 @@ type Scraper struct {
 	cancel context.CancelFunc
 
 	mu      sync.RWMutex
-	targets map[string]ScrapeTarget
+	targets map[scrapeTargetKey]ScrapeTarget
+
+	targetsChanged chan struct{}
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -130,11 +158,15 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		requestTransformer: opts.RequestTransformer(),
 		remoteClients:      opts.RemoteClients,
 		healthChecker:      opts.HealthChecker,
-		targets:            make(map[string]ScrapeTarget),
+		targets:            make(map[scrapeTargetKey]ScrapeTarget),
+		targetsChanged:     make(chan struct{}, 1),
 	}
 }
 
 func (s *Scraper) Open(ctx context.Context) error {
+	if s.opts.ScrapeInterval <= 0 {
+		return errors.New("scrape interval must be greater than zero")
+	}
 	logger.Infof("Starting prometheus scraper for node %s", s.opts.NodeName)
 	ctx, cancelFn := context.WithCancel(ctx)
 	s.cancel = cancelFn
@@ -151,7 +183,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 	// Add static targets
 	for _, target := range s.opts.Targets {
 		logger.Infof("Adding static target %s", target)
-		s.targets[target.path()] = target
+		s.targets[target.key("", true)] = target
 	}
 
 	if !s.opts.DisableDiscovery {
@@ -164,7 +196,6 @@ func (s *Scraper) Open(ctx context.Context) error {
 	// Discover the initial targets running on the node
 	s.wg.Add(1)
 	go s.scrape(ctx)
-	go s.resync(ctx)
 
 	return nil
 }
@@ -184,44 +215,55 @@ func (s *Scraper) Close() error {
 func (s *Scraper) scrape(ctx context.Context) {
 	defer s.wg.Done()
 
-	// Sleep for a random amount of time to avoid thundering herd
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second):
-		// continue
-	}
-
 	reconnectTimer := time.NewTicker(5 * time.Minute)
 	defer reconnectTimer.Stop()
-	t := time.NewTicker(s.opts.ScrapeInterval)
+	t := time.NewTimer(0)
 	defer t.Stop()
+	timerC := t.C
+	schedule := make(scrapeSchedule)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			if !s.healthChecker.IsHealthy() {
-				logger.Warnf("Collector is unhealthy, skipping scrape")
-				continue
-			}
-			s.scrapeTargets(ctx)
+		case <-timerC:
+		case <-s.targetsChanged:
 		case <-reconnectTimer.C:
 			for _, remoteClient := range s.remoteClients {
 				remoteClient.CloseIdleConnections()
 			}
 		}
+
+		now := time.Now()
+		s.mu.RLock()
+		schedule.reconcile(s.targets, s.opts.ScrapeInterval, now)
+		s.mu.RUnlock()
+		if targets := schedule.due(now); len(targets) > 0 {
+			if !s.healthChecker.IsHealthy() {
+				logger.Warnf("Collector is unhealthy, skipping scrape")
+			} else {
+				s.scrapeTargets(ctx, targets)
+			}
+			schedule.advance(now, time.Now())
+		}
+
+		timerC = nil
+		t.Stop()
+		if next, ok := schedule.next(); ok {
+			t.Reset(time.Until(next))
+			timerC = t.C
+		}
 	}
 }
 
-func (s *Scraper) scrapeTargets(ctx context.Context) {
-	targets := s.Targets()
-
+func (s *Scraper) scrapeTargets(ctx context.Context, targets []ScrapeTarget) {
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := prompb.WriteRequestPool.Get()
 	defer prompb.WriteRequestPool.Put(wr)
 
 	for _, target := range targets {
+		if ctx.Err() != nil {
+			break
+		}
 		logger.Infof("Scraping %s", target.String())
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
@@ -235,13 +277,6 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			if err != nil {
 				logger.Warnf("Failed to parse series %s/%s/%s at %s: %s",
 					target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
-				continue
-			}
-
-			name := prompb.MetricName(ts)
-			if s.requestTransformer.ShouldDropMetric(ts, name) {
-				prompb.TimeSeriesPool.Put(ts)
-				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
 				continue
 			}
 
@@ -266,7 +301,6 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 
 			prompb.Sort(ts.Labels)
 
-			ts = s.requestTransformer.TransformTimeSeries(ts)
 			wr.Timeseries = append(wr.Timeseries, ts)
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
@@ -281,28 +315,37 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 		wr = s.flushBatchIfNecessary(ctx, wr)
 	}
 
-	if err := s.sendBatch(ctx, wr); err != nil {
-		logger.Error(err.Error())
-	}
-	wr.Timeseries = wr.Timeseries[:0]
+	s.flushBatch(ctx, wr)
 }
 
 func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteRequest) *prompb.WriteRequest {
-	filtered := wr
-	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
-		filtered = s.requestTransformer.TransformWriteRequest(wr)
+	if len(wr.Timeseries) < s.opts.MaxBatchSize {
+		return wr
 	}
 
-	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
+	return s.flushBatch(ctx, wr)
+}
+
+func (s *Scraper) flushBatch(ctx context.Context, wr *prompb.WriteRequest) *prompb.WriteRequest {
+	if len(wr.Timeseries) == 0 {
+		return wr
+	}
+
+	original := append([]*prompb.TimeSeries(nil), wr.Timeseries...)
+	filtered := s.requestTransformer.TransformWriteRequestWithCommonLabels(wr)
+	if len(filtered.Timeseries) > 0 {
 		if err := s.sendBatch(ctx, filtered); err != nil {
 			logger.Error(err.Error())
 		}
-		for i := range filtered.Timeseries {
-			ts := filtered.Timeseries[i]
-			prompb.TimeSeriesPool.Put(ts)
-		}
-		filtered.Timeseries = filtered.Timeseries[:0]
 	}
+
+	for _, ts := range original {
+		prompb.TimeSeriesPool.Put(ts)
+	}
+	clear(filtered.Timeseries[:cap(filtered.Timeseries)])
+	filtered.Timeseries = filtered.Timeseries[:0]
+	filtered.CommonLabels = nil
+	filtered.LabelFilter = nil
 	return filtered
 }
 
@@ -315,13 +358,15 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		var sb strings.Builder
 		for _, ts := range wr.Timeseries {
 			sb.Reset()
-			for i, l := range ts.Labels {
+			first := true
+			for l := range wr.Labels(ts) {
+				if !first {
+					sb.WriteByte(',')
+				}
 				sb.Write(l.Name)
 				sb.WriteString("=")
 				sb.Write(l.Value)
-				if i < len(ts.Labels)-1 {
-					sb.Write([]byte(","))
-				}
+				first = false
 			}
 			sb.Write([]byte(" "))
 			for _, s := range ts.Samples {
@@ -336,7 +381,8 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.remoteClients), time.Since(start))
 	}()
 
-	return remote.WriteRequest(ctx, s.remoteClients, wr)
+	_, err := storage.SplitOutcome(remote.WriteRequest(ctx, s.remoteClients, wr))
+	return err
 }
 
 func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
@@ -347,32 +393,46 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 
 	targets := s.isScrapeable(p)
 
-	// Not a scrape-able pod
-	if len(targets) == 0 {
-		return
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	desired := make(map[scrapeTargetKey]ScrapeTarget, len(targets))
+	changed := false
 	for _, target := range targets {
-		existing, ok := s.targets[string(p.UID)]
+		key := target.key(p.UID, false)
+		desired[key] = target
+		existing, ok := s.targets[key]
 		if ok {
 			if target.Equals(existing) {
-				return
+				continue
 			}
 			logger.Infof("Updating target %s %s", target.path(), target)
 		} else {
 			logger.Infof("Adding target %s %s", target.path(), target)
 		}
-		s.targets[string(p.UID)] = target
+		s.targets[key] = target
+		changed = true
+	}
+	for key, target := range s.targets {
+		if _, ok := desired[key]; key.belongsTo(p) && !ok {
+			logger.Infof("Removing target %s %s", target.path(), target)
+			delete(s.targets, key)
+			changed = true
+		}
+	}
+	if changed {
+		s.notifyTargetsChanged()
 	}
 }
 
-func (s *Scraper) OnUpdate(oldObj, newObj interface{}) {
+func (s *Scraper) OnUpdate(oldObj, newObj any) {
 	p, ok := newObj.(*v1.Pod)
 	if !ok || p == nil {
 		return
+	}
+
+	if oldPod, ok := oldObj.(*v1.Pod); ok && oldPod != nil && oldPod.UID != p.UID {
+		s.OnDelete(oldPod)
 	}
 
 	if p.DeletionTimestamp != nil {
@@ -383,6 +443,9 @@ func (s *Scraper) OnUpdate(oldObj, newObj interface{}) {
 }
 
 func (s *Scraper) OnDelete(obj interface{}) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
 	p, ok := obj.(*v1.Pod)
 	if !ok || p == nil {
 		return
@@ -391,12 +454,21 @@ func (s *Scraper) OnDelete(obj interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	target, ok := s.targets[string(p.UID)]
-	if !ok {
-		return
+	for key, target := range s.targets {
+		if key.belongsTo(p) {
+			logger.Infof("Removing target %s %s", target.path(), target)
+			delete(s.targets, key)
+			s.notifyTargetsChanged()
+		}
 	}
-	logger.Infof("Removing target %s %s", target.path(), target)
-	delete(s.targets, string(p.UID))
+}
+
+// Coalesce informer notifications; the scraper always reconciles the full set.
+func (s *Scraper) notifyTargetsChanged() {
+	select {
+	case s.targetsChanged <- struct{}{}:
+	default:
+	}
 }
 
 // isScrapeable returns the scrape target endpoints and true if the pod is currently a target, false otherwise
@@ -413,63 +485,12 @@ func (s *Scraper) Targets() []ScrapeTarget {
 		a = append(a, v)
 	}
 	sort.Slice(a, func(i, j int) bool {
+		if a[i].path() == a[j].path() {
+			return a[i].Addr < a[j].Addr
+		}
 		return a[i].path() < a[j].path()
 	})
 	return a
-}
-
-func (s *Scraper) resync(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			pods, err := s.scrapeClient.Pods()
-			if err != nil {
-				logger.Errorf("Failed to list pods: %s", err.Error())
-				continue
-			}
-
-			podsOnNode := make(map[string]struct{})
-			s.mu.Lock()
-			for _, p := range pods.Items {
-				podsOnNode[string(p.UID)] = struct{}{}
-
-				targets := s.isScrapeable(&p)
-				if len(targets) == 0 {
-					continue
-				}
-
-				for _, target := range targets {
-					existing, ok := s.targets[string(p.UID)]
-					if ok {
-						if target.Equals(existing) {
-							continue
-						}
-						logger.Infof("Updating target %s %s", target.path(), target)
-					} else {
-						logger.Infof("Adding target %s %s", target.path(), target)
-					}
-					s.targets[string(p.UID)] = target
-				}
-			}
-
-			for k, target := range s.targets {
-				if target.Static {
-					continue
-				}
-				if _, ok := podsOnNode[k]; !ok {
-					logger.Infof("Removing target %s", k)
-					delete(s.targets, k)
-				}
-			}
-
-			s.mu.Unlock()
-		}
-	}
 }
 
 func makeTargets(p *v1.Pod) []ScrapeTarget {
@@ -487,6 +508,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 	scheme := getAnnotationOrDefault(p, "adx-mon/scheme", "http")
 	path := getAnnotationOrDefault(p, "adx-mon/path", "/metrics")
+	interval := getScrapeInterval(p)
 
 	// Just scrape this one port
 	port := getAnnotationOrDefault(p, "adx-mon/port", "")
@@ -508,9 +530,14 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 			// If target list is specified, only scrape those path/port combinations
 			if len(targetMap) != 0 {
 				checkPorts := []string{strconv.Itoa(int(cp.ContainerPort)), readinessPort, livenessPort}
+				// Add named port to the check list if it exists
+				if cp.Name != "" {
+					checkPorts = append(checkPorts, cp.Name)
+				}
 				for _, checkPort := range checkPorts {
-					// if the current port, liveness port, or readiness port exist in the targetMap, add that to scrape targets
-					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap); added {
+					// if the current port, liveness port, readiness port, or named port exist in the targetMap, add that to scrape targets
+					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap, &cp); added {
+						target.ScrapeInterval = interval
 						targets = append(targets, target)
 						// if all targets are accounted for, return target list
 						if len(targetMap) == 0 {
@@ -524,30 +551,61 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 			// If a port is specified, only scrape that port on the pod
 			if port != "" {
-				if port != strconv.Itoa(int(cp.ContainerPort)) && port != readinessPort && port != livenessPort {
+				portMatch := false
+				actualPort := ""
+
+				// Check if it matches numeric port
+				if port == strconv.Itoa(int(cp.ContainerPort)) || port == readinessPort || port == livenessPort {
+					portMatch = true
+					actualPort = port
+				}
+				// Check if it matches named port
+				if cp.Name != "" && port == cp.Name {
+					portMatch = true
+					actualPort = strconv.Itoa(int(cp.ContainerPort))
+				}
+
+				if !portMatch {
 					continue
 				}
+
 				targets = append(targets,
 					ScrapeTarget{
-						Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, path),
-						Namespace: p.Namespace,
-						Pod:       p.Name,
-						Container: c.Name,
+						Addr:           fmt.Sprintf("%s://%s:%s%s", scheme, podIP, actualPort, path),
+						Namespace:      p.Namespace,
+						Pod:            p.Name,
+						Container:      c.Name,
+						ScrapeInterval: interval,
 					})
 				return targets
 			}
 
 			targets = append(targets,
 				ScrapeTarget{
-					Addr:      fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
-					Namespace: p.Namespace,
-					Pod:       p.Name,
-					Container: c.Name,
+					Addr:           fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
+					Namespace:      p.Namespace,
+					Pod:            p.Name,
+					Container:      c.Name,
+					ScrapeInterval: interval,
 				})
 		}
 	}
 
 	return targets
+}
+
+func getScrapeInterval(p *v1.Pod) time.Duration {
+	raw := getAnnotationOrDefault(p, "adx-mon/scrape-interval", "")
+	if raw == "" {
+		return 0
+	}
+	interval, err := time.ParseDuration(raw)
+	if err != nil || interval <= 0 {
+		logger.Warnf("Invalid adx-mon/scrape-interval %q for pod %s/%s: must be a positive Go duration; using global scrape interval",
+			raw, p.Namespace, p.Name)
+		return 0
+	}
+	return interval
 }
 
 func parseTargetList(targetList string) (map[string]string, error) {
@@ -571,10 +629,15 @@ func parseTargetList(targetList string) (map[string]string, error) {
 	return m, nil
 }
 
-func addTargetFromMap(podIP, scheme, port, namespace, pod, container string, targetMap map[string]string) (ScrapeTarget, bool) {
+func addTargetFromMap(podIP, scheme, port, namespace, pod, container string, targetMap map[string]string, cp *v1.ContainerPort) (ScrapeTarget, bool) {
 	if tPath, ok := targetMap[port]; ok {
+		actualPort := port
+		// If the port matches a named port, use the actual numeric port
+		if cp != nil && cp.Name == port {
+			actualPort = strconv.Itoa(int(cp.ContainerPort))
+		}
 		target := ScrapeTarget{
-			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, tPath),
+			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, actualPort, tPath),
 			Namespace: namespace,
 			Pod:       pod,
 			Container: container,

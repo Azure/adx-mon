@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -16,18 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	v1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/ingestor"
-	"github.com/Azure/adx-mon/ingestor/adx"
-	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
-	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pkg/limiter"
-	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/scheduler"
-	"github.com/Azure/adx-mon/pkg/tls"
-	"github.com/Azure/adx-mon/pkg/version"
-	"github.com/Azure/adx-mon/schema"
-	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -35,22 +25,47 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/ingestor"
+	"github.com/Azure/adx-mon/ingestor/adx"
+	"github.com/Azure/adx-mon/ingestor/clickhouse"
+	ingestormetrics "github.com/Azure/adx-mon/ingestor/metrics"
+	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
+	monhttp "github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/limiter"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/scheduler"
+	"github.com/Azure/adx-mon/pkg/service"
+	adxtls "github.com/Azure/adx-mon/pkg/tls"
+	"github.com/Azure/adx-mon/pkg/version"
+	"github.com/Azure/adx-mon/schema"
+	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/azure-kusto-go/azkustodata"
 )
 
 func main() {
-	app := &cli.App{
+	if err := newApp().Run(os.Args); err != nil {
+		logger.Fatal(err.Error())
+	}
+}
+
+func newApp() *cli.App {
+	return &cli.App{
 		Name:  "ingestor",
 		Usage: "adx-mon metrics ingestor",
-		Flags: []cli.Flag{
+		Flags: append([]cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "region", Usage: "Current region"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
-			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
-			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
+			&cli.StringFlag{Name: "storage-backend", Usage: "Storage backend to use (adx or clickhouse)", EnvVars: []string{"INGESTOR_STORAGE_BACKEND"}, Value: string(storage.BackendADX)},
+			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for metrics"},
+			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for OTLP logs"},
+			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish ingestor clusters. Format: <key>=<value>"},
 			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
@@ -58,6 +73,12 @@ func main() {
 			&cli.Int64Flag{Name: "max-transfer-size", Usage: "Maximum segment size in bytes allowed for segment transfers", Value: 100 * 1024 * 1024},
 			&cli.Int64Flag{Name: "max-disk-usage", Usage: "Maximum disk space usage allowed before signaling back-pressure", Value: 10 * 1024 * 1024 * 1024},
 			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
+			&cli.Int64Flag{Name: "max-table-disk-usage", Usage: "Maximum WAL bytes per table; zero defaults to 10% of max-disk-usage"},
+			&cli.Int64Flag{Name: "max-table-segment-count", Usage: "Maximum active and closed files per table; zero defaults to 10% of max-segment-count"},
+			&cli.BoolFlag{Name: "disable-table-limits", Usage: "Disable default table quotas; explicit overrides still apply"},
+			&cli.Int64Flag{Name: "max-intake-memory", Usage: "Maximum bytes buffered across concurrent transfer requests. 0 disables the ceiling", Value: 1024 * 1024 * 1024},
+			&cli.BoolFlag{Name: "enforce-table-limits", Usage: "Reject writes that exceed a table budget. When unset, budgets are only measured and reported"},
+			&cli.GenericFlag{Name: "table-limit", Value: &tableLimitValues{}, Usage: "Repeatable normalized table override as JSON: {\"database\":\"Logs\",\"table\":\"App\",\"max-bytes\":1073741824,\"max-segments\":1000}"},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "drop-prefix", Usage: "Drop transfers that match the file prefix. Transfer filenames are in the form of DestinationDB_Table_..."},
@@ -70,7 +91,7 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
-		},
+		}, realtimeCLIFlags()...),
 
 		Action: func(ctx *cli.Context) error {
 			return realMain(ctx)
@@ -79,9 +100,6 @@ func main() {
 		Version: version.String(),
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		logger.Fatal(err.Error())
-	}
 }
 
 func realMain(ctx *cli.Context) error {
@@ -125,6 +143,10 @@ func realMain(ctx *cli.Context) error {
 	maxSegmentCount := ctx.Int64("max-segment-count")
 	dropPrefixes := ctx.StringSlice("drop-prefix")
 	maxDiskUsage := ctx.Int64("max-disk-usage")
+	tableIsolation, err := parseTableIsolationOpts(ctx)
+	if err != nil {
+		return err
+	}
 	maxBatchSegments := ctx.Int("max-batch-segments")
 	partitionSize := ctx.Int("partition-size")
 	maxConns = int(ctx.Uint("max-connections"))
@@ -153,141 +175,180 @@ func realMain(ctx *cli.Context) error {
 		}
 	}
 
-	if cacert != "" || key != "" {
-		if cacert == "" || key == "" {
-			logger.Fatalf("Both --ca-cert and --key are required")
+	// Build server TLS config
+	var (
+		serverTLSConfig *tls.Config
+		cert            tls.Certificate
+	)
+	if cacert != "" && key != "" {
+		certPEM, err := os.ReadFile(cacert)
+		if err != nil {
+			logger.Fatalf("Failed to read cert file: %s", err)
 		}
-	} else {
+		keyPEM, err := os.ReadFile(key)
+		if err != nil {
+			logger.Fatalf("Failed to read key file: %s", err)
+		}
+		c, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			logger.Fatalf("Failed to parse TLS key pair: %s", err)
+		}
+		cert = c
+		logger.Infof("Using TLS from files cert=%s key=%s", cacert, key)
+	} else if cacert == "" && key == "" {
 		logger.Warnf("Using fake TLS credentials (not for production use!)")
-		certBytes, keyBytes, err := tls.NewFakeTLSCredentials()
+		certBytes, keyBytes, err := adxtls.NewFakeTLSCredentials()
 		if err != nil {
 			logger.Fatalf("Failed to create fake TLS credentials: %s", err)
 		}
-
-		certFile, err := os.CreateTemp("", "cert")
+		c, err := tls.X509KeyPair(certBytes, keyBytes)
 		if err != nil {
-			logger.Fatalf("Failed to create cert temp file: %s", err)
+			logger.Fatalf("Failed to build in-memory TLS key pair: %s", err)
 		}
-
-		if _, err := certFile.Write(certBytes); err != nil {
-			logger.Fatalf("Failed to write cert temp file: %s", err)
-		}
-
-		keyFile, err := os.CreateTemp("", "key")
-		if err != nil {
-			logger.Fatalf("Failed to create key temp file: %s", err)
-		}
-
-		if _, err := keyFile.Write(keyBytes); err != nil {
-			logger.Fatalf("Failed to write key temp file: %s", err)
-		}
-
-		cacert = certFile.Name()
-		key = keyFile.Name()
+		cert = c
 		insecureSkipVerify = true
-
-		if err := certFile.Close(); err != nil {
-			logger.Fatalf("Failed to close cert temp file: %s", err)
-		}
-
-		if err := keyFile.Close(); err != nil {
-			logger.Fatalf("Failed to close key temp file: %s", err)
-		}
-
-		defer func() {
-			os.Remove(certFile.Name())
-			os.Remove(keyFile.Name())
-		}()
+	} else {
+		// If either cacert or key is provided, then it is assumed that this code is
+		// running in production and we bail out.
+		logger.Fatalf("Both --ca-cert and --key are required")
 	}
+	serverTLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	logger.Infof("Using TLS ca-cert=%s key=%s", cacert, key)
 	if storageDir == "" {
 		logger.Fatalf("--storage-dir is required")
 	}
 
-	var (
-		allowedDatabases                []string
-		metricsUploaders, logsUploaders []adx.Uploader
-		metricsDatabases, logsDatabases []string
-	)
+	backendRaw := ctx.String("storage-backend")
+	backend, err := storage.ParseBackend(backendRaw)
+	if err != nil {
+		logger.Fatalf("Invalid storage backend: %s", err)
+	}
+	logger.Infof("Ingestor storage backend: %s", backend)
 
-	metricsKusto := ctx.StringSlice("metrics-kusto-endpoints")
-	if len(metricsKusto) > 0 {
-		metricsUploaders, metricsDatabases, err = newUploaders(
-			metricsKusto, storageDir, concurrentUploads,
-			schema.DefaultMetricsMapping, adx.PromMetrics)
-		if err != nil {
-			logger.Fatalf("Failed to create uploader: %s", err)
-		}
-	} else {
-		logger.Warnf("No kusto endpoint provided, using fake metrics uploader")
-		uploader := adx.NewFakeUploader("FakeMetrics")
-		metricsUploaders = append(metricsUploaders, uploader)
-		metricsDatabases = append(metricsDatabases, uploader.Database())
+	metricsEndpoints := ctx.StringSlice("metrics-kusto-endpoints")
+	logsEndpoints := ctx.StringSlice("logs-kusto-endpoints")
+
+	realtimeCfg, err := newRealtimeConfig(ctx, metricsEndpoints, logsEndpoints, maxDiskUsage, backend)
+	if err != nil {
+		logger.Fatalf("Invalid realtime configuration: %s", err)
+	}
+	if realtimeCfg.Policy.HasRealtime() {
+		logger.Infof("Realtime ingestion configured for tables: %v", realtimeCfg.Policy.RealtimeTables())
 	}
 
-	logsKusto := ctx.StringSlice("logs-kusto-endpoints")
-	if len(logsKusto) > 0 {
-		logsUploaders, logsDatabases, err = newUploaders(
-			logsKusto, storageDir, concurrentUploads,
-			schema.DefaultLogsMapping, adx.OTLPLogs)
+	allowedDatabases := make([]string, 0, len(metricsEndpoints)+len(logsEndpoints))
+	var (
+		metricsDatabases []string
+		logsDatabases    []string
+		metricsKustoCli  []ingestormetrics.StatementExecutor
+		logsKustoCli     []ingestormetrics.StatementExecutor
+		uploader         ingestor.Uploader
+	)
+
+	streamingSlots := realtimeCfg.newStreamingSlots()
+	if len(streamingSlots) > 0 {
+		prometheus.MustRegister(adx.NewStreamingSlotsCollector(streamingSlots))
+	}
+
+	switch backend {
+	case storage.BackendADX:
+		metricsUploaders, md, err := newUploaders(
+			metricsEndpoints, storageDir, concurrentUploads,
+			schema.DefaultMetricsMapping, adx.PromMetrics, realtimeCfg, streamingSlots)
 		if err != nil {
-			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
+			logger.Fatalf("Failed to create metrics uploader: %s", err)
 		}
-	} else {
-		logger.Warnf("No kusto endpoint provided, using fake logs uploader")
-		uploader := adx.NewFakeUploader("FakeLogs")
-		logsUploaders = append(logsUploaders, uploader)
-		logsDatabases = append(logsDatabases, uploader.Database())
+		metricsDatabases = md
+		logsUploaders, ld, err := newUploaders(
+			logsEndpoints, storageDir, concurrentUploads,
+			schema.DefaultLogsMapping, adx.OTLPLogs, realtimeCfg, streamingSlots)
+		if err != nil {
+			logger.Fatalf("Failed to create logs uploader: %s", err)
+		}
+		logsDatabases = ld
+
+		uploadDispatcher := adx.NewDispatcher(append(logsUploaders, metricsUploaders...))
+		if err := uploadDispatcher.Open(svcCtx); err != nil {
+			logger.Fatalf("Failed to start upload dispatcher: %s", err)
+		}
+		uploader = uploadDispatcher
+		defer uploadDispatcher.Close()
+
+		for _, cli := range metricsUploaders {
+			metricsKustoCli = append(metricsKustoCli, cli)
+		}
+		for _, cli := range logsUploaders {
+			logsKustoCli = append(logsKustoCli, cli)
+		}
+
+	case storage.BackendClickHouse:
+		metricsUploaders, md, err := newClickHouseUploaders(metricsEndpoints)
+		if err != nil {
+			logger.Fatalf("Failed to create ClickHouse metrics uploader: %s", err)
+		}
+		logsUploaders, ld, err := newClickHouseUploaders(logsEndpoints)
+		if err != nil {
+			logger.Fatalf("Failed to create ClickHouse logs uploader: %s", err)
+		}
+
+		metricsDatabases = md
+		logsDatabases = ld
+
+		combined := append(metricsUploaders, logsUploaders...)
+		chDispatcher := clickhouse.NewDispatcher(logger.Logger(), combined)
+		if err := chDispatcher.Open(svcCtx); err != nil {
+			logger.Fatalf("Failed to start ClickHouse dispatcher: %s", err)
+		}
+		uploader = chDispatcher
+		defer chDispatcher.Close()
+
+	default:
+		logger.Fatalf("Unsupported storage backend %q", backend)
+	}
+
+	if uploader == nil {
+		logger.Fatalf("No uploader configured for backend %s", backend)
 	}
 
 	allowedDatabases = append(allowedDatabases, metricsDatabases...)
 	allowedDatabases = append(allowedDatabases, logsDatabases...)
 
-	uploadDispatcher := adx.NewDispatcher(append(logsUploaders, metricsUploaders...))
-	if err := uploadDispatcher.Open(svcCtx); err != nil {
-		logger.Fatalf("Failed to start upload dispatcher: %s", err)
+	svcOpts := ingestor.ServiceOpts{
+		K8sCli:                       k8scli,
+		K8sCtrlCli:                   ctrlCli,
+		LogsKustoCli:                 logsKustoCli,
+		MetricsKustoCli:              metricsKustoCli,
+		MetricsDatabases:             metricsDatabases,
+		AllowedDatabase:              allowedDatabases,
+		LogsDatabases:                logsDatabases,
+		Namespace:                    namespace,
+		Hostname:                     hostname,
+		Region:                       region,
+		StorageDir:                   storageDir,
+		Uploader:                     uploader,
+		DisablePeerTransfer:          disablePeerTransfer,
+		PartitionSize:                partitionSize,
+		MaxSegmentSize:               maxSegmentSize,
+		MaxSegmentAge:                maxSegmentAge,
+		MaxTransferSize:              maxTransferSize,
+		MaxTransferAge:               maxTransferAge,
+		MaxSegmentCount:              maxSegmentCount,
+		MaxDiskUsage:                 maxDiskUsage,
+		MaxBatchSegments:             maxBatchSegments,
+		ConcurrentUploads:            concurrentUploads,
+		EnableWALFsync:               enableWALFsync,
+		MaxTransferConcurrency:       maxTransferConcurrency,
+		InsecureSkipVerify:           insecureSkipVerify,
+		DropFilePrefixes:             dropPrefixes,
+		SlowRequestThreshold:         slowRequestThreshold.Seconds(),
+		ClusterLabels:                makeClusterLabels(ctx),
+		StorageBackend:               backend,
+		Realtime:                     realtimeCfg.serviceOpts(),
+		QueuedReservedWorkersPercent: realtimeCfg.QueuedReservedWorkersPercent,
+		PeerListeners:                peerListeners(streamingSlots),
 	}
-	defer uploadDispatcher.Close()
-
-	var metricsKustoCli []metrics.StatementExecutor
-	for _, cli := range metricsUploaders {
-		metricsKustoCli = append(metricsKustoCli, cli)
-	}
-
-	var logsKustoCli []metrics.StatementExecutor
-	for _, cli := range logsUploaders {
-		logsKustoCli = append(logsKustoCli, cli)
-	}
-
-	svc, err := ingestor.NewService(ingestor.ServiceOpts{
-		K8sCli:                 k8scli,
-		K8sCtrlCli:             ctrlCli,
-		LogsKustoCli:           logsKustoCli,
-		MetricsKustoCli:        metricsKustoCli,
-		MetricsDatabases:       metricsDatabases,
-		AllowedDatabase:        metricsDatabases,
-		LogsDatabases:          logsDatabases,
-		Namespace:              namespace,
-		Hostname:               hostname,
-		Region:                 region,
-		StorageDir:             storageDir,
-		Uploader:               uploadDispatcher,
-		DisablePeerTransfer:    disablePeerTransfer,
-		PartitionSize:          partitionSize,
-		MaxSegmentSize:         maxSegmentSize,
-		MaxSegmentAge:          maxSegmentAge,
-		MaxTransferSize:        maxTransferSize,
-		MaxTransferAge:         maxTransferAge,
-		MaxSegmentCount:        maxSegmentCount,
-		MaxDiskUsage:           maxDiskUsage,
-		MaxBatchSegments:       maxBatchSegments,
-		EnableWALFsync:         enableWALFsync,
-		MaxTransferConcurrency: maxTransferConcurrency,
-		InsecureSkipVerify:     insecureSkipVerify,
-		DropFilePrefixes:       dropPrefixes,
-		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
-	})
+	tableIsolation.apply(&svcOpts)
+	svc, err := ingestor.NewService(svcOpts)
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
 	}
@@ -337,7 +398,8 @@ func realMain(ctx *cli.Context) error {
 			logger.Warnf("Failed to pin to CPU: %s", err)
 		}
 
-		if err := srv.ServeTLS(l, cacert, key); err != nil {
+		tlsListener := tls.NewListener(l, serverTLSConfig)
+		if err := srv.Serve(tlsListener); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
@@ -355,11 +417,26 @@ func realMain(ctx *cli.Context) error {
 	// the segments will be delayed until the process is restarted.
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
+
+	// Only start the shutdown runner if running in a cluster
+	if _, err := rest.InClusterConfig(); err == nil {
+		go func() {
+			sd := runner.NewShutDownRunnerForNamespace(k8scli, srv, svc, namespace)
+			scheduler.RunForever(svcCtx, time.Minute, sd)
+		}()
+	}
+
+	// Block until svc.Close() has drained, so the process does not exit mid-upload.
+	service.WaitForShutdown(sc, func(sig os.Signal) {
+		// Bound each HTTP shutdown so a stuck connection cannot hang past the pod's grace period.
+		const shutdownTimeout = 30 * time.Second
 
 		// Stop receiving new samples
-		srv.Shutdown(context.Background())
+		srvCtx, srvCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer srvCancel()
+		if err := srv.Shutdown(srvCtx); err != nil {
+			logger.Errorf("Failed to shutdown server: %s", err)
+		}
 
 		// Disable writes for internal processes (metrics)
 		if err := svc.DisableWrites(); err != nil {
@@ -371,7 +448,9 @@ func realMain(ctx *cli.Context) error {
 		// Trigger shutdown of any pending background processes
 		cancel()
 
-		if err := metricsSrv.Shutdown(context.Background()); err != nil {
+		metricsCtx, metricsCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer metricsCancel()
+		if err := metricsSrv.Shutdown(metricsCtx); err != nil {
 			logger.Errorf("Failed to shutdown metrics server: %s", err)
 		}
 
@@ -380,17 +459,7 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Error(err.Error())
 		}
-	}()
-
-	// Only start the shutdown runner if running in a cluster
-	if _, err := rest.InClusterConfig(); err == nil {
-		go func() {
-			sd := runner.NewShutDownRunner(k8scli, srv, svc)
-			scheduler.RunForever(svcCtx, time.Minute, sd)
-		}()
-	}
-
-	<-svcCtx.Done()
+	})
 	return nil
 }
 
@@ -402,9 +471,13 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 		return nil, fake.NewSimpleClientset(), nil, nil
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	config, err := k8s.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", kubeconfig, err)
+	}
+
+	if config.UserAgent == "" {
+		config.UserAgent = fmt.Sprintf("adx-mon-ingestor/%s", version.String())
 	}
 
 	client, err := kubernetes.NewForConfig(config)
@@ -425,38 +498,69 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 	return dyCli, client, ctrlCli, nil
 }
 
-func newKustoClient(endpoint string) (*kusto.Client, error) {
-	kcsb := kusto.NewConnectionStringBuilder(endpoint)
+func newKustoClient(endpoint string) (*azkustodata.Client, error) {
+	kcsb := azkustodata.NewConnectionStringBuilder(endpoint)
 
 	if strings.HasPrefix(endpoint, "https://") {
 		kcsb.WithDefaultAzureCredential()
 	}
-
-	return kusto.New(kcsb)
+	// Create the SDK client first to preserve any defaults the SDK sets on its http.Client.
+	c, err := azkustodata.New(kcsb)
+	if err != nil {
+		return nil, err
+	}
+	// Wrap the existing http.Client with our error-logging RoundTripper to capture transport/HTTP failures.
+	base := c.HttpClient()
+	monhttp.WithLogging(base)
+	return c, nil
 }
 
-func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
-	if !strings.Contains(kustoEndpoint, "=") {
-		return "", "", fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
+func parseStorageEndpoint(endpoint string) (string, string, error) {
+	if !strings.Contains(endpoint, "=") {
+		return "", "", fmt.Errorf("invalid endpoint: %s", endpoint)
 	}
 
-	split := strings.Split(kustoEndpoint, "=")
-	database := split[0]
-	addr := split[1]
+	split := strings.SplitN(endpoint, "=", 2)
+	database := strings.TrimSpace(split[0])
+	target := strings.TrimSpace(split[1])
 
 	if database == "" {
-		return "", "", fmt.Errorf("-db is required")
+		return "", "", fmt.Errorf("database name is required in %q", endpoint)
 	}
-	return addr, database, nil
+	if target == "" {
+		return "", "", fmt.Errorf("endpoint address is required for database %q", database)
+	}
+	return target, database, nil
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
-	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
+	defaultMapping schema.SchemaMapping, sampleType adx.SampleType,
+	realtimeCfg *realtimeConfig, streamingSlots map[string]*adx.StreamingSlots) ([]adx.Uploader, []string, error) {
 
-	var uploaders []adx.Uploader
-	var uploadDatabaseNames []string
+	var (
+		uploaders           []adx.Uploader
+		uploadDatabaseNames []string
+	)
+
+	if len(endpoints) == 0 {
+		var fakeName string
+		switch sampleType {
+		case adx.PromMetrics:
+			fakeName = "FakeMetrics"
+		case adx.OTLPLogs:
+			fakeName = "FakeLogs"
+		default:
+			fakeName = "Fake"
+		}
+		logger.Warnf("No Kusto endpoint provided, using fake uploader %s", fakeName)
+		uploader := adx.NewFakeUploader(fakeName)
+		uploaders = append(uploaders, uploader)
+		uploadDatabaseNames = append(uploadDatabaseNames, uploader.Database())
+		return uploaders, uploadDatabaseNames, nil
+	}
+
 	for _, endpoint := range endpoints {
-		addr, database, err := parseKustoEndpoint(endpoint)
+		addr, database, err := parseStorageEndpoint(endpoint)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -471,11 +575,42 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 			ConcurrentUploads: concurrentUploads,
 			DefaultMapping:    defaultMapping,
 			SampleType:        sampleType,
+
+			QueuedReservedWorkersPercent: realtimeCfg.QueuedReservedWorkersPercent,
+			Realtime:                     realtimeCfg.uploadOpts(database, addr, streamingSlots),
 		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
 	}
 	return uploaders, uploadDatabaseNames, nil
+}
+
+func newClickHouseUploaders(endpoints []string) ([]clickhouse.Uploader, []string, error) {
+	if len(endpoints) == 0 {
+		logger.Warnf("No ClickHouse endpoint provided for this stream; uploads will be skipped")
+		return nil, nil, nil
+	}
+
+	uploaders := make([]clickhouse.Uploader, 0, len(endpoints))
+	databases := make([]string, 0, len(endpoints))
+
+	for _, endpoint := range endpoints {
+		dsn, database, err := parseStorageEndpoint(endpoint)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse clickhouse endpoint %q: %w", endpoint, err)
+		}
+
+		cfg := clickhouse.Config{Database: database, DSN: dsn}
+		uploader, err := clickhouse.NewUploader(cfg, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("init clickhouse uploader for database %q: %w", database, err)
+		}
+
+		uploaders = append(uploaders, uploader)
+		databases = append(databases, database)
+	}
+
+	return uploaders, databases, nil
 }
 
 func newLogger() *log.Logger {
@@ -498,4 +633,54 @@ func (a *writerAdapter) Write(data []byte) (int, error) {
 		return len(data), nil
 	}
 	return a.Writer.Write(data)
+}
+
+// makeClusterLabels processes the --cluster-labels CLI arguments into a map for SummaryRule criteria matching and templating.
+//
+// This function stores cluster labels as-is for criteria matching. Template substitution happens later
+// in applySubstitutions() where underscore prefixes are added to match SummaryRule placeholders.
+//
+// CLI Input Format: --cluster-labels=<key>=<value>
+// Examples:
+//
+//	--cluster-labels=environment=production --cluster-labels=region=eastus
+//	--cluster-labels=datacenter=west --cluster-labels=cluster_id=prod-01
+//
+// Criteria Matching Process:
+// 1. Keys are stored without modification for case-insensitive criteria matching
+// 2. SummaryRule criteria like {"region": ["eastus"]} match against {"region": "eastus"}
+//
+// Template Substitution Process:
+// 1. Keys get underscore prefixes during applySubstitutions() in ingestor/adx/tasks.go
+// 2. In SummaryRule bodies, placeholders like "_region" get replaced with quoted values like "eastus"
+//
+// Example transformation:
+//
+//	Input:  --cluster-labels=region=eastus --cluster-labels=environment=production
+//	Output: map[string]string{"region": "eastus", "environment": "production"}
+//
+// SummaryRule usage example:
+//
+//	Body: | where Region == "_region" and Environment == "_environment"
+//	Result: | where Region == "eastus" and Environment == "production"
+//
+// SECURITY NOTE: This templating directly modifies KQL queries. Incorrect key/value handling
+// could lead to query injection or unintended data access. The underscore prefix ensures
+// template keys are clearly distinguished from regular KQL syntax.
+func makeClusterLabels(ctx *cli.Context) map[string]string {
+	clusterLabels := make(map[string]string)
+	for _, label := range ctx.StringSlice("cluster-labels") {
+		split := strings.SplitN(label, "=", 2)
+		if len(split) != 2 {
+			logger.Fatalf("Invalid cluster label format: %s, expected <key>=<value>", label)
+		}
+
+		key := split[0]
+		value := split[1]
+
+		// Store the key-value pair as-is for criteria matching
+		// The underscore prefix will be added during template substitution
+		clusterLabels[key] = value
+	}
+	return clusterLabels
 }

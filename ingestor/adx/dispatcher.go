@@ -2,22 +2,27 @@ package adx
 
 import (
 	"context"
+	"sync"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/azkustodata"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 )
 
 type dispatcher struct {
-	uploaders map[string]Uploader
-	queue     chan *cluster.Batch
-	cancel    context.CancelFunc
+	uploaders     map[string]Uploader
+	queue         chan *cluster.Batch
+	realtimeQueue chan *cluster.Batch
+	cancel        context.CancelFunc
 }
 
 func NewDispatcher(uploaders []Uploader) *dispatcher {
 	d := &dispatcher{
-		uploaders: make(map[string]Uploader),
-		queue:     make(chan *cluster.Batch, 10000),
+		uploaders:     make(map[string]Uploader),
+		queue:         make(chan *cluster.Batch, 10000),
+		realtimeQueue: make(chan *cluster.Batch, 10000),
 	}
 	for _, u := range uploaders {
 		logger.Infof("Registering uploader for database %s", u.Database())
@@ -52,6 +57,10 @@ func (d *dispatcher) UploadQueue() chan *cluster.Batch {
 	return d.queue
 }
 
+func (d *dispatcher) RealtimeUploadQueue() chan *cluster.Batch {
+	return d.realtimeQueue
+}
+
 func (d *dispatcher) Database() string {
 	return ""
 }
@@ -60,30 +69,60 @@ func (d *dispatcher) Endpoint() string {
 	return ""
 }
 
-func (d *dispatcher) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (d *dispatcher) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	// Not implemented.  Should this fanout to all uploaders?
 	return nil, nil
 }
 
 func (d *dispatcher) upload(ctx context.Context) {
+	// Dispatch the queues independently so a busy or congested realtime path cannot prevent queued batches from
+	// reaching uploaders with workers reserved for them.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		d.dispatch(ctx, d.realtimeQueue)
+	}()
+	go func() {
+		defer wg.Done()
+		d.dispatch(ctx, d.queue)
+	}()
+	wg.Wait()
+}
+
+func (d *dispatcher) dispatch(ctx context.Context, input <-chan *cluster.Batch) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-
-		case batch := <-d.queue:
-			u, ok := d.uploaders[batch.Database]
-			if !ok {
-				logger.Errorf("No uploader for database %s", batch.Database)
-				continue
-			}
-
-			select {
-			case u.UploadQueue() <- batch:
-			default:
-				batch.Release()
-				logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(u.UploadQueue()), cap(u.UploadQueue()))
-			}
+		default:
 		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case batch := <-input:
+			d.dispatchBatch(batch)
+		}
+	}
+}
+
+func (d *dispatcher) dispatchBatch(batch *cluster.Batch) {
+	u, ok := d.uploaders[batch.Database]
+	if !ok {
+		logger.Errorf("No uploader for database %s", batch.Database)
+		return
+	}
+
+	queue := u.UploadQueue()
+	if batch.Priority == ingestpolicy.PriorityRealtime {
+		queue = u.RealtimeUploadQueue()
+	}
+
+	select {
+	case queue <- batch:
+	default:
+		batch.Release()
+		logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(queue), cap(queue))
 	}
 }

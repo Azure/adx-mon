@@ -3,59 +3,20 @@ package alerter
 import (
 	"context"
 	"encoding/json"
-	"flag"
+	"errors"
+	"html"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
 )
 
-const icmTitleMaxLength = 150
+const alertTitleMaxLength = 150
 
 type fakeKustoClient struct {
 	endpoint string
-}
-
-func (f fakeKustoClient) Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	return nil, nil
-}
-
-func (f fakeKustoClient) Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
-	iter := &kusto.RowIterator{}
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Title", Type: types.String},
-		{Name: "Severity", Type: types.Long},
-		{Name: "Summary", Type: types.String},
-		{Name: "CorrelationId", Type: types.String},
-	})
-	if err != nil {
-		return nil, err
-	}
-	rows.Row(value.Values{
-		value.String{Value: "Fake Alert", Valid: true},
-		value.Long{Value: 1, Valid: true},
-		value.String{Value: "Fake Alert Summary", Valid: true},
-		value.String{Value: "Fake CorrelationId", Valid: true},
-	})
-
-	// Work-around to prevent the iter.Mock call from panicing because it's not running in a test.
-	if flag.Lookup("test.v") == nil {
-		flag.String("test.v", "", "")
-		if err := flag.CommandLine.Set("test.v", "true"); err != nil {
-			panic(err)
-		}
-	}
-	if err := iter.Mock(rows); err != nil {
-		panic(err)
-	}
-	return iter, nil
 }
 
 func (f fakeKustoClient) Endpoint() string {
@@ -85,6 +46,7 @@ func fakeAlertHandler() http.Handler {
 type lintAlertHandler struct {
 	alertCount       map[string]int
 	hasFailedQueries bool
+	failures         []string
 }
 
 func NewLinter() *lintAlertHandler {
@@ -97,19 +59,56 @@ func NewLinter() *lintAlertHandler {
 // It logs out the type of failure and tracks that we have had failed queries.
 func (lh *lintAlertHandler) Create(ctx context.Context, endpoint string, alert alert.Alert) error {
 	lh.alertCount[alert.CorrelationID]++
-	if len(alert.Title) > icmTitleMaxLength {
+	if len(alert.Title) > alertTitleMaxLength {
 		logger.Errorf("Title Exceeded Max Length: %s", alert.Title)
 		lh.hasFailedQueries = true
+		lh.failures = append(lh.failures, "title exceeded max length: "+alert.Title)
 	}
 
 	if strings.HasPrefix(alert.CorrelationID, "alert-failure") {
 		lh.hasFailedQueries = true
+		lh.failures = append(lh.failures, lintFailureMessage(alert))
 	}
 	return nil
 }
 
 func (lh *lintAlertHandler) HasFailedQueries() bool {
 	return lh.hasFailedQueries
+}
+
+func (lh *lintAlertHandler) Err() error {
+	msg := "failed to lint rules"
+	if len(lh.failures) > 0 {
+		msg += ": " + strings.Join(lh.failures, "; ")
+	}
+	return errors.New(msg)
+}
+
+func lintFailureMessage(alert alert.Alert) string {
+	if alert.Description != "" {
+		return alert.Description
+	}
+	if alert.Summary != "" {
+		return firstPreBlock(alert.Summary)
+	}
+	if alert.Title != "" {
+		return alert.Title
+	}
+	return alert.CorrelationID
+}
+
+func firstPreBlock(s string) string {
+	start := strings.Index(s, "<pre>")
+	if start == -1 {
+		return s
+	}
+	start += len("<pre>")
+
+	end := strings.Index(s[start:], "</pre>")
+	if end == -1 {
+		return html.UnescapeString(s[start:])
+	}
+	return html.UnescapeString(s[start : start+end])
 }
 
 func (lh *lintAlertHandler) Log() {

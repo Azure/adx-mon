@@ -15,11 +15,18 @@ type journalcursor struct {
 	Cursor string `json:"cursor"`
 }
 
-func cursorPath(cursorDirectory string, filters []string, database string, table string) string {
+func cursorPath(cursorDirectory string, filters []string, database string, table string, journalPath string) string {
 	hasher := xxhash.New()
 	// filters are order dependent, so do not sort before creating the hash.
 	for _, filter := range filters {
 		hasher.Write([]byte(filter))
+	}
+	// Targets reading a non-default journal need their own cursor, or two targets
+	// agreeing on database, table and matches would share one cursor file and
+	// clobber each other. Mixed in only when set, so cursor paths for targets that
+	// read the default journal are unchanged and no re-ingestion is triggered.
+	if journalPath != "" {
+		hasher.Write([]byte("journal-path=" + journalPath))
 	}
 	filterHash := hasher.Sum64()
 	fileName := fmt.Sprintf("journal_%s_%s_%x.cursor", database, table, filterHash)

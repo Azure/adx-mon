@@ -11,11 +11,16 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
+	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
+	"github.com/shopspring/decimal"
+	"k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type ruleStore interface {
@@ -32,10 +37,14 @@ type Executor struct {
 	kustoClient Client
 	ruleStore   ruleStore
 	region      string
+	ctrlCli     client.Client
+	clock       clock.Clock
 
 	// tags are access by the worker concurrently outside a mutex.  This is safe because
 	// the map is never modified after creation.
 	tags map[string]string
+
+	querySlots chan struct{}
 
 	wg      sync.WaitGroup
 	closeFn context.CancelFunc
@@ -51,10 +60,29 @@ type ExecutorOpts struct {
 	RuleStore   ruleStore
 	Region      string
 	Tags        map[string]string
+	Concurrency int
+	CtrlCli     client.Client
+	Clock       clock.Clock
+}
+
+// reservedNotificationColumns is the lowercase set of query result columns that
+// adx-mon consumes as alert fields. Duplicate casings of these columns are rejected
+// before row conversion so lint and execution do not silently pick one value.
+var reservedNotificationColumns = map[string]struct{}{
+	"title":         {},
+	"description":   {},
+	"severity":      {},
+	"recipient":     {},
+	"summary":       {},
+	"correlationid": {},
 }
 
 // TODO make AlertAddr string part of alertcli
 func NewExecutor(opts ExecutorOpts) *Executor {
+	executorClock := opts.Clock
+	if executorClock == nil {
+		executorClock = clock.RealClock{}
+	}
 	return &Executor{
 		alertCli:    opts.AlertCli,
 		alertAddr:   opts.AlertAddr,
@@ -62,6 +90,9 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 		ruleStore:   opts.RuleStore,
 		region:      opts.Region,
 		tags:        opts.Tags,
+		querySlots:  queue.New(opts.Concurrency),
+		ctrlCli:     opts.CtrlCli,
+		clock:       executorClock,
 		workers:     make(map[string]*worker),
 	}
 }
@@ -80,19 +111,18 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 }
 
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
-	lowerTags := make(map[string]string, len(e.tags))
-	for k, v := range e.tags {
-		lowerTags[strings.ToLower(k)] = strings.ToLower(v)
-	}
-	return &worker{
-		rule:        rule,
-		tags:        lowerTags,
-		kustoClient: e.kustoClient,
-		Region:      e.region,
-		HandlerFn:   e.HandlerFn,
-		AlertCli:    e.alertCli,
-		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
-	}
+	return NewWorker(&WorkerConfig{
+		Rule:             rule,
+		Region:           e.region,
+		Tags:             e.tags,
+		KustoClient:      e.kustoClient,
+		AlertClient:      e.alertCli,
+		AlertAddr:        fmt.Sprintf("%s/alerts", e.alertAddr),
+		HandlerFn:        e.HandlerFn,
+		CtrlClient:       e.ctrlCli,
+		sharedQuerySlots: e.querySlots,
+		Clock:            e.clock,
+	})
 }
 
 func (e *Executor) Close() error {
@@ -102,37 +132,12 @@ func (e *Executor) Close() error {
 }
 
 // HandlerFn converts rows of a query to Alerts.
-func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
-	res := Notification{
-		Severity:     math.MinInt64,
-		CustomFields: map[string]string{},
+func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	columns := row.ColumnNames()
-	for i, value := range row.Values {
-		switch strings.ToLower(columns[i]) {
-		case "title":
-			res.Title = value.String()
-		case "description":
-			res.Description = value.String()
-		case "severity":
-			v, err := e.asInt64(value)
-			if err != nil {
-				return &NotificationValidationError{err.Error()}
-			}
-			res.Severity = v
-		case "recipient":
-			res.Recipient = value.String()
-		case "summary":
-			res.Summary = value.String()
-		case "correlationid":
-			res.CorrelationID = value.String()
-		default:
-			res.CustomFields[columns[i]] = value.String()
-		}
-	}
-
-	if err := res.Validate(); err != nil {
+	res, err := ParseAlertResult(qc, row)
+	if err != nil {
 		return err
 	}
 
@@ -142,24 +147,13 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		return fmt.Errorf("failed to create kusto deep link: %w", err)
 	}
 
-	if res.CorrelationID != "" && !strings.HasPrefix(res.CorrelationID, fmt.Sprintf("%s/%s://", qc.Rule.Namespace, qc.Rule.Name)) {
-		res.CorrelationID = fmt.Sprintf("%s/%s://%s", qc.Rule.Namespace, qc.Rule.Name, res.CorrelationID)
-	}
-
-	destination := qc.Rule.Destination
-	// The recipient query results field is deprecated.
-	if destination == "" {
-		logger.Warnf("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
-		destination = res.Recipient
-	}
-
 	a := alert.Alert{
-		Destination:   destination,
+		Destination:   res.Destination,
 		Title:         res.Title,
 		Summary:       summary,
 		Description:   res.Description,
-		Severity:      int(res.Severity),
-		Source:        fmt.Sprintf("%s/%s", qc.Rule.Namespace, qc.Rule.Name),
+		Severity:      clampInt64ToInt(res.Severity),
+		Source:        res.Source,
 		CorrelationID: res.CorrelationID,
 		CustomFields:  res.CustomFields,
 	}
@@ -167,10 +161,16 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
 	logger.Debugf("Sending alert %s %v", addr, a)
 
-	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err = e.alertCli.Create(ctx, addr, a)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if err != nil {
 		if errors.Is(err, alert.ErrTooManyRequests) {
 			logger.Errorf("Failed to create Notification due to throttling: %s/%s", qc.Rule.Namespace, qc.Rule.Name)
-			// We are throttled. Bail out of this loop so we stop trying to send notifications that will just be throttled.
 			return err
 		}
 
@@ -183,29 +183,155 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	return nil
 }
 
-func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
-	switch t := value.(type) {
-	case kustovalues.Long:
-		return t.Value, nil
-	case kustovalues.Real:
-		return int64(t.Value), nil
-	case kustovalues.String:
-		v, err := strconv.ParseInt(t.Value, 10, 64)
+// ParseAlertResult converts and validates a query row without performing delivery enrichment or I/O.
+func ParseAlertResult(qc *QueryContext, row azquery.Row) (AlertResult, error) {
+	if qc == nil {
+		return AlertResult{}, fmt.Errorf("query context must not be nil")
+	}
+	if qc.Rule == nil {
+		return AlertResult{}, fmt.Errorf("query context rule must not be nil")
+	}
+
+	notification := Notification{
+		Severity:     math.MinInt64,
+		CustomFields: map[string]string{},
+	}
+
+	columns := row.Columns()
+	values := row.Values()
+	if len(columns) != len(values) {
+		return AlertResult{}, &NotificationValidationError{fmt.Sprintf("query result row has %d columns and %d values", len(columns), len(values))}
+	}
+
+	columnNames := make([]string, 0, len(columns))
+	for _, column := range columns {
+		columnNames = append(columnNames, column.Name())
+	}
+	if err := validateNotificationColumns(columnNames); err != nil {
+		return AlertResult{}, err
+	}
+
+	for i, value := range values {
+		if value == nil {
+			return AlertResult{}, &NotificationValidationError{fmt.Sprintf("query result column %q has nil value", columnNames[i])}
+		}
+
+		switch strings.ToLower(columnNames[i]) {
+		case "title":
+			notification.Title = value.String()
+		case "description":
+			notification.Description = value.String()
+		case "severity":
+			v, err := asInt64(value)
+			if err != nil {
+				return AlertResult{}, &NotificationValidationError{err.Error()}
+			}
+			notification.Severity = v
+		case "recipient":
+			notification.Recipient = value.String()
+		case "summary":
+			notification.Summary = value.String()
+		case "correlationid":
+			notification.CorrelationID = value.String()
+		default:
+			notification.CustomFields[columnNames[i]] = value.String()
+		}
+	}
+
+	if err := notification.Validate(); err != nil {
+		return AlertResult{}, err
+	}
+
+	source := fmt.Sprintf("%s/%s", qc.Rule.Namespace, qc.Rule.Name)
+	correlationID := notification.CorrelationID
+	if correlationID != "" && !strings.HasPrefix(correlationID, source+"://") {
+		correlationID = fmt.Sprintf("%s://%s", source, correlationID)
+	}
+
+	destination := qc.Rule.Destination
+	if destination == "" {
+		// The recipient query results field is deprecated.
+		logger.Warnf("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
+		destination = notification.Recipient
+	}
+
+	return AlertResult{
+		Destination:   destination,
+		Title:         notification.Title,
+		Summary:       notification.Summary,
+		Description:   notification.Description,
+		Severity:      notification.Severity,
+		Source:        source,
+		CorrelationID: correlationID,
+		CustomFields:  notification.CustomFields,
+	}, nil
+}
+
+func clampInt64ToInt(v int64) int {
+	if v > int64(math.MaxInt) {
+		return math.MaxInt
+	}
+	if v < int64(math.MinInt) {
+		return math.MinInt
+	}
+	return int(v)
+}
+
+func validateNotificationColumns(columns []string) error {
+	seen := make(map[string]string)
+	for _, column := range columns {
+		key := strings.ToLower(column)
+		_, ok := reservedNotificationColumns[key]
+		if !ok {
+			continue
+		}
+
+		if previous, ok := seen[key]; ok {
+			return &NotificationValidationError{fmt.Sprintf("query results include multiple columns for reserved alert field %q: %s, %s", previous, previous, column)}
+		}
+		seen[key] = column
+	}
+
+	return nil
+}
+
+func asInt64(value azvalue.Kusto) (int64, error) {
+	if value == nil {
+		return 0, fmt.Errorf("failed to convert severity to int: <nil>")
+	}
+	switch value.GetType() {
+	case aztypes.Long:
+		v, ok := value.GetValue().(*int64)
+		if !ok || v == nil {
+			break
+		}
+		return *v, nil
+	case aztypes.Real:
+		v, ok := value.GetValue().(*float64)
+		if !ok || v == nil {
+			break
+		}
+		return int64(*v), nil
+	case aztypes.String:
+		v, err := strconv.ParseInt(value.String(), 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("failed to convert severity to int: %w", err)
 		}
 		return v, nil
-	case kustovalues.Int:
-		return int64(t.Value), nil
-	case kustovalues.Decimal:
-		v, err := strconv.ParseFloat(t.Value, 64)
-		if err != nil {
-			return 0, fmt.Errorf("failed to convert severity to int: %w", err)
+	case aztypes.Int:
+		v, ok := value.GetValue().(*int32)
+		if !ok || v == nil {
+			break
 		}
-		return int64(v), nil
-	default:
-		return 0, fmt.Errorf("failed to convert severity to int: %s", value.String())
+		return int64(*v), nil
+	case aztypes.Decimal:
+		v, ok := value.GetValue().(*decimal.Decimal)
+		if !ok || v == nil {
+			break
+		}
+		return v.IntPart(), nil
 	}
+	return 0, fmt.Errorf("failed to convert severity to int: %v", value.GetValue())
 }
 
 func (e *Executor) RunOnce(ctx context.Context) {

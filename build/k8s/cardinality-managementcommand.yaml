@@ -1,0 +1,10 @@
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: cardinality-table
+  namespace: adx-mon
+spec:
+  database: Metrics
+  scope: Database
+  body: |
+    .create table AdxmonIngestorTableCardinalityCount (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real)
