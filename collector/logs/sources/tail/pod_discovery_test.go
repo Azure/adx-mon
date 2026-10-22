@@ -23,6 +23,47 @@ var (
 )
 
 func TestPodDiscoveryLifecycle(t *testing.T) {
+	t.Run("Log-only pod destination lifecycle", func(t *testing.T) {
+		fakeNow, tailSource, podDiscovery := create()
+		defer tailSource.Close()
+		require.NoError(t, podDiscovery.Open(context.Background()))
+		defer podDiscovery.Close()
+
+		pod := scrapedPod("log-only")
+		delete(pod.Annotations, "adx-mon/scrape")
+		delete(pod.Annotations, "adx-mon/log-destination")
+		podDiscovery.OnAdd(pod, false)
+		require.Empty(t, tailSource.targetAdds)
+
+		pod.Annotations["adx-mon/log-destination"] = "db:table"
+		podDiscovery.OnUpdate(nil, pod)
+		require.Len(t, tailSource.targetAdds, 1)
+
+		pod.Annotations["adx-mon/log-destination"] = "db:other"
+		podDiscovery.OnUpdate(nil, pod)
+		require.Eventually(t, func() bool { return len(tailSource.targetUpdates) == 1 }, assertPollMax, assertPollInterval)
+
+		pod.Annotations["adx-mon/log-destination"] = "db:"
+		podDiscovery.OnUpdate(nil, pod)
+		cleanTombstonedTargets(podDiscovery)
+		require.Empty(t, tailSource.targetRemoves)
+
+		pod.Annotations["adx-mon/log-destination"] = "db:table"
+		podDiscovery.OnUpdate(nil, pod)
+		fakeNow.Advance(time.Minute + time.Millisecond)
+		cleanTombstonedTargets(podDiscovery)
+		require.Empty(t, tailSource.targetRemoves)
+
+		delete(pod.Annotations, "adx-mon/log-destination")
+		podDiscovery.OnUpdate(nil, pod)
+		cleanTombstonedTargets(podDiscovery)
+		require.Empty(t, tailSource.targetRemoves)
+
+		fakeNow.Advance(time.Minute + time.Millisecond)
+		cleanTombstonedTargets(podDiscovery)
+		require.Len(t, tailSource.targetRemoves, 1)
+	})
+
 	t.Run("Add Pod", func(t *testing.T) {
 		_, tailSource, podDiscovery := create()
 		defer tailSource.Close()

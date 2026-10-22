@@ -35,12 +35,12 @@ func TestGetFileTargets(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "Pod not opted in to scraping",
+			name:     "Pod without log destination",
 			pod:      genPod("pod1", "namespace1", ourNode, []string{"container1"}, nil),
 			expected: nil,
 		},
 		{
-			name: "Pod has scraping turned off",
+			name: "Pod has scraping turned off and no log destination",
 			pod: genPod("pod1", "namespace1", ourNode, []string{"container1"}, map[string]string{
 				"adx-mon/scrape": "false",
 			}),
@@ -82,6 +82,52 @@ func TestGetFileTargets(t *testing.T) {
 					},
 				},
 			},
+		},
+		{
+			name: "Pod has log destination without metrics scraping",
+			pod: genPod("pod1", "namespace1", ourNode, []string{"container1"}, map[string]string{
+				"adx-mon/log-destination": "db1:table1",
+			}),
+			expected: []FileTailTarget{{
+				FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
+				Database: "db1",
+				Table:    "table1",
+				LogType:  sourceparse.LogTypeKubernetes,
+				Parsers:  []string{},
+				Resources: map[string]interface{}{
+					"pod":         "pod1",
+					"namespace":   "namespace1",
+					"container":   "container1",
+					"containerID": "docker://container1id",
+				},
+			}},
+		},
+		{
+			name: "Explicitly disabled metrics scraping does not disable logs",
+			pod: genPod("pod1", "namespace1", ourNode, []string{"container1"}, map[string]string{
+				"adx-mon/scrape":          "false",
+				"adx-mon/log-destination": "db1:table1",
+			}),
+			expected: []FileTailTarget{{
+				FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
+				Database: "db1",
+				Table:    "table1",
+				LogType:  sourceparse.LogTypeKubernetes,
+				Parsers:  []string{},
+				Resources: map[string]interface{}{
+					"pod":         "pod1",
+					"namespace":   "namespace1",
+					"container":   "container1",
+					"containerID": "docker://container1id",
+				},
+			}},
+		},
+		{
+			name: "Invalid destination does not opt pod into log collection",
+			pod: genPod("pod1", "namespace1", ourNode, []string{"container1"}, map[string]string{
+				"adx-mon/log-destination": "db1:",
+			}),
+			expected: nil,
 		},
 		{
 			name: "Pod is static",

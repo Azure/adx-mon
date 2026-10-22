@@ -73,6 +73,31 @@ func TestScraper_OnUpdatePodReplacement(t *testing.T) {
 	}
 }
 
+func TestScraper_LogOnlyPodHasNoMetricsTargets(t *testing.T) {
+	s := NewScraper(&ScraperOpts{})
+	p := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "log-only",
+			Annotations: map[string]string{
+				"adx-mon/log-destination": "Logs:MyApp",
+			},
+		},
+		Spec: v1.PodSpec{Containers: []v1.Container{{
+			Name:  "app",
+			Ports: []v1.ContainerPort{{ContainerPort: 8080}},
+		}}},
+		Status: v1.PodStatus{PodIP: "1.2.3.4"},
+	}
+
+	s.OnAdd(p, false)
+	require.Empty(t, s.Targets())
+
+	p.Annotations["adx-mon/scrape"] = "true"
+	s.OnUpdate(nil, p)
+	require.Len(t, s.Targets(), 1)
+}
+
 func TestScraperOpts_RequestTransformer(t *testing.T) {
 	opts := &ScraperOpts{
 		DefaultDropMetrics: true,

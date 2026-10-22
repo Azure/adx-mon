@@ -23,7 +23,7 @@ The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is t
 
 #### Key Features
 - **Multi-Source Telemetry Collection:** Collects from Prometheus endpoints, logs (including OTLP and host logs), and traces.
-- **Kubernetes Native:** Discovers pods and services to scrape via annotations (e.g., `adx-mon/scrape: "true"`).
+- **Kubernetes Native:** Discovers pod logs via `adx-mon/log-destination` and pod metrics via `adx-mon/scrape: "true"`.
 - **Configurable via TOML:** Uses a TOML config file (see `docs/config.md`) for flexible setup of scrape targets, filters, exporters, and storage.
 - **Efficient Buffering:** Uses a Write-Ahead Log (WAL) to buffer data locally for reliability and performance.
 - **Label/Attribute Lifting:** Supports lifting selected labels/attributes to top-level columns for easier querying in ADX.
@@ -42,11 +42,11 @@ The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is t
   - `host-log`: Collects host and kernel logs.
   - `exporters`: Additional telemetry destinations.
 - **Kubernetes Annotations:**
-  - `adx-mon/scrape`: Enables scraping for a pod/service.
+  - `adx-mon/scrape`: Enables Prometheus metrics scraping for a pod.
   - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path. Port can be numeric (e.g., "8080") or named (e.g., "metrics").
   - `adx-mon/targets`: Comma-separated list of path:port combinations. Supports named ports.
   - `adx-mon/scrape-interval`: Overrides the scrape interval for all metrics endpoints on a pod using a positive Go duration (e.g., `30s`, `2m`, or `500ms`). Missing, empty, or invalid values use the collector's global interval; invalid values log a warning.
-  - `adx-mon/log-destination`: Sets log destination table.
+  - `adx-mon/log-destination`: Enables pod log collection and sets the destination as `Database:Table`, independently of metrics scraping.
   - `adx-mon/log-parsers`: Comma-separated list of log parsers (e.g., `json`).
 
 #### Example Collector CRD

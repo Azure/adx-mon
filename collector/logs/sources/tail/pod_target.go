@@ -27,16 +27,10 @@ func getFileTargets(pod *v1.Pod, nodeName string, staticPodTargets []*StaticPodT
 	if logger.IsDebug() {
 		logger.Debugf("Checking for targets for pod %s/%s", pod.Namespace, pod.Name)
 	}
-	// Skip the pod if it has not opted in to scraping or are not static pods
+	// A log destination opts the pod into log collection independently of metrics scraping.
+	// Static pod targets can supply a destination without a pod annotation.
 	staticPodTarget := getStaticPod(pod, staticPodTargets)
-	if !strings.EqualFold(getAnnotationOrDefault(pod, "adx-mon/scrape", "false"), "true") && staticPodTarget == nil {
-		if logger.IsDebug() {
-			logger.Debugf("Pod %s/%s has not opted in to scraping", pod.Namespace, pod.Name)
-		}
-		return nil
-	}
-
-	// Skip the pod if it does not have a log database or table configured
+	// Skip the pod if it does not have a log database or table configured.
 	// Destination in form of "database:table"
 	dest := getAnnotationOrDefault(pod, AdxMonLogDestinationAnnotation, "")
 	if staticPodTarget != nil && dest == "" {
