@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/google/uuid"
 	"github.com/siderolabs/go-kmsg"
 )
 
@@ -36,8 +38,8 @@ type KernelTargetConfig struct {
 	PriorityFilter string
 
 	// processed is the last processed sequence number as
-	// stored in the cursor file if one exists.
-	processed uint64
+	// stored in a cursor file for the current boot, if one exists.
+	processed *uint64
 	// cursorFile is the name of the cursor file
 	cursorFile string
 	// priority is the kmsg priority of the log, which speeds up comparison
@@ -50,6 +52,8 @@ type KernelSource struct {
 	ackGenerator  func(*types.Log) func()
 	targets       []KernelTargetConfig
 	cursorDir     string
+	bootIDPath    string
+	bootID        uuid.UUID
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup // Added WaitGroup for goroutine lifecycle management
@@ -62,11 +66,16 @@ func NewKernelSource(config KernelSourceConfig) (*KernelSource, error) {
 		workerCreator: config.WorkerCreator,
 		targets:       config.Targets,
 		cursorDir:     config.CursorDirectory,
+		bootIDPath:    "/proc/sys/kernel/random/boot_id",
 	}, nil
 }
 
 // Open starts reading kernel logs.
 func (s *KernelSource) Open(ctx context.Context) error {
+	if err := s.loadOffsets(); err != nil {
+		return err
+	}
+
 	s.ackGenerator = noopAckGenerator
 	if s.cursorDir != "" {
 		s.ackGenerator = func(log *types.Log) func() {
@@ -87,16 +96,6 @@ func (s *KernelSource) Open(ctx context.Context) error {
 		}
 	}
 
-	for i, target := range s.targets {
-		target.cursorFile = SafeFilename(target.Database, target.Table)
-		fp := filepath.Join(s.cursorDir, target.cursorFile)
-		if offset, err := readOffset(fp); err == nil {
-			target.processed = offset
-		}
-		target.priority = stringToPriority(target.PriorityFilter)
-		s.targets[i] = target
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 
@@ -104,11 +103,9 @@ func (s *KernelSource) Open(ctx context.Context) error {
 	batchQueue := make(chan *types.Log, 512)
 
 	// Start reading kernel logs
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		s.readKernelLogs(ctx, batchQueue)
-	}()
+	})
 
 	// Setup batching
 	batchConfig := engine.BatchConfig{
@@ -119,21 +116,44 @@ func (s *KernelSource) Open(ctx context.Context) error {
 		AckGenerator: s.ackGenerator,
 	}
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		engine.BatchLogs(ctx, batchConfig)
-	}()
+	})
 
 	// Create and start worker
 	worker := s.workerCreator(s.Name(), outputQueue)
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		worker.Run()
-	}()
+	s.wg.Go(worker.Run)
 
+	return nil
+}
+
+func (s *KernelSource) loadOffsets() error {
+	if s.cursorDir != "" {
+		bootID, err := readBootID(s.bootIDPath)
+		if err != nil {
+			return fmt.Errorf("read kernel boot ID: %w", err)
+		}
+		s.bootID = bootID
+	}
+
+	for i := range s.targets {
+		target := &s.targets[i]
+		target.processed = nil
+		target.cursorFile = SafeFilename(target.Database, target.Table)
+		target.priority = stringToPriority(target.PriorityFilter)
+		if s.cursorDir == "" {
+			continue
+		}
+
+		path := filepath.Join(s.cursorDir, target.cursorFile)
+		offset, err := readOffset(path, s.bootID)
+		if err == nil {
+			target.processed = new(offset)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.Warnf("Ignoring kernel offset %s; replaying retained kernel logs: %v", path, err)
+		}
+	}
 	return nil
 }
 
@@ -154,7 +174,7 @@ func (s *KernelSource) Name() string {
 
 // ackSequence writes the sequence number to the offset file
 func (s *KernelSource) ackSequence(sequence uint64, cursorFile string) {
-	if err := writeOffset(filepath.Join(s.cursorDir, cursorFile), sequence); err != nil {
+	if err := writeOffset(filepath.Join(s.cursorDir, cursorFile), sequence, s.bootID); err != nil {
 		logger.Errorf("failed to write kernel offset: %v", err)
 	}
 }
@@ -187,7 +207,7 @@ func (s *KernelSource) readKernelLogs(ctx context.Context, outputQueue chan<- *t
 
 		entrySeq := uint64(pkt.Message.SequenceNumber)
 		for _, target := range s.targets {
-			if target.processed != 0 && entrySeq <= target.processed {
+			if target.processed != nil && entrySeq <= *target.processed {
 				continue // skip already processed logs
 			}
 			if target.priority < pkt.Message.Priority {
@@ -224,26 +244,71 @@ func SafeFilename(database, table string) string {
 	return fmt.Sprintf("kernel_%s", hashStr)
 }
 
-func readOffset(path string) (uint64, error) {
+func readBootID(path string) (uuid.UUID, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	bootID, err := uuid.Parse(strings.TrimSpace(string(data)))
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid boot ID: %w", err)
+	}
+	if bootID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("boot ID must not be empty")
+	}
+	return bootID, nil
+}
+
+// Keep the sequence prefix, followed by a format version and the boot UUID.
+const (
+	offsetVersion = 1
+	offsetSize    = 8 + 1 + 16
+)
+
+func readOffset(path string, bootID uuid.UUID) (uint64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
 	}
 
-	// File doesn't contain enough bytes
-	if len(data) < 8 {
-		return 0, fmt.Errorf("invalid offset file format: insufficient data")
+	if len(data) == 8 {
+		return 0, fmt.Errorf("legacy offset has no boot ID")
+	}
+	if len(data) != offsetSize || data[8] != offsetVersion {
+		return 0, fmt.Errorf("invalid offset file format")
+	}
+	if uuid.UUID(data[9:]) != bootID {
+		return 0, fmt.Errorf("offset belongs to a different boot")
 	}
 
-	// Read uint64 directly from bytes (little-endian)
 	return binary.LittleEndian.Uint64(data[:8]), nil
 }
 
-func writeOffset(path string, sequence uint64) error {
-	// Write directly as binary
-	data := make([]byte, 8)
-	binary.LittleEndian.PutUint64(data, sequence)
-	return os.WriteFile(path, data, 0644)
+func writeOffset(path string, sequence uint64, bootID uuid.UUID) error {
+	var data [offsetSize]byte
+	binary.LittleEndian.PutUint64(data[:8], sequence)
+	data[8] = offsetVersion
+	copy(data[9:], bootID[:])
+
+	// Replace the entire checkpoint so an interrupted write cannot pair a new
+	// boot ID with an old sequence, or expose a partially written record.
+	file, err := os.CreateTemp(filepath.Dir(path), ".kernel-offset-*")
+	if err != nil {
+		return fmt.Errorf("create offset file: %w", err)
+	}
+	defer func() {
+		if err := os.Remove(file.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Warnf("failed to remove temporary kernel offset %s: %v", file.Name(), err)
+		}
+	}()
+	_, writeErr := file.Write(data[:])
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return fmt.Errorf("write offset file: %w", err)
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("replace offset file: %w", err)
+	}
+	return nil
 }
 
 // stringToPriority converts a priority string to kmsg.Priority
