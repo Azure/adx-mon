@@ -2871,6 +2871,153 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	require.True(t, retryOpFound, "Retry operation should be present in final operations")
 }
 
+func TestSummaryRuleRetrySubmissionFailurePreservesWindow(t *testing.T) {
+	ctx := t.Context()
+	now := time.Date(2025, 6, 23, 14, 0, 0, 0, time.UTC)
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rule", Generation: 1},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+	rule.SetCondition(metav1.Condition{Status: metav1.ConditionTrue})
+	rule.SetLastExecutionTime(now)
+	operation := v1.AsyncOperation{
+		OperationId: "failed-op",
+		StartTime:   now.Add(-4 * time.Hour).Format(time.RFC3339Nano),
+		EndTime:     now.Add(-3 * time.Hour).Add(-kustoutil.OneTick).Format(time.RFC3339Nano),
+	}
+	rule.SetAsyncOperation(operation)
+
+	handler := &mockCRDHandler{}
+	executor := &TestStatementExecutor{database: "testdb"}
+	task := &SummaryRuleTask{
+		store:    handler,
+		kustoCli: executor,
+		Clock:    klock.NewFakeClock(now),
+	}
+	submissionErrors := []error{
+		errors.New("HTTP 429: Too Many Requests"),
+		context.DeadlineExceeded,
+		errors.New("HTTP 503: Service Unavailable"),
+	}
+	submissions := 0
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		require.Equal(t, operation.StartTime, startTime)
+		require.Equal(t, operation.EndTime, endTime)
+		submissions++
+		if submissions <= len(submissionErrors) {
+			return "", submissionErrors[submissions-1]
+		}
+		return "replacement-op", nil
+	}
+
+	for cycle := range len(submissionErrors) + 1 {
+		dataset, err := newAsyncOperationDataset(ctx, now, operation.OperationId,
+			string(KustoAsyncOperationStateFailed), 1, "Transient failure", true)
+		require.NoError(t, err)
+		executor.mockDataset = dataset
+		handler.listResponse = &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule.DeepCopy()}}
+		handler.updatedObjects = nil
+
+		require.NoError(t, task.Run(ctx))
+		require.Equal(t, cycle+1, submissions, "each reconciliation should retry the original window once")
+		require.NotEmpty(t, handler.updatedObjects)
+		rule = handler.updatedObjects[len(handler.updatedObjects)-1].(*v1.SummaryRule)
+		require.Equal(t, new(now), rule.GetLastExecutionTime(), "retrying an older window must not move the execution timestamp")
+
+		expected := operation
+		if cycle == len(submissionErrors) {
+			expected.OperationId = "replacement-op"
+		}
+		require.Equal(t, []v1.AsyncOperation{expected}, rule.GetAsyncOperations(),
+			"persisted status must retain exactly one entry for the window")
+	}
+
+	dataset, err := newAsyncOperationDataset(ctx, now, "replacement-op",
+		string(KustoAsyncOperationStateCompleted), 0, "", false)
+	require.NoError(t, err)
+	executor.mockDataset = dataset
+	handler.listResponse = &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule.DeepCopy()}}
+	handler.updatedObjects = nil
+
+	require.NoError(t, task.Run(ctx))
+	require.Equal(t, len(submissionErrors)+1, submissions, "a completed replacement must not be resubmitted")
+	require.NotEmpty(t, handler.updatedObjects)
+	rule = handler.updatedObjects[len(handler.updatedObjects)-1].(*v1.SummaryRule)
+	require.Empty(t, rule.GetAsyncOperations())
+}
+
+func TestSummaryRuleTrackAsyncOperationStates(t *testing.T) {
+	tests := []struct {
+		name          string
+		state         KustoAsyncOperationState
+		shouldRetry   float64
+		replacementID string
+		expectedID    string
+	}{
+		{name: "completed", state: KustoAsyncOperationStateCompleted},
+		{name: "non-retryable failure", state: KustoAsyncOperationStateFailed},
+		{name: "in progress", state: KustoAsyncOperationStateInProgress, expectedID: "original-op"},
+		{name: "scheduled", state: KustoAsyncOperationStateScheduled, expectedID: "original-op"},
+		{name: "throttled", state: KustoAsyncOperationStateThrottled, expectedID: "original-op"},
+		{name: "retry with new ID", state: KustoAsyncOperationStateFailed, shouldRetry: 1, replacementID: "replacement-op", expectedID: "replacement-op"},
+		{name: "retry with same ID", state: KustoAsyncOperationStateFailed, shouldRetry: 1, replacementID: "original-op", expectedID: "original-op"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			rule := &v1.SummaryRule{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-rule"},
+				Spec:       v1.SummaryRuleSpec{Database: "testdb"},
+			}
+			operation := v1.AsyncOperation{
+				OperationId: "original-op",
+				StartTime:   "2025-06-23T10:00:00Z",
+				EndTime:     "2025-06-23T10:59:59.9999999Z",
+			}
+			rule.SetAsyncOperation(operation)
+			dataset, err := newAsyncOperationDataset(ctx, time.Now(), operation.OperationId,
+				string(tt.state), tt.shouldRetry, "Operation status", true)
+			require.NoError(t, err)
+			submissions := 0
+			task := &SummaryRuleTask{
+				store:    &mockCRDHandler{},
+				kustoCli: &TestStatementExecutor{mockDataset: dataset},
+				SubmitRule: func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+					require.Equal(t, operation.StartTime, startTime)
+					require.Equal(t, operation.EndTime, endTime)
+					submissions++
+					return tt.replacementID, nil
+				},
+			}
+
+			task.trackAsyncOperations(ctx, rule)
+
+			if tt.shouldRetry != 0 {
+				require.Equal(t, 1, submissions)
+			} else {
+				require.Zero(t, submissions)
+			}
+			if tt.expectedID == "" {
+				require.Empty(t, rule.GetAsyncOperations())
+			} else {
+				operation.OperationId = tt.expectedID
+				require.Equal(t, []v1.AsyncOperation{operation}, rule.GetAsyncOperations())
+			}
+			if tt.state == KustoAsyncOperationStateFailed && tt.shouldRetry == 0 {
+				condition := rule.GetCondition()
+				require.NotNil(t, condition)
+				require.Equal(t, metav1.ConditionFalse, condition.Status)
+				require.Contains(t, condition.Message, "Operation status")
+			}
+		})
+	}
+}
+
 func TestSummaryRuleTaskGetOperation(t *testing.T) {
 	t.Run("operation found", func(t *testing.T) {
 

@@ -764,27 +764,33 @@ func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.Sum
 			continue
 		}
 
+		if kustoOp.ShouldRetry != 0 {
+			// Keep retryable windows tracked until resubmission succeeds, even if
+			// ADX reports a terminal state for the original operation.
+			t.handleRetryOperation(ctx, rule, op, *kustoOp)
+			continue
+		}
 		if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
 			t.handleCompletedOperation(ctx, rule, *kustoOp)
-		}
-		if kustoOp.ShouldRetry != 0 {
-			t.handleRetryOperation(ctx, rule, op, *kustoOp)
 		}
 	}
 }
 
 func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation, kustoOp AsyncOperationStatus) {
 	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission", kustoOp.OperationId, rule.Spec.Database, rule.Name)
-	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil && operationId != operation.OperationId {
-		// We've resubmitted an async operation due to a recoverable failure but this has created a new operation-id to track.
-		// Remove the existing async operation, we're done processing it, but save the newly created async operation for tracking.
-		rule.RemoveAsyncOperation(operation.OperationId)
-
-		// The new operation has all the same time window as the previous, we only
-		// need to update the OperationId.
-		operation.OperationId = operationId
-		rule.SetAsyncOperation(operation)
+	operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime)
+	if err != nil {
+		logger.Errorf("Failed to resubmit async operation %s for rule %s.%s (window %s to %s): %v",
+			operation.OperationId, rule.Spec.Database, rule.Name, operation.StartTime, operation.EndTime, err)
+		return
 	}
+	if operationId == operation.OperationId {
+		return
+	}
+
+	rule.RemoveAsyncOperation(operation.OperationId)
+	operation.OperationId = operationId
+	rule.SetAsyncOperation(operation)
 }
 
 func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1.SummaryRule, kustoOp AsyncOperationStatus) {
