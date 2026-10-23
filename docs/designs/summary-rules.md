@@ -61,6 +61,11 @@ let _endTime = datetime(...);
 When the query is executed successfully, the `SummaryRule` CRD will be updated with the last execution time and start
 and end time used in the query.  These fields will be used to determine the next execution time and interval.
 
+When ADX marks an async operation as retryable, the ingestor retains its operation ID and original time window until
+resubmission succeeds. Resubmission failures are logged and retried on subsequent reconciliations, even if newer
+windows have already been submitted. A successful retry replaces the tracked operation ID without changing the
+window. Completed operations and non-retryable failures are removed from tracking.
+
 ## Conditional Execution with Criteria
 
 SummaryRules support criteria to enable conditional execution based on cluster labels. This allows the same rule to be deployed across multiple environments while only executing where appropriate.
