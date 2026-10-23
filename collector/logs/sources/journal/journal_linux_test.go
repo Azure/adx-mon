@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"math/rand"
 	"os"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
@@ -21,13 +23,84 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	journalProbeTimeout = 5 * time.Second
+	sinkTimeout         = 60 * time.Second
+)
+
+// requireReadableJournal verifies that entries sent by this process are
+// visible to sdjournal before running tests that otherwise wait for delivery.
+func requireReadableJournal(t *testing.T) {
+	t.Helper()
+	if !journal.Enabled() {
+		t.Skip("journal is not available - skipping")
+	}
+
+	// sdjournal handles must only be used from the OS thread that opened them.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	reader, err := sdjournal.NewJournal()
+	if err != nil {
+		t.Skipf("cannot open journal for reading: %v", err)
+	}
+	defer reader.Close()
+
+	probeTag := "COLLECTOR_JOURNAL_READ_PROBE"
+	probeValue := fmt.Sprintf("%d-%d", os.Getpid(), rand.Int())
+	if err := reader.AddMatch(probeTag + "=" + probeValue); err != nil {
+		t.Skipf("cannot match journal entries: %v", err)
+	}
+	if err := reader.SeekTail(); err != nil {
+		t.Skipf("cannot seek journal: %v", err)
+	}
+	if err := journal.Send("journal read visibility probe", journal.PriInfo, map[string]string{probeTag: probeValue}); err != nil {
+		t.Skipf("cannot write journal probe: %v", err)
+	}
+
+	deadline := time.Now().Add(journalProbeTimeout)
+	for time.Now().Before(deadline) {
+		n, err := reader.Next()
+		if err != nil {
+			t.Skipf("cannot read journal entries: %v", err)
+		}
+		if n > 0 {
+			entry, err := reader.GetEntry()
+			if err != nil {
+				t.Skipf("cannot read journal entry: %v", err)
+			}
+			if entry.Fields[probeTag] == probeValue {
+				return
+			}
+		}
+		remaining := time.Until(deadline)
+		if remaining > 100*time.Millisecond {
+			remaining = 100 * time.Millisecond
+		}
+		if status := reader.Wait(remaining); status < 0 {
+			t.Skipf("cannot wait for journal entries: status %d", status)
+		}
+	}
+	t.Skip("journal accepts writes but does not expose them to this process")
+}
+
+// waitForSink fails rather than leaving a journal integration test blocked.
+func waitForSink(t *testing.T, sink *sinks.CountingSink) int64 {
+	t.Helper()
+	select {
+	case count := <-sink.DoneChan():
+		return count
+	case <-time.After(sinkTimeout):
+		t.Fatalf("journal entries did not arrive within %s; journald may be rate-limiting this unit", sinkTimeout)
+		return 0
+	}
+}
+
 func TestJournalE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
-	if !journal.Enabled() {
-		t.Skip("journal is not available - skipping")
-	}
+	requireReadableJournal(t)
 
 	logger.SetLevel(slog.LevelDebug)
 
@@ -66,8 +139,15 @@ func TestJournalE2E(t *testing.T) {
 	ctx := context.Background()
 	err := service.Open(ctx)
 	require.NoError(t, err)
-	<-sink.DoneChan()
-	service.Close()
+	serviceClosed := false
+	t.Cleanup(func() {
+		if !serviceClosed {
+			_ = service.Close()
+		}
+	})
+	waitForSink(t, sink)
+	_ = service.Close()
+	serviceClosed = true
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Start next batch with same tag, offset from the last log
@@ -105,8 +185,8 @@ func TestJournalE2E(t *testing.T) {
 	ctx = context.Background()
 	err = service.Open(ctx)
 	require.NoError(t, err)
-	defer service.Close()
-	<-newSink.DoneChan()
+	t.Cleanup(func() { _ = service.Close() })
+	waitForSink(t, newSink)
 	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), types.StringOrEmpty(newSink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Ensure the systemd unit identifier is set
@@ -119,9 +199,7 @@ func TestJournalMulipleSources(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
-	if !journal.Enabled() {
-		t.Skip("journal is not available - skipping")
-	}
+	requireReadableJournal(t)
 
 	logger.SetLevel(slog.LevelDebug)
 
@@ -138,7 +216,8 @@ func TestJournalMulipleSources(t *testing.T) {
 	matchTagOne := fmt.Sprintf("%s=%s", testtagOne, testValue)
 	matchTagTwo := fmt.Sprintf("%s=%s", testtagTwo, testValue)
 
-	numLogs := 5000
+	// Keep the volume below journald's default per-unit rate limit.
+	numLogs := 1000
 	errgrp, _ := errgroup.WithContext(context.Background())
 	errgrp.Go(func() error {
 		for i := 0; i < numLogs; i++ {
@@ -185,12 +264,12 @@ func TestJournalMulipleSources(t *testing.T) {
 	ctx := context.Background()
 	err := service.Open(ctx)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = service.Close() })
 
 	err = errgrp.Wait()
 	require.NoError(t, err)
 
-	<-sink.DoneChan()
-	service.Close()
+	waitForSink(t, sink)
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 }
 
@@ -198,9 +277,7 @@ func TestJournalDisjunction(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
-	if !journal.Enabled() {
-		t.Skip("journal is not available - skipping")
-	}
+	requireReadableJournal(t)
 
 	logger.SetLevel(slog.LevelDebug)
 
@@ -244,9 +321,9 @@ func TestJournalDisjunction(t *testing.T) {
 	}
 	err := service.Open(context.Background())
 	require.NoError(t, err)
-	defer service.Close()
+	t.Cleanup(func() { _ = service.Close() })
 
-	count := <-sink.DoneChan()
+	count := waitForSink(t, sink)
 	require.EqualValues(t, numLogs*2, count)
 }
 
@@ -254,9 +331,7 @@ func TestJournalInvalidCursor(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
-	if !journal.Enabled() {
-		t.Skip("journal is not available - skipping")
-	}
+	requireReadableJournal(t)
 
 	logger.SetLevel(slog.LevelDebug)
 
@@ -304,10 +379,10 @@ func TestJournalInvalidCursor(t *testing.T) {
 	ctx := context.Background()
 	err = service.Open(ctx)
 	require.NoError(t, err)
-	defer service.Close()
+	t.Cleanup(func() { _ = service.Close() })
 
 	// Wait for all logs to be processed
-	count := <-sink.DoneChan()
+	count := waitForSink(t, sink)
 
 	// Since we had an invalid cursor, the journal should have fallen back to reading from head
 	// and should have read all logs we sent
