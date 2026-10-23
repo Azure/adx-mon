@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -13,7 +12,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	connect "github.com/bufbuild/connect-go"
-	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
@@ -72,27 +70,20 @@ func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Content-Type") {
 	case "application/x-protobuf":
 
-		// Consume the request body and marshal into a protobuf
-		b := gbp.Get(int(r.ContentLength))
-		defer gbp.Put(b)
-
-		n, err := io.ReadFull(r.Body, b)
+		b, code, err := readOTLPRequestBody(r)
 		if err != nil {
 			s.logger.Error("Failed to read request body", "Error", err)
-			status := newErrorStatus("Failed to read request body.")
-			writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
+			message := "Invalid request body."
+			if code == http.StatusInternalServerError {
+				message = "Failed to read request body."
+			}
+			status := newErrorStatus(message)
+			writeErrorStatusResponse(w, code, status, m)
 			return
 		}
-		if n < int(r.ContentLength) {
-			s.logger.Warn("Short read")
-			status := newErrorStatus("Body did not contain enough bytes.")
-			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
-			return
-		}
-		b = b[:n]
 
 		if logger.IsDebug() {
-			s.logger.Debug("Received request body", "Bytes", n)
+			s.logger.Debug("Received request body", "Bytes", len(b))
 		}
 
 		msg := &v1.ExportMetricsServiceRequest{}
