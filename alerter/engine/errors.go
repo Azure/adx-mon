@@ -59,11 +59,30 @@ func isTransientFailedRequest(err error) bool {
 	if isTransientRemoteSchemaCalloutBlockedError(kerr) {
 		return true
 	}
+	if isTransientClusterAuthenticationMetadataError(kerr) {
+		return true
+	}
 	if isTransientRemoteEntityResolutionError(kerr) {
 		return true
 	}
 
 	return false
+}
+
+func isTransientClusterAuthenticationMetadataError(kerr *kerrors.HttpError) bool {
+	restError := kerr.UnmarshalREST()
+	errorDetails, ok := restError["error"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	errorType, _ := errorDetails["@type"].(string)
+	if errorType != "Kusto.DataNode.Exceptions.RemoteSchemaOperationInvalidException" {
+		return false
+	}
+
+	message, _ := errorDetails["@message"].(string)
+	return strings.Contains(strings.ToLower(message), "failed to retrieve cluster authentication metadata")
 }
 
 func isTransientRemoteEntityResolutionError(kerr *kerrors.HttpError) bool {

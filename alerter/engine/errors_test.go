@@ -139,6 +139,17 @@ func remoteSchemaCalloutBlockedError(errorType, message string) error {
 	))
 }
 
+func remoteSchemaOperationInvalidError(status int, errorType, message string) error {
+	body := fmt.Sprintf(`{"error":{"code":"Bad request","message":"Request is invalid and cannot be executed.","@type":%q,"@message":%q,"@failureCode":%d,"@permanent":false}}`, errorType, message, status)
+	return fmt.Errorf("failed to execute kusto query: %w", kerrors.HTTP(
+		kerrors.OpQuery,
+		http.StatusText(status),
+		status,
+		io.NopCloser(bytes.NewBufferString(body)),
+		"error from Kusto endpoint",
+	))
+}
+
 func TestIsTransientFailedRequest_RemoteEntityResolution(t *testing.T) {
 	const message = "Semantic error: SEM0056: Errors occurred while resolving remote entities. Failed to resolve name or pattern 'ManagedClusterSnapshot'"
 	requestError := func(status int, message string) error {
@@ -250,6 +261,81 @@ func TestIsTransientFailedRequest_CalloutPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := remoteSchemaCalloutBlockedError(tt.errorType, tt.message)
+			require.Equal(t, tt.want, isTransientFailedRequest(err))
+		})
+	}
+}
+
+func TestIsTransientFailedRequest_ClusterAuthenticationMetadata(t *testing.T) {
+	const exceptionType = "Kusto.DataNode.Exceptions.RemoteSchemaOperationInvalidException"
+	const message = "Error getting schema for Cluster='https://remote.kusto.windows.net/': Failed to retrieve cluster authentication metadata. The cluster might be unavailable. Endpoint = 'https://remote.kusto.windows.net/v1/rest/auth/metadata'"
+
+	tests := []struct {
+		name      string
+		status    int
+		errorType string
+		message   string
+		want      bool
+	}{
+		{
+			name:      "cluster authentication metadata unavailable",
+			status:    http.StatusBadRequest,
+			errorType: exceptionType,
+			message:   message,
+			want:      true,
+		},
+		{
+			name:      "case insensitive message",
+			status:    http.StatusBadRequest,
+			errorType: exceptionType,
+			message:   strings.ToUpper(message),
+			want:      true,
+		},
+		{
+			name:      "different schema operation failure",
+			status:    http.StatusBadRequest,
+			errorType: exceptionType,
+			message:   "Error getting schema for the remote cluster: Failed to resolve name or pattern 'UnderlayMonitoring'",
+		},
+		{
+			name:      "authorization failure",
+			status:    http.StatusBadRequest,
+			errorType: exceptionType,
+			message:   "Error getting schema for the remote cluster: Caller is not authorized to access the remote cluster",
+		},
+		{
+			name:      "different exception type",
+			status:    http.StatusBadRequest,
+			errorType: "Kusto.DataNode.Exceptions.RemoteSchemaCalloutBlockedException",
+			message:   message,
+		},
+		{
+			name:    "missing exception type",
+			status:  http.StatusBadRequest,
+			message: message,
+		},
+		{
+			name:      "missing message",
+			status:    http.StatusBadRequest,
+			errorType: exceptionType,
+		},
+		{
+			name:      "forbidden response",
+			status:    http.StatusForbidden,
+			errorType: exceptionType,
+			message:   message,
+		},
+		{
+			name:      "server error response",
+			status:    http.StatusInternalServerError,
+			errorType: exceptionType,
+			message:   message,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := remoteSchemaOperationInvalidError(tt.status, tt.errorType, tt.message)
 			require.Equal(t, tt.want, isTransientFailedRequest(err))
 		})
 	}
