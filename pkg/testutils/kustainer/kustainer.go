@@ -104,27 +104,34 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 	}
 
 	var podName string
+	var lastListErr error
+	var lastPodState string
 	// Wait for pod to exist and be running/ready
 	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
 		pods, err := clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: c.labelSelector,
 		})
-		if err != nil || len(pods.Items) == 0 {
+		if err != nil {
+			lastListErr = err
 			return false, nil
 		}
-		pod := pods.Items[0]
-		if pod.Status.Phase != corev1.PodRunning {
+		if len(pods.Items) == 0 {
+			lastPodState = "no pods match the label selector"
 			return false, nil
 		}
-		for _, cs := range pod.Status.ContainerStatuses {
-			if !cs.Ready {
-				return false, nil
-			}
+		podName = readyPodName(pods.Items)
+		if podName == "" {
+			lastPodState = describePods(pods.Items)
 		}
-		podName = pod.Name
-		return true, nil
+		return podName != "", nil
 	})
 	if err != nil {
+		if lastListErr != nil {
+			return fmt.Errorf("failed to get ready pod (last list error: %v): %w", lastListErr, err)
+		}
+		if lastPodState != "" {
+			return fmt.Errorf("failed to get ready pod (last pod state: %s): %w", lastPodState, err)
+		}
 		return fmt.Errorf("failed to get ready pod: %w", err)
 	}
 
@@ -150,6 +157,41 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 		time.Sleep(time.Second * time.Duration(2<<i))
 	}
 	return fmt.Errorf("failed to connect to kustainer after retries: %w", lastErr)
+}
+
+func readyPodName(pods []corev1.Pod) string {
+	for _, pod := range pods {
+		if pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) == 0 {
+			continue
+		}
+		ready := true
+		for _, cs := range pod.Status.ContainerStatuses {
+			if !cs.Ready {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			return pod.Name
+		}
+	}
+	return ""
+}
+
+// describePods summarizes each pod's phase and the conditions that are not
+// true, so a readiness timeout reports why the pod was never ready.
+func describePods(pods []corev1.Pod) string {
+	var parts []string
+	for _, pod := range pods {
+		var notTrue []string
+		for _, cond := range pod.Status.Conditions {
+			if cond.Status != corev1.ConditionTrue {
+				notTrue = append(notTrue, fmt.Sprintf("%s=%s(%s)", cond.Type, cond.Status, cond.Reason))
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s phase=%s not-true=[%s]", pod.Name, pod.Status.Phase, strings.Join(notTrue, ", ")))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (c *KustainerContainer) Close() error {

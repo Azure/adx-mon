@@ -60,7 +60,7 @@ func getSharedK3sContainer(t *testing.T) *k3s.K3sContainer {
 
 	sharedK3sOnce.Do(func() {
 		sharedK3sCtx, sharedK3sStop = context.WithCancel(context.Background())
-		sharedK3s, sharedK3sErr = k3s.Run(sharedK3sCtx, "rancher/k3s:v1.31.2-k3s1")
+		sharedK3s, sharedK3sErr = k3s.Run(sharedK3sCtx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
 		if sharedK3sErr != nil {
 			return
 		}

@@ -72,8 +72,8 @@ func TestIntegration(t *testing.T) {
 func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
 	t.Helper()
 
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
+	testutils.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
 	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
@@ -339,8 +339,8 @@ func TestDiskFull(t *testing.T) {
 
 	// Create our k3s and Kusto cluster
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
+	testutils.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
 	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
