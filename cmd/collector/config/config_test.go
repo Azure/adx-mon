@@ -7,6 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultConfig_Endpoint(t *testing.T) {
+	require.Equal(t, "https://ingestor.adx-mon.svc.cluster.local.", DefaultConfig.Endpoint)
+}
+
 func TestConfig_ValidatePromRemoteWrite_PathRequired(t *testing.T) {
 	c := Config{
 		PrometheusRemoteWrite: []*PrometheusRemoteWrite{

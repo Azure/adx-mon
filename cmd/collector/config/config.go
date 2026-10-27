@@ -42,7 +42,7 @@ func init() {
 }
 
 var DefaultConfig = Config{
-	Endpoint:                     "https://ingestor.adx-mon.svc.cluster.local",
+	Endpoint:                     "https://ingestor.adx-mon.svc.cluster.local.",
 	MaxBatchSize:                 5000,
 	WALFlushIntervalMilliSeconds: 100,
 	ListenAddr:                   ":8080",

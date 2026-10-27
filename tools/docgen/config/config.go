@@ -88,7 +88,7 @@ func getContents() Contents {
 				Title:       "Global Config",
 				Description: "This is the top level configuration for the collector. The only required fields are `Endpoint` and `StorageDir`.",
 				Config: &config.Config{
-					Endpoint:           "https://ingestor.adx-mon.svc.cluster.local",
+					Endpoint:           config.DefaultConfig.Endpoint,
 					Kubeconfig:         ".kube/config",
 					InsecureSkipVerify: true,
 					ListenAddr:         ":8080",
