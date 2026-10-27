@@ -62,7 +62,7 @@ spec:
 
 #### Example Config Snippet
 ```toml
-endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+endpoint = 'https://ingestor.adx-mon.svc.cluster.local.'
 storage-dir = '/var/lib/adx-mon'
 region = 'eastus'
 
