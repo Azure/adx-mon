@@ -11,7 +11,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto v1.3.1
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources v1.2.0
-	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
+	github.com/ClickHouse/clickhouse-go/v2 v2.50.0
 	github.com/VictoriaMetrics/easyproto v1.2.0
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
@@ -72,7 +72,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.3 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue v1.0.1 // indirect
-	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
+	github.com/Azure/go-ansiterm v0.0.0-20261006220739-8c912ac31dd4 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
 	github.com/ClickHouse/ch-go v0.74.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -88,7 +88,7 @@ require (
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/go-connections v0.7.0 // indirect
+	github.com/docker/go-connections v0.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
@@ -123,7 +123,7 @@ require (
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.0 // indirect
-	github.com/moby/moby/client v0.6.0 // indirect
+	github.com/moby/moby/client v0.6.2 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect
