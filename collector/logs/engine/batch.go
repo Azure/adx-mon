@@ -37,8 +37,7 @@ func BatchLogs(ctx context.Context, config BatchConfig) {
 		realtimeDeadline = time.Time{}
 	}
 
-	currentBatch := types.LogBatchPool.Get(1024).(*types.LogBatch)
-	currentBatch.Reset()
+	currentBatch := types.LogBatchPool.Get()
 	for {
 		select {
 		case <-ctx.Done():
@@ -50,23 +49,20 @@ func BatchLogs(ctx context.Context, config BatchConfig) {
 		case <-ticker.C:
 			if len(currentBatch.Logs) != 0 {
 				flush(config, currentBatch)
-				currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
-				currentBatch.Reset()
+				currentBatch = types.LogBatchPool.Get()
 			}
 			stopRealtimeTimer()
 		case <-realtimeC:
 			if len(currentBatch.Logs) != 0 {
 				flush(config, currentBatch)
-				currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
-				currentBatch.Reset()
+				currentBatch = types.LogBatchPool.Get()
 			}
 			stopRealtimeTimer()
 		case msg := <-config.InputQueue:
 			currentBatch.Logs = append(currentBatch.Logs, msg)
 			if len(currentBatch.Logs) >= config.MaxBatchSize {
 				flush(config, currentBatch)
-				currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
-				currentBatch.Reset()
+				currentBatch = types.LogBatchPool.Get()
 				stopRealtimeTimer()
 				ticker.Reset(config.MaxBatchWait)
 			} else if realtimeTimer != nil {

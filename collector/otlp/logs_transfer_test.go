@@ -561,8 +561,7 @@ func BenchmarkLogsService(b *testing.B) {
 
 func TestConvertToLogBatch(t *testing.T) {
 	getLogbatch := func() *types.LogBatch {
-		logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
-		logBatch.Reset()
+		logBatch := types.LogBatchPool.Get()
 		return logBatch
 	}
 
@@ -644,8 +643,7 @@ func TestConvertToLogBatch(t *testing.T) {
 			expectedConverted:   1,
 			expectedFunc: func() *types.LogBatch {
 				batch := getLogbatch()
-				log := types.LogPool.Get(1).(*types.Log)
-				log.Reset()
+				log := types.LogPool.Get()
 
 				log.SetTimestamp(1)
 				log.SetObservedTimestamp(2)
@@ -718,8 +716,7 @@ func TestConvertToLogBatch(t *testing.T) {
 			expectedConverted:   1,
 			expectedFunc: func() *types.LogBatch {
 				batch := getLogbatch()
-				log := types.LogPool.Get(1).(*types.Log)
-				log.Reset()
+				log := types.LogPool.Get()
 
 				log.SetTimestamp(1)
 				log.SetObservedTimestamp(2)
@@ -810,8 +807,7 @@ func TestConvertToLogBatch(t *testing.T) {
 				WorkerCreator: workerCreator,
 				HealthChecker: fakeHealthChecker{false},
 			})
-			logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
-			logBatch.Reset()
+			logBatch := types.LogBatchPool.Get()
 			droppedLogs, convertedLogs := s.convertToLogBatch(tt.req, logBatch)
 
 			expectedLogBatch := tt.expectedFunc()

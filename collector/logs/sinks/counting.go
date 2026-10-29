@@ -43,7 +43,9 @@ func (s *CountingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 	}
 
 	s.currentCount += int64(len(batch.Logs))
-	s.latest = batch.Logs[len(batch.Logs)-1]
+	// The worker returns the batch's logs to their pool after Send returns.
+	// Keep an independent snapshot rather than retaining a pooled log.
+	s.latest = batch.Logs[len(batch.Logs)-1].Copy()
 	batch.Ack()
 	if !s.done && s.currentCount >= s.expectedCount {
 		s.done = true

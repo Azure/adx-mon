@@ -235,7 +235,7 @@ func TestLogBatch(t *testing.T) {
 }
 
 func BenchmarkLogWrites(b *testing.B) {
-	log := LogPool.Get(1).(*Log)
+	log := LogPool.Get()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -141,8 +141,7 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
-		logBatch.Reset()
+		logBatch := types.LogBatchPool.Get()
 
 		droppedLogMissingMetadata, convertedLogs := s.convertToLogBatch(msg, logBatch)
 		missingMetadata := droppedLogMissingMetadata
@@ -272,8 +271,7 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 					continue
 				}
 
-				log := types.LogPool.Get(1).(*types.Log)
-				log.Reset()
+				log := types.LogPool.Get()
 
 				log.SetTimestamp(record.TimeUnixNano)
 				log.SetObservedTimestamp(record.ObservedTimeUnixNano)

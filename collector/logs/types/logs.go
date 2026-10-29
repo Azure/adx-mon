@@ -89,8 +89,7 @@ func (l *Log) Reset() {
 
 // Copy returns a distinct copy of the log. This is useful for splitting logs.
 func (l *Log) Copy() *Log {
-	copy := LogPool.Get(1).(*Log)
-	copy.Reset()
+	copy := LogPool.Get()
 	copy.timestamp = l.timestamp
 	copy.observedTimestamp = l.observedTimestamp
 	for k, v := range l.attributes {
@@ -285,7 +284,6 @@ func DisposeLogBatch(batch *LogBatch) {
 	for _, log := range batch.Logs {
 		LogPool.Put(log)
 	}
-	batch.Reset()
 	LogBatchPool.Put(batch)
 }
 

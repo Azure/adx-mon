@@ -77,10 +77,8 @@ func TestWorker_BasicProcessing(t *testing.T) {
 	}()
 
 	// Send a test batch
-	batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-	batch.Reset()
-	log := types.LogPool.Get(1).(*types.Log)
-	log.Reset()
+	batch := types.LogBatchPool.Get()
+	log := types.LogPool.Get()
 	log.SetBodyValue("test", "value")
 	batch.Logs = append(batch.Logs, log)
 
@@ -123,10 +121,8 @@ func TestWorker_TransformError(t *testing.T) {
 		w.Run()
 	}()
 
-	batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-	batch.Reset()
-	log := types.LogPool.Get(1).(*types.Log)
-	log.Reset()
+	batch := types.LogBatchPool.Get()
+	log := types.LogPool.Get()
 	log.SetBodyValue("test", "value")
 	batch.Logs = append(batch.Logs, log)
 
@@ -163,10 +159,8 @@ func TestWorker_SinkError(t *testing.T) {
 		w.Run()
 	}()
 
-	batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-	batch.Reset()
-	log := types.LogPool.Get(1).(*types.Log)
-	log.Reset()
+	batch := types.LogBatchPool.Get()
+	log := types.LogPool.Get()
 	log.SetBodyValue("test", "value")
 	batch.Logs = append(batch.Logs, log)
 
@@ -204,10 +198,8 @@ func TestWorker_MultipleSinksConcurrent(t *testing.T) {
 			w.Run()
 		}()
 
-		batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-		batch.Reset()
-		log := types.LogPool.Get(1).(*types.Log)
-		log.Reset()
+		batch := types.LogBatchPool.Get()
+		log := types.LogPool.Get()
 		log.SetBodyValue("test", "value")
 		batch.Logs = append(batch.Logs, log)
 
@@ -249,10 +241,8 @@ func TestWorker_MultipleSinksConcurrent(t *testing.T) {
 			w.Run()
 		}()
 
-		batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-		batch.Reset()
-		log := types.LogPool.Get(1).(*types.Log)
-		log.Reset()
+		batch := types.LogBatchPool.Get()
+		log := types.LogPool.Get()
 		log.SetBodyValue("test", "value")
 		batch.Logs = append(batch.Logs, log)
 
@@ -288,10 +278,8 @@ func TestWorker_BatchTimeout(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
 	cancel() // immediately cancelled
 
-	batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-	batch.Reset()
-	log := types.LogPool.Get(1).(*types.Log)
-	log.Reset()
+	batch := types.LogBatchPool.Get()
+	log := types.LogPool.Get()
 	log.SetBodyValue("test", "value")
 	batch.Logs = append(batch.Logs, log)
 

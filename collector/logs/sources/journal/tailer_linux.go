@@ -144,8 +144,7 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 			continue
 		}
 
-		log := types.LogPool.Get(1).(*types.Log)
-		log.Reset()
+		log := types.LogPool.Get()
 		log.SetTimestamp(uint64(entry.RealtimeTimestamp) * 1000) // microseconds -> nanoseconds
 		log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
 		log.SetAttributeValue(types.AttributeDatabaseName, t.database)

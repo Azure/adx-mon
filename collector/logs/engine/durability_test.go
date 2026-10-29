@@ -29,11 +29,9 @@ func newBatch() *types.LogBatch {
 }
 
 func newBatchOf(count int) *types.LogBatch {
-	batch := types.LogBatchPool.Get(1).(*types.LogBatch)
-	batch.Reset()
+	batch := types.LogBatchPool.Get()
 	for n := 0; n < count; n++ {
-		log := types.LogPool.Get(1).(*types.Log)
-		log.Reset()
+		log := types.LogPool.Get()
 		log.SetBodyValue("message", "value")
 		batch.Logs = append(batch.Logs, log)
 	}
