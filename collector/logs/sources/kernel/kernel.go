@@ -194,8 +194,7 @@ func (s *KernelSource) readKernelLogs(ctx context.Context, outputQueue chan<- *t
 				continue // skip logs with lower priority
 			}
 
-			log := types.LogPool.Get(1).(*types.Log)
-			log.Reset()
+			log := types.LogPool.Get()
 
 			log.SetTimestamp(uint64(pkt.Message.Timestamp.UnixNano()))
 			log.SetObservedTimestamp(uint64(time.Now().UnixNano()))

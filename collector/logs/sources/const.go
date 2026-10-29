@@ -81,8 +81,7 @@ func (s *ConstSource) Name() string {
 
 func (s *ConstSource) generate(ctx context.Context) {
 	for {
-		log := types.LogPool.Get(1).(*types.Log)
-		log.Reset()
+		log := types.LogPool.Get()
 		log.SetTimestamp(uint64(time.Now().UnixNano()))
 		log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
 		log.SetBodyValue("message", s.Value)

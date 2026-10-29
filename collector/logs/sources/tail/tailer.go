@@ -172,8 +172,7 @@ func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue 
 				continue
 			}
 
-			log := types.LogPool.Get(1).(*types.Log)
-			log.Reset()
+			log := types.LogPool.Get()
 
 			message, isPartial, err := tailer.logTypeParser.Parse(line.Text, log)
 			if err != nil {
