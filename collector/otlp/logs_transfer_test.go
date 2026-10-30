@@ -521,6 +521,31 @@ func TestLogsService_ErrorStatusResponses(t *testing.T) {
 	}
 }
 
+func TestLogsServiceRejectsInvalidRequestBodyLengths(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		contentLength  int64
+		body           string
+		expectedStatus int
+	}{
+		{name: "chunked", contentLength: -1, body: "body", expectedStatus: http.StatusLengthRequired},
+		{name: "oversized", contentLength: maxOTLPRequestBodySize + 1, expectedStatus: http.StatusRequestEntityTooLarge},
+		{name: "short body", contentLength: 5, body: "{}", expectedStatus: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewLogsService(LogsServiceOpts{HealthChecker: fakeHealthChecker{true}})
+			req := httptest.NewRequest(http.MethodPost, "/v1/logs", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/x-protobuf")
+			req.ContentLength = tc.contentLength
+			resp := httptest.NewRecorder()
+
+			s.Handler(resp, req)
+
+			require.Equal(t, tc.expectedStatus, resp.Code)
+		})
+	}
+}
+
 func BenchmarkLogsService(b *testing.B) {
 	dir := b.TempDir()
 
