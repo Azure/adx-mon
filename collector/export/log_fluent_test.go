@@ -80,6 +80,9 @@ func TestEncode(t *testing.T) {
 	b, err := e.encode(logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
+	requireFluentBatchCleared(t, e)
+	batchCapacity := cap(e.batchToSend)
+	require.Positive(t, batchCapacity)
 
 	rest := validateArrayHeaderForwardMode(t, b)
 	rest = validateTag(t, rest, "tag1")
@@ -127,6 +130,8 @@ func TestEncode(t *testing.T) {
 	b, err = e.encode(logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
+	requireFluentBatchCleared(t, e)
+	require.Equal(t, batchCapacity, cap(e.batchToSend), "scratch capacity should be retained for reuse")
 	rest = validateArrayHeaderForwardMode(t, b)
 	rest = validateTag(t, rest, "tag5")
 	rest, entries = getEntries(t, rest)
@@ -136,6 +141,48 @@ func TestEncode(t *testing.T) {
 
 	// nothing more to read
 	require.Equal(t, 0, len(rest))
+}
+
+func TestEncodeEdgeCases(t *testing.T) {
+	invalidLog := &types.LogLiteral{
+		Attributes: map[string]interface{}{"destTag": "tag1"},
+		Body:       map[string]interface{}{"unsupported": make(chan int)},
+	}
+	tests := []struct {
+		name     string
+		logs     []*types.LogLiteral
+		wantErr  bool
+		wantData bool
+	}{
+		{name: "empty batch"},
+		{name: "filtered batch", logs: testlogs[1:3]},
+		{name: "error in final tag", logs: []*types.LogLiteral{invalidLog}, wantErr: true},
+		{name: "error before final tag", logs: []*types.LogLiteral{invalidLog, testlogs[4]}, wantErr: true},
+		{name: "success after error", logs: testlogs[:1], wantData: true},
+	}
+
+	e := newFluentEncoder("destTag")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			batch := &types.LogBatch{}
+			batch.AddLiterals(test.logs)
+			freezeLogsInBatch(batch)
+
+			data, err := e.encode(batch)
+			if test.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if test.wantData {
+				require.NotEmpty(t, data)
+			} else {
+				require.Empty(t, data)
+			}
+
+			requireFluentBatchCleared(t, e)
+		})
+	}
 }
 
 func FuzzFluentExtTime(f *testing.F) {
@@ -337,6 +384,15 @@ func validateEntries(t *testing.T, entries []entrytuple, expectedentries []entry
 
 	// Compare the slices ignoring their order
 	require.ElementsMatch(t, expectedentries, entries, "entries differ ignoring order")
+}
+
+func requireFluentBatchCleared(t *testing.T, e *fluentEncoder) {
+	t.Helper()
+
+	require.Empty(t, e.batchToSend)
+	for i, log := range e.batchToSend[:cap(e.batchToSend)] {
+		require.Nil(t, log, "scratch slot %d retains a log reference", i)
+	}
 }
 
 func freezeLogsInBatch(logBatch *types.LogBatch) {

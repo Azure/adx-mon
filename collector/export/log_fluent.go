@@ -135,10 +135,14 @@ func newFluentEncoder(tagAttribute string) *fluentEncoder {
 // encode encodes a log batch into the fluentd forward format.
 // Not multi-goroutine safe. Returned bytes are only valid until the next call.
 func (e *fluentEncoder) encode(batch *types.LogBatch) ([]byte, error) {
+	defer func() {
+		// Release log references before the encoder is returned to the pool.
+		clear(e.batchToSend)
+		e.batchToSend = e.batchToSend[:0]
+	}()
+
 	// Copy logbatch elements into new slice so we can sort it without modifying the original,
 	// which is shared amongst other outputs.
-	e.batchToSend = e.batchToSend[:0]
-
 	for _, log := range batch.Logs {
 		e.addBatchToSend(log)
 	}
