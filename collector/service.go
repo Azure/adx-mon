@@ -455,6 +455,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MaxSegmentAge:           time.Minute,
 		Partitioner:             partitioner,
 		Segmenter:               store.Index(),
+		Usage:                   store,
 		MinUploadSize:           4 * 1024 * 1024,
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		MaxTableBatches:         max(10, opts.MaxTransferConcurrency*2),
