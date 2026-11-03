@@ -61,10 +61,11 @@ let _endTime = datetime(...);
 When the query is executed successfully, the `SummaryRule` CRD will be updated with the last execution time and start
 and end time used in the query.  These fields will be used to determine the next execution time and interval.
 
-When ADX marks an async operation as retryable, the ingestor retains its operation ID and original time window until
-resubmission succeeds. Resubmission failures are logged and retried on subsequent reconciliations, even if newer
-windows have already been submitted. A successful retry replaces the tracked operation ID without changing the
-window. Completed operations and non-retryable failures are removed from tracking.
+When ADX marks an async operation as retryable, the ingestor resubmits its original time window. If resubmission
+fails, the window is retained as a pending backlog entry and retried on subsequent reconciliations without relying
+on the old operation remaining in ADX history. Submission failures are logged, and a successful retry tracks the
+new operation ID without changing the window or moving the execution timestamp backward. Completed operations and
+non-retryable failures are removed from tracking.
 
 ## Conditional Execution with Criteria
 

@@ -1,10 +1,12 @@
 package adx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -3069,6 +3071,11 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 
 func TestSummaryRuleRetrySubmissionFailurePreservesWindow(t *testing.T) {
 	ctx := t.Context()
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 	now := time.Date(2025, 6, 23, 14, 0, 0, 0, time.UTC)
 	rule := &v1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-rule", Generation: 1},
@@ -3111,16 +3118,32 @@ func TestSummaryRuleRetrySubmissionFailurePreservesWindow(t *testing.T) {
 		return "replacement-op", nil
 	}
 
+	retryableHistory, err := newAsyncOperationDataset(ctx, now, operation.OperationId,
+		string(KustoAsyncOperationStateFailed), 1, "Transient failure", true)
+	require.NoError(t, err)
+	emptyHistory := mustMgmtDataset(t, ctx, "Table_0", []kustov1.RawColumn{
+		{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+	}, nil)
+
 	for cycle := range len(submissionErrors) + 1 {
-		dataset, err := newAsyncOperationDataset(ctx, now, operation.OperationId,
-			string(KustoAsyncOperationStateFailed), 1, "Transient failure", true)
-		require.NoError(t, err)
-		executor.mockDataset = dataset
+		executor.Reset()
+		logs.Reset()
+		if cycle == 0 {
+			executor.mockDataset = retryableHistory
+		} else {
+			executor.mockDataset = emptyHistory
+		}
 		handler.listResponse = &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule.DeepCopy()}}
 		handler.updatedObjects = nil
 
 		require.NoError(t, task.Run(ctx))
 		require.Equal(t, cycle+1, submissions, "each reconciliation should retry the original window once")
+		if cycle == 0 {
+			require.Len(t, executor.stmts, 1)
+			require.Contains(t, executor.stmts[0], operation.OperationId)
+		} else {
+			require.Empty(t, executor.stmts, "pending windows must not depend on old ADX operation history")
+		}
 		require.NotEmpty(t, handler.updatedObjects)
 		rule = handler.updatedObjects[len(handler.updatedObjects)-1].(*v1.SummaryRule)
 		require.Equal(t, new(now), rule.GetLastExecutionTime(), "retrying an older window must not move the execution timestamp")
@@ -3128,6 +3151,12 @@ func TestSummaryRuleRetrySubmissionFailurePreservesWindow(t *testing.T) {
 		expected := operation
 		if cycle == len(submissionErrors) {
 			expected.OperationId = "replacement-op"
+		} else {
+			expected.OperationId = ""
+			require.Contains(t, logs.String(), submissionErrors[cycle].Error())
+			require.Contains(t, logs.String(), "testdb.test-rule")
+			require.Contains(t, logs.String(), operation.StartTime)
+			require.Contains(t, logs.String(), operation.EndTime)
 		}
 		require.Equal(t, []v1.AsyncOperation{expected}, rule.GetAsyncOperations(),
 			"persisted status must retain exactly one entry for the window")
@@ -3136,15 +3165,71 @@ func TestSummaryRuleRetrySubmissionFailurePreservesWindow(t *testing.T) {
 	dataset, err := newAsyncOperationDataset(ctx, now, "replacement-op",
 		string(KustoAsyncOperationStateCompleted), 0, "", false)
 	require.NoError(t, err)
+	executor.Reset()
 	executor.mockDataset = dataset
 	handler.listResponse = &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule.DeepCopy()}}
 	handler.updatedObjects = nil
 
 	require.NoError(t, task.Run(ctx))
 	require.Equal(t, len(submissionErrors)+1, submissions, "a completed replacement must not be resubmitted")
+	require.Len(t, executor.stmts, 1)
+	require.Contains(t, executor.stmts[0], "replacement-op")
 	require.NotEmpty(t, handler.updatedObjects)
 	rule = handler.updatedObjects[len(handler.updatedObjects)-1].(*v1.SummaryRule)
 	require.Empty(t, rule.GetAsyncOperations())
+}
+
+func TestSummaryRuleRetryFailurePreservesOtherOperations(t *testing.T) {
+	tests := []struct {
+		name                string
+		existingRetryWindow bool
+	}{
+		{name: "distinct windows"},
+		{name: "existing pending retry window", existingRetryWindow: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operation := v1.AsyncOperation{
+				OperationId: "failed-op",
+				StartTime:   "2025-06-23T10:00:00Z",
+				EndTime:     "2025-06-23T10:59:59.9999999Z",
+			}
+			pending := operation
+			pending.OperationId = ""
+			otherPending := v1.AsyncOperation{
+				StartTime: "2025-06-23T11:00:00Z",
+				EndTime:   "2025-06-23T11:59:59.9999999Z",
+			}
+			otherActive := v1.AsyncOperation{
+				OperationId: "active-op",
+				StartTime:   "2025-06-23T12:00:00Z",
+				EndTime:     "2025-06-23T12:59:59.9999999Z",
+			}
+
+			rule := &v1.SummaryRule{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-rule"},
+				Spec:       v1.SummaryRuleSpec{Database: "testdb"},
+			}
+			rule.SetAsyncOperation(operation)
+			if tt.existingRetryWindow {
+				rule.SetAsyncOperation(pending)
+			}
+			rule.SetAsyncOperation(otherPending)
+			rule.SetAsyncOperation(otherActive)
+
+			task := &SummaryRuleTask{
+				SubmitRule: func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+					require.Equal(t, operation.StartTime, startTime)
+					require.Equal(t, operation.EndTime, endTime)
+					return "ignored-id", errors.New("submission failed")
+				},
+			}
+			task.handleRetryOperation(t.Context(), rule, operation, AsyncOperationStatus{OperationId: operation.OperationId})
+
+			require.ElementsMatch(t, []v1.AsyncOperation{pending, otherPending, otherActive}, rule.GetAsyncOperations())
+		})
+	}
 }
 
 func TestSummaryRuleTrackAsyncOperationStates(t *testing.T) {
