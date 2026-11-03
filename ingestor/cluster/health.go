@@ -27,11 +27,17 @@ type Health struct {
 type HealthStatus struct {
 	Healthy   bool
 	NextCheck time.Time
+	Failures  int
 }
 
 type HealthOpts struct {
-	// UnhealthyTimeout is the amount of time to wait before marking a peer as healthy.
+	// UnhealthyTimeout is the maximum amount of time to wait before marking a peer as healthy.
 	UnhealthyTimeout time.Duration
+
+	// InitialUnhealthyTimeout is how long a peer is skipped after its first failure.  Each consecutive failure
+	// doubles it, up to UnhealthyTimeout, and a success resets it.  Defaults to UnhealthyTimeout, which skips the
+	// peer for the full UnhealthyTimeout on every failure.
+	InitialUnhealthyTimeout time.Duration
 
 	QueueSizer      QueueSizer
 	MaxSegmentCount int64
@@ -55,6 +61,9 @@ type QueueSizer interface {
 func NewHealth(opts HealthOpts) *Health {
 	if opts.UnhealthyTimeout.Seconds() == 0 {
 		opts.UnhealthyTimeout = time.Minute
+	}
+	if opts.InitialUnhealthyTimeout <= 0 || opts.InitialUnhealthyTimeout > opts.UnhealthyTimeout {
+		opts.InitialUnhealthyTimeout = opts.UnhealthyTimeout
 	}
 
 	h := &Health{
@@ -114,9 +123,27 @@ func (h *Health) SetPeerUnhealthy(peer string) {
 		s = &HealthStatus{}
 	}
 
+	now := time.Now().UTC()
+	if !s.Healthy && s.Failures > 0 && now.Before(s.NextCheck) {
+		// A failure while the peer is already backing off, such as another in-flight request, restarts the current
+		// backoff without escalating it.
+		s.NextCheck = now.Add(h.peerBackoff(s.Failures - 1))
+	} else {
+		s.NextCheck = now.Add(h.peerBackoff(s.Failures))
+		s.Failures++
+	}
+
 	s.Healthy = false
-	s.NextCheck = time.Now().UTC().Add(h.opts.UnhealthyTimeout)
 	h.state[peer] = s
+}
+
+// peerBackoff returns InitialUnhealthyTimeout doubled once per prior failure, capped at UnhealthyTimeout.
+func (h *Health) peerBackoff(failures int) time.Duration {
+	d := h.opts.InitialUnhealthyTimeout
+	for i := 0; i < failures && d < h.opts.UnhealthyTimeout; i++ {
+		d *= 2
+	}
+	return min(d, h.opts.UnhealthyTimeout)
 }
 
 func (h *Health) SetPeerHealthy(peer string) {
@@ -130,6 +157,7 @@ func (h *Health) SetPeerHealthy(peer string) {
 
 	s.Healthy = true
 	s.NextCheck = time.Time{}
+	s.Failures = 0
 	h.state[peer] = s
 }
 

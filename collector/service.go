@@ -311,10 +311,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		maxDiskUsage = opts.MaxDiskUsage
 	}
 
+	// The collector sends everything to a single load-balanced endpoint and has no local fallback, so a transient
+	// failure is retried quickly instead of stopping all transfers for the full UnhealthyTimeout.
 	health := cluster.NewHealth(cluster.HealthOpts{
-		UnhealthyTimeout: time.Minute,
-		MaxSegmentCount:  maxSegmentCount,
-		MaxDiskUsage:     maxDiskUsage,
+		UnhealthyTimeout:        time.Minute,
+		InitialUnhealthyTimeout: time.Second,
+		MaxSegmentCount:         maxSegmentCount,
+		MaxDiskUsage:            maxDiskUsage,
 	})
 
 	budgetOpts, err := wal.ResolveAdmissionWithEnforcement(wal.Usage{Bytes: maxDiskUsage, Segments: maxSegmentCount}, opts.MaxTableDiskUsage, opts.MaxTableSegmentCount, opts.DisableTableLimits, opts.EnforceTableLimits, opts.TableLimits)

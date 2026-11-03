@@ -252,6 +252,8 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 			return err
 		}
 
+		r.Health.SetPeerHealthy(owner)
+
 		if logger.IsDebug() {
 			for _, seg := range segments {
 				logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
