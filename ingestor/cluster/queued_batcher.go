@@ -27,7 +27,11 @@ type queuedPolicy struct {
 }
 
 func newQueuedBatcher(b *batcher, linger time.Duration) *eventBatcher {
-	return newEventBatcher(b, queuedPolicy{b: b, linger: linger}, queuedSweepInterval)
+	r := newEventBatcher(b, queuedPolicy{b: b, linger: linger}, queuedSweepInterval)
+	// A prefix that keeps failing, such as while ADX or the peer is unavailable, backs off to the sweep interval so
+	// it is retried no more often than before retries were event driven.
+	r.maxRetryDelay = queuedSweepInterval
+	return r
 }
 
 // accepts returns true for queued segments and for realtime segments when realtime segments are not batched by the

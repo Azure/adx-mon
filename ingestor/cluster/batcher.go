@@ -695,14 +695,22 @@ func (b *batcher) Release(batch *Batch) {
 		_, _ = b.segments.Delete(si.Path)
 	}
 
-	// Segments of a realtime batch that was not removed, such as after a failed upload, are not announced again by
-	// the index so they are retried by the realtime batcher.
-	if b.realtime != nil && batch.Priority == ingestpolicy.PriorityRealtime && !batch.IsRemoved() {
+	// Segments of a batch that was not removed, such as after a failed upload or transfer, are not announced again
+	// by the index so they are retried by the event batcher that batched them.
+	if batch.IsRemoved() {
+		return
+	}
+	if b.realtime != nil && batch.Priority == ingestpolicy.PriorityRealtime {
 		b.realtime.released(batch.Prefix)
+	} else if b.queued != nil {
+		b.queued.released(batch.Prefix)
 	}
 }
 
 func (b *batcher) Remove(batch *Batch) error {
+	if b.queued != nil {
+		b.queued.removed(batch.Prefix)
+	}
 	for _, si := range batch.Segments {
 		err := os.Remove(si.Path)
 		if err != nil && !os.IsNotExist(err) {
