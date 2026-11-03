@@ -758,14 +758,21 @@ func TestWAL_ConcurrentRotationDiscardsUnusedSegments(t *testing.T) {
 }
 
 func TestDiscardSegment(t *testing.T) {
-	discardSegment(nil)
-
 	dir := t.TempDir()
-	seg, err := NewSegment(dir, "db_table")
+	admission := NewAdmission(AdmissionOpts{})
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", Admission: admission})
 	require.NoError(t, err)
-	discardSegment(seg)
+
+	w.discardSegment(nil)
+
+	seg, err := w.newSegment()
+	require.NoError(t, err)
+	require.Equal(t, Usage{Bytes: 8, Segments: 1}, admission.Usage())
+
+	w.discardSegment(seg)
 	require.NoFileExists(t, seg.Path())
 	require.Empty(t, walFiles(t, dir))
+	require.Equal(t, Usage{}, admission.Usage(), "discarded segment must release its admission reservation")
 }
 
 func TestWAL_ClosedSegmentsCarryPriority(t *testing.T) {
@@ -819,4 +826,37 @@ func TestWAL_DiskLimitByPriority(t *testing.T) {
 
 	require.ErrorIs(t, queued.Write(context.Background(), []byte("foo")), ErrMaxDiskUsageExceeded)
 	require.NoError(t, realtime.Write(context.Background(), []byte("foo")))
+}
+
+// TestWAL_ConcurrentRotationKeepsAdmissionInSyncWithDisk verifies that segments discarded by losing rotations release
+// their admission reservation.  Admission accounting is what the ingestor reports as its segment count and disk usage,
+// so any file removed without telling admission makes those numbers drift away from what is actually on disk.
+func TestWAL_ConcurrentRotationKeepsAdmissionInSyncWithDisk(t *testing.T) {
+	dir := t.TempDir()
+	admission := NewAdmission(AdmissionOpts{})
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", SegmentMaxAge: time.Hour, Admission: admission})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+	defer w.Close()
+
+	for i := 0; i < 20; i++ {
+		require.NoError(t, w.Write(context.Background(), []byte("foo")))
+		expireSegment(w)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				w.rotateSegmentIfNecessary()
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int64(len(walFiles(t, dir))), admission.Usage().Segments,
+			"admission segment count must match segment files on disk after iteration %d", i)
+	}
 }

@@ -278,6 +278,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxTableBatches:         max(10, opts.ConcurrentUploads*2, opts.MaxTransferConcurrency*2),
 		Partitioner:             coord,
 		Segmenter:               store.Index(),
+		Usage:                   store,
 		UploadQueue:             opts.Uploader.UploadQueue(),
 		RealtimeUploadQueue:     realtimeUploadQueue(opts.Uploader),
 		TransferQueue:           repl.TransferQueue(),
@@ -424,10 +425,19 @@ func (s *Service) Open(ctx context.Context) error {
 
 	}
 
-	t := adx.NewAuditDiskSpaceTask(s.batcher, s.opts.StorageDir)
-	s.scheduler.ScheduleEvery(5*time.Minute, "audit-disk-space", func(ctx context.Context) error {
-		return t.Run(ctx)
-	})
+	if accounting, ok := s.store.(adx.SegmentAccounting); ok {
+		var batches adx.BatchTracker
+		if bt, ok := s.batcher.(adx.BatchTracker); ok {
+			batches = bt
+		}
+		// Closed segments are normally uploaded within a few max segment ages.  Older ones are reported so a
+		// segment that is stuck can be identified.
+		staleAge := max(3*s.opts.MaxSegmentAge, 15*time.Minute)
+		t := adx.NewAuditDiskSpaceTask(accounting, batches, s.opts.StorageDir, staleAge)
+		s.scheduler.ScheduleEvery(5*time.Minute, "audit-disk-space", func(ctx context.Context) error {
+			return t.Run(ctx)
+		})
+	}
 
 	return nil
 }

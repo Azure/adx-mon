@@ -360,6 +360,32 @@ func (i *Index) prioritySize(p ingestpolicy.Priority) *int64 {
 	return &i.sizeByPriority[p]
 }
 
+// Contains returns true if the index has a segment with path.
+func (i *Index) Contains(path string) bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.agesByPath[path] != nil
+}
+
+// Oldest returns up to n of the oldest segments in the index, oldest first.
+func (i *Index) Oldest(n int) []SegmentInfo {
+	if n <= 0 {
+		return nil
+	}
+	i.mu.RLock()
+	all := make([]SegmentInfo, 0, len(i.agesByPath))
+	for _, segments := range i.segments {
+		all = append(all, segments...)
+	}
+	i.mu.RUnlock()
+
+	sort.Slice(all, func(a, b int) bool { return all[a].CreatedAt.Before(all[b].CreatedAt) })
+	if len(all) > n {
+		all = all[:n]
+	}
+	return all
+}
+
 // OldestSegmentAge returns the age of the oldest segment in the index or 0 if the index is empty.
 func (i *Index) OldestSegmentAge() time.Duration {
 	i.mu.RLock()

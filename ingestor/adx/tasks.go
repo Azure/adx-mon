@@ -14,13 +14,13 @@ import (
 	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/celutil"
 	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
 	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
 	"github.com/Azure/azure-kusto-go/azkustodata/errors"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
@@ -993,22 +993,103 @@ type AsyncOperationStatus struct {
 	Status        string    `kusto:"Status"`
 }
 
-type AuditDiskSpaceTask struct {
-	QueueSizer cluster.QueueSizer
-	StorageDir string
+// SegmentAccounting reports the WAL segment files the ingestor accounts for.
+type SegmentAccounting interface {
+	// SegmentCount and Size cover every segment file, both active segments still being written and closed segments
+	// waiting to be uploaded or transferred.
+	SegmentCount() int64
+	Size() int64
+
+	// TracksSegment returns true if the segment file at path is accounted for.
+	TracksSegment(path string) bool
+
+	// Index returns the index of closed segments.
+	Index() *wal.Index
 }
 
-func NewAuditDiskSpaceTask(queueSizer cluster.QueueSizer, storageDir string) *AuditDiskSpaceTask {
+// BatchTracker reports whether a segment is part of an in-flight batch.
+type BatchTracker interface {
+	IsBatched(path string) bool
+}
+
+// untrackedGracePeriod is how long a segment file must exist before it is reported as untracked.  A segment file is
+// created on disk before it is accounted for, so a very new file may not be tracked yet.
+const untrackedGracePeriod = time.Minute
+
+// maxReportedSegments bounds how many segment paths are logged per audit.
+const maxReportedSegments = 10
+
+// AuditDiskSpaceTask compares the WAL segment files on disk with the segments the ingestor accounts for and reports
+// orphaned segment files and closed segments that are not being uploaded.
+type AuditDiskSpaceTask struct {
+	Store      SegmentAccounting
+	StorageDir string
+
+	// Batches is optional.  When set, stale segments report whether they are part of an in-flight batch.
+	Batches BatchTracker
+
+	// StaleSegmentAge is optional.  When set, closed segments older than this are reported.
+	StaleSegmentAge time.Duration
+}
+
+func NewAuditDiskSpaceTask(store SegmentAccounting, batches BatchTracker, storageDir string, staleSegmentAge time.Duration) *AuditDiskSpaceTask {
 	return &AuditDiskSpaceTask{
-		QueueSizer: queueSizer,
-		StorageDir: storageDir,
+		Store:           store,
+		Batches:         batches,
+		StorageDir:      storageDir,
+		StaleSegmentAge: staleSegmentAge,
 	}
 }
 
 func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
-	var actualSize int64
-	var actualCount int64
+	res, err := t.audit()
+	if err != nil {
+		logger.Errorf("AuditDiskSpaceTask: failed to walk storage dir: %v", err)
+		return err
+	}
+	if res.Mismatch {
+		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d untracked=%d",
+			res.ActualSize, res.ExpectedSize, res.ActualCount, res.ExpectedCount, res.UntrackedCount)
+	}
+	for _, path := range res.Untracked {
+		logger.Warnf("AuditDiskSpaceTask: untracked WAL segment path=%s", path)
+	}
+	for _, s := range res.Stale {
+		logger.Warnf("AuditDiskSpaceTask: stale WAL segment path=%s age=%s size=%d batched=%v",
+			s.Path, time.Since(s.CreatedAt).Truncate(time.Second), s.Size, s.Batched)
+	}
+	return nil
+}
 
+// auditResult is the outcome of comparing the WAL segments on disk with the segments the ingestor accounts for.
+type auditResult struct {
+	ActualSize, ExpectedSize   int64
+	ActualCount, ExpectedCount int64
+
+	// UntrackedCount is the number of segment files on disk that are not accounted for.  Untracked has up to
+	// maxReportedSegments of their paths.
+	UntrackedCount int
+	Untracked      []string
+
+	// Stale has up to maxReportedSegments of the oldest closed segments when they are older than StaleSegmentAge.
+	Stale []staleSegment
+
+	Mismatch bool
+}
+
+type staleSegment struct {
+	wal.SegmentInfo
+	Batched bool
+}
+
+func (t *AuditDiskSpaceTask) audit() (auditResult, error) {
+	var (
+		res        auditResult
+		candidates []string
+	)
+
+	// Read the disk before the accounting.  A segment is accounted for before its file is created, so a file seen on
+	// disk is either tracked by the time the accounting is read or removed shortly after.
 	err := filepath.Walk(t.StorageDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Ignore no such file or directory errors
@@ -1018,24 +1099,55 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 			return err
 		}
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".wal") {
-			actualSize += info.Size()
-			actualCount++
+			res.ActualSize += info.Size()
+			res.ActualCount++
+			if time.Since(info.ModTime()) > untrackedGracePeriod {
+				candidates = append(candidates, path)
+			}
 		}
 		return nil
 	})
 	if err != nil {
-		logger.Errorf("AuditDiskSpaceTask: failed to walk storage dir: %v", err)
-		return err
+		return res, err
 	}
 
-	expectedSize := t.QueueSizer.SegmentsSize()
-	expectedCount := t.QueueSizer.SegmentsTotal()
+	res.ExpectedSize = t.Store.Size()
+	res.ExpectedCount = t.Store.SegmentCount()
+
+	for _, path := range candidates {
+		if t.Store.TracksSegment(path) {
+			continue
+		}
+		// The segment may have been uploaded and removed since the disk was read.
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		res.UntrackedCount++
+		if len(res.Untracked) < maxReportedSegments {
+			res.Untracked = append(res.Untracked, path)
+		}
+	}
+
+	if t.StaleSegmentAge > 0 {
+		if idx := t.Store.Index(); idx != nil && idx.OldestSegmentAge() > t.StaleSegmentAge {
+			for _, si := range idx.Oldest(maxReportedSegments) {
+				if time.Since(si.CreatedAt) <= t.StaleSegmentAge {
+					break
+				}
+				s := staleSegment{SegmentInfo: si}
+				if t.Batches != nil {
+					s.Batched = t.Batches.IsBatched(si.Path)
+				}
+				res.Stale = append(res.Stale, s)
+			}
+		}
+	}
 
 	const oneGB = float64(1 << 30)
-	if math.Abs(float64(actualSize-expectedSize)) > oneGB || math.Abs(float64(actualCount-expectedCount)) > 10 {
-		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d", actualSize, expectedSize, actualCount, expectedCount)
-	}
-	return nil
+	res.Mismatch = res.UntrackedCount > 0 ||
+		math.Abs(float64(res.ActualSize-res.ExpectedSize)) > oneGB ||
+		math.Abs(float64(res.ActualCount-res.ExpectedCount)) > 10
+	return res, nil
 }
 
 // backfillSubmitFunc adapts the ingestor's SubmitRule (which already takes string

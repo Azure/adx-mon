@@ -33,6 +33,12 @@ type Segmenter interface {
 	OldestSegmentAge() time.Duration
 }
 
+// SegmentUsage reports the number and total size of WAL segment files, both active and closed.
+type SegmentUsage interface {
+	SegmentCount() int64
+	Size() int64
+}
+
 type BatcherOpts struct {
 	StorageDir       string
 	MinUploadSize    int64
@@ -63,6 +69,11 @@ type BatcherOpts struct {
 	QueuedLinger time.Duration
 
 	TransfersDisabled bool
+
+	// Usage is optional.  When set, SegmentsTotal and SegmentsSize, and the metrics derived from them, report every
+	// segment file the store accounts for, including active segments, rather than only the closed segments in the
+	// Segmenter.  This keeps the metrics consistent with the health status and with what is on disk.
+	Usage SegmentUsage
 
 	// Metrics for observability
 	SegmentsCountMetric     prometheus.Gauge
@@ -216,6 +227,8 @@ type batcher struct {
 
 	segments *partmap.Map[int]
 
+	usage SegmentUsage
+
 	// Metrics for observability
 	segmentsCountMetric     prometheus.Gauge
 	segmentsSizeBytesMetric prometheus.Gauge
@@ -262,6 +275,7 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		health:                  opts.PeerHealthReporter,
 		transferDisabled:        opts.TransfersDisabled,
 		segments:                partmap.NewMap[int](64),
+		usage:                   opts.Usage,
 		segmentsCountMetric:     opts.SegmentsCountMetric,
 		segmentsSizeBytesMetric: opts.SegmentsSizeBytesMetric,
 		segmentsMaxAgeMetric:    opts.SegmentsMaxAgeMetric,
@@ -352,11 +366,23 @@ func (b *batcher) transferQueueFor(p ingestpolicy.Priority) chan *Batch {
 }
 
 func (b *batcher) SegmentsTotal() int64 {
+	if b.usage != nil {
+		return b.usage.SegmentCount()
+	}
 	return int64(b.Segmenter.TotalSegments())
 }
 
 func (b *batcher) SegmentsSize() int64 {
+	if b.usage != nil {
+		return b.usage.Size()
+	}
 	return b.Segmenter.TotalSize()
+}
+
+// IsBatched returns true if the segment at path is part of a batch that has not been released or removed yet.
+func (b *batcher) IsBatched(path string) bool {
+	n, _ := b.segments.Get(path)
+	return n > 0
 }
 
 func (b *batcher) MaxSegmentAge() time.Duration {

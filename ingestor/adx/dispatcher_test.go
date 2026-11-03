@@ -114,3 +114,17 @@ func TestDispatcher_QueuedPathContinuesWhileRealtimePathIsBlocked(t *testing.T) 
 	require.Eventually(t, func() bool { return len(base.RealtimeUploadQueue()) == 1 }, time.Second, time.Millisecond)
 	require.Same(t, realtime, <-base.RealtimeUploadQueue())
 }
+
+// TestDispatcher_UnknownDatabaseReleasesBatch verifies that a batch for a database without an uploader is released.  A
+// batch that is never released keeps its segments marked as batched, so they are never batched again, never uploaded
+// and never removed: the oldest segment age grows without bound.
+func TestDispatcher_UnknownDatabaseReleasesBatch(t *testing.T) {
+	u := NewFakeUploader("db")
+	d := newTestDispatcher(t, u)
+
+	batch := &cluster.Batch{Database: "unknown", Prefix: "unknown_table"}
+	d.UploadQueue() <- batch
+
+	require.Eventually(t, batch.IsReleased, time.Second, time.Millisecond)
+	require.Empty(t, u.UploadQueue())
+}
