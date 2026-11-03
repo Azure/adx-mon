@@ -110,6 +110,9 @@ func (d *dispatcher) dispatch(ctx context.Context, input <-chan *cluster.Batch) 
 func (d *dispatcher) dispatchBatch(batch *cluster.Batch) {
 	u, ok := d.uploaders[batch.Database]
 	if !ok {
+		// Release so the segments are not left marked as batched forever.  An unreleased batch is never batched
+		// again, uploaded or removed, so its segments stay on disk and the oldest segment age grows without bound.
+		batch.Release()
 		logger.Errorf("No uploader for database %s", batch.Database)
 		return
 	}

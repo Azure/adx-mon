@@ -522,6 +522,16 @@ func (s *LocalStore) SegmentCount() int64 {
 	return int64(s.Index().TotalSegments())
 }
 
+// TracksSegment returns true if path is a WAL segment file the store accounts for, either a closed segment pending
+// upload or an active segment still being written.  A segment file on disk that is not tracked is orphaned: it is
+// never uploaded or removed until the store is reopened.
+func (s *LocalStore) TracksSegment(path string) bool {
+	if s.opts.Admission != nil {
+		return s.opts.Admission.Tracks(path)
+	}
+	return s.Index().Contains(path) || s.repository.IsActiveSegment(path)
+}
+
 // WriteDebug writes debug information to the given writer.
 func (s *LocalStore) WriteDebug(w io.Writer) error {
 	if s.opts.Admission != nil {

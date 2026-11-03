@@ -3,6 +3,7 @@ package wal
 import (
 	"fmt"
 	"github.com/stretchr/testify/require"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -79,4 +80,22 @@ func TestReservationReleaseRollsBackAndReusesSafely(t *testing.T) {
 		require.Equal(t, Usage{10, 1}, a.Usage())
 		a.Forget(Destination{"DB", "A"}, "a")
 	}
+}
+
+func TestAdmission_Tracks(t *testing.T) {
+	var nilAdmission *Admission
+	require.False(t, nilAdmission.Tracks("db_table_1.wal"))
+
+	dir := t.TempDir()
+	a := NewAdmission(AdmissionOpts{})
+	seg, err := NewSegment(dir, "db_table", WithAdmission(a))
+	require.NoError(t, err)
+	require.True(t, a.Tracks(seg.Path()))
+	require.False(t, a.Tracks(filepath.Join(dir, "db_table_2f2bb698bb432000.wal")))
+	require.False(t, a.Tracks(filepath.Join(dir, "db_other_2f2bb698bb432000.wal")))
+	require.False(t, a.Tracks("not-a-segment"))
+
+	require.NoError(t, seg.Close())
+	a.Forget(Destination{Database: "db", Table: "table"}, seg.Path())
+	require.False(t, a.Tracks(seg.Path()))
 }

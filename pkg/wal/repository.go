@@ -423,6 +423,18 @@ func (s *Repository) WriteDebug(w io.Writer) error {
 	return tw.Flush()
 }
 
+// IsActiveSegment returns true if path is the active, not yet closed, segment of a WAL.
+func (s *Repository) IsActiveSegment(path string) bool {
+	var found bool
+	_ = s.wals.Each(func(key string, value *WAL) error {
+		if !found && value.Path() == path {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 func (s *Repository) sampleWALs(ctx context.Context) {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()

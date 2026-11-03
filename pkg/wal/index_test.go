@@ -532,3 +532,25 @@ func TestIndex_OldestSegmentAgeConcurrent(t *testing.T) {
 	wg.Wait()
 	requireAgesConsistent(t, i)
 }
+
+func TestIndex_ContainsAndOldest(t *testing.T) {
+	i := NewIndex()
+	require.False(t, i.Contains("a"))
+	require.Empty(t, i.Oldest(1))
+
+	now := time.Now()
+	a := SegmentInfo{Prefix: "db_a", Path: "a", CreatedAt: now.Add(-time.Minute)}
+	b := SegmentInfo{Prefix: "db_b", Path: "b", CreatedAt: now.Add(-time.Hour)}
+	c := SegmentInfo{Prefix: "db_a", Path: "c", CreatedAt: now}
+	i.Add(a)
+	i.Add(b)
+	i.Add(c)
+
+	require.True(t, i.Contains("a"))
+	require.Equal(t, []SegmentInfo{b, a}, i.Oldest(2))
+	require.Equal(t, []SegmentInfo{b, a, c}, i.Oldest(10))
+
+	i.Remove(b)
+	require.False(t, i.Contains("b"))
+	require.Equal(t, []SegmentInfo{a}, i.Oldest(1))
+}

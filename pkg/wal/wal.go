@@ -428,7 +428,7 @@ func (w *WAL) rotateSegmentIfNecessary() {
 	// Re-verify rotation is needed under write lock since the segment may have been rotated concurrently.
 	if w.closed || w.segment != cur || !w.requiresRotation() {
 		w.mu.Unlock()
-		discardSegment(next)
+		w.discardSegment(next)
 		return
 	}
 
@@ -475,15 +475,17 @@ func (w *WAL) createNextSegment() Segment {
 	return seg
 }
 
-// discardSegment closes and removes an unused segment.
-func discardSegment(seg Segment) {
+// discardSegment closes and removes an unused segment.  It is removed through the WAL so the admission reservation
+// taken when the segment was created is released; otherwise the ingestor would keep accounting for a file that no
+// longer exists.
+func (w *WAL) discardSegment(seg Segment) {
 	if seg == nil {
 		return
 	}
 	if err := seg.Close(); err != nil {
 		logger.Errorf("Failed to close segment: %s %s", seg.Path(), err.Error())
 	}
-	if err := os.Remove(seg.Path()); err != nil && !os.IsNotExist(err) {
+	if err := w.Remove(seg.Path()); err != nil {
 		logger.Errorf("Failed to remove segment: %s %s", seg.Path(), err.Error())
 	}
 }

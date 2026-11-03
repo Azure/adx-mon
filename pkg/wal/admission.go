@@ -359,6 +359,28 @@ func (a *Admission) Restore(path string, d Destination, bytes int64) {
 	a.totalSegments.Add(1)
 }
 
+// Tracks returns true if path is a segment file whose capacity is accounted for.  It does not create a table budget
+// for an unknown destination.
+func (a *Admission) Tracks(path string) bool {
+	if a == nil {
+		return false
+	}
+	d, err := DestinationFromFilename(path)
+	if err != nil {
+		return false
+	}
+	a.mu.RLock()
+	t := a.tables[d]
+	a.mu.RUnlock()
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	_, ok := t.files[path]
+	t.mu.Unlock()
+	return ok
+}
+
 // Forget must only be called after a file has been removed successfully.
 func (a *Admission) Forget(d Destination, path string) {
 	if a == nil {
