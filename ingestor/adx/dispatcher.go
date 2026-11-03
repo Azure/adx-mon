@@ -3,6 +3,7 @@ package adx
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
@@ -11,11 +12,22 @@ import (
 	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 )
 
+// unroutableRetryDelay is how long a batch for a database without an uploader is held before it is released.  The set
+// of uploaders is fixed until restart, so the batch cannot be routed sooner; holding it keeps the batcher from
+// rebuilding and redispatching it on every sweep.
+const unroutableRetryDelay = time.Minute
+
 type dispatcher struct {
 	uploaders     map[string]Uploader
 	queue         chan *cluster.Batch
 	realtimeQueue chan *cluster.Batch
 	cancel        context.CancelFunc
+
+	unroutableDelay time.Duration
+
+	// unroutableLogged is when a missing uploader was last logged for each database.
+	mu               sync.Mutex
+	unroutableLogged map[string]time.Time
 }
 
 func NewDispatcher(uploaders []Uploader) *dispatcher {
@@ -23,6 +35,9 @@ func NewDispatcher(uploaders []Uploader) *dispatcher {
 		uploaders:     make(map[string]Uploader),
 		queue:         make(chan *cluster.Batch, 10000),
 		realtimeQueue: make(chan *cluster.Batch, 10000),
+
+		unroutableDelay:  unroutableRetryDelay,
+		unroutableLogged: make(map[string]time.Time),
 	}
 	for _, u := range uploaders {
 		logger.Infof("Registering uploader for database %s", u.Database())
@@ -110,10 +125,7 @@ func (d *dispatcher) dispatch(ctx context.Context, input <-chan *cluster.Batch) 
 func (d *dispatcher) dispatchBatch(batch *cluster.Batch) {
 	u, ok := d.uploaders[batch.Database]
 	if !ok {
-		// Release so the segments are not left marked as batched forever.  An unreleased batch is never batched
-		// again, uploaded or removed, so its segments stay on disk and the oldest segment age grows without bound.
-		batch.Release()
-		logger.Errorf("No uploader for database %s", batch.Database)
+		d.unroutable(batch)
 		return
 	}
 
@@ -128,4 +140,26 @@ func (d *dispatcher) dispatchBatch(batch *cluster.Batch) {
 		batch.Release()
 		logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(queue), cap(queue))
 	}
+}
+
+// unroutable handles a batch for a database without an uploader.  The batch is released after a delay so its segments
+// are not left marked as batched forever: an unreleased batch is never batched again, uploaded or removed, so its
+// segments stay on disk and the oldest segment age grows without bound.
+func (d *dispatcher) unroutable(batch *cluster.Batch) {
+	now := time.Now()
+	d.mu.Lock()
+	logIt := now.Sub(d.unroutableLogged[batch.Database]) >= d.unroutableDelay
+	if logIt {
+		d.unroutableLogged[batch.Database] = now
+	}
+	d.mu.Unlock()
+	if logIt {
+		logger.Errorf("No uploader for database %s; retrying its batches every %s", batch.Database, d.unroutableDelay)
+	}
+
+	if d.unroutableDelay <= 0 {
+		batch.Release()
+		return
+	}
+	time.AfterFunc(d.unroutableDelay, batch.Release)
 }

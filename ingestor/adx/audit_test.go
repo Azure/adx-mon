@@ -143,3 +143,37 @@ func TestAuditDiskSpaceTask_ReportsStaleSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, res.Stale)
 }
+
+// transientAccounting under-reports the segment count on its first read, as when segments are created between the
+// audit reading the disk and reading the accounting.
+type transientAccounting struct {
+	SegmentAccounting
+	reads int
+}
+
+func (a *transientAccounting) SegmentCount() int64 {
+	a.reads++
+	if a.reads == 1 {
+		return 0
+	}
+	return a.SegmentAccounting.SegmentCount()
+}
+
+// TestAuditDiskSpaceTask_RechecksTransientMismatch verifies that a mismatch that is gone when the audit checks again is
+// not reported.
+func TestAuditDiskSpaceTask_RechecksTransientMismatch(t *testing.T) {
+	dir := t.TempDir()
+	store := newAuditTestStore(t, dir)
+	writeActiveSegments(t, store, 25)
+
+	task := NewAuditDiskSpaceTask(&transientAccounting{SegmentAccounting: store}, nil, dir, 0)
+	task.RecheckDelay = time.Millisecond
+
+	res, err := task.audit()
+	require.NoError(t, err)
+	require.True(t, res.Mismatch, "the first audit sees the transient mismatch")
+
+	res, err = task.auditWithRecheck(context.Background())
+	require.NoError(t, err)
+	require.False(t, res.Mismatch, "res=%+v", res)
+}

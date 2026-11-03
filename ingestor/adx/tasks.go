@@ -1016,6 +1016,10 @@ type BatchTracker interface {
 // created on disk before it is accounted for, so a very new file may not be tracked yet.
 const untrackedGracePeriod = time.Minute
 
+// auditRecheckDelay is how long the audit waits before checking a mismatch again.  The disk and the accounting are
+// read at different times, so segments created or removed in between can cause a mismatch that is not real.
+const auditRecheckDelay = 5 * time.Second
+
 // maxReportedSegments bounds how many segment paths are logged per audit.
 const maxReportedSegments = 10
 
@@ -1030,6 +1034,10 @@ type AuditDiskSpaceTask struct {
 
 	// StaleSegmentAge is optional.  When set, closed segments older than this are reported.
 	StaleSegmentAge time.Duration
+
+	// RecheckDelay is how long to wait before checking a mismatch again.  A mismatch is reported only if it is seen
+	// twice.
+	RecheckDelay time.Duration
 }
 
 func NewAuditDiskSpaceTask(store SegmentAccounting, batches BatchTracker, storageDir string, staleSegmentAge time.Duration) *AuditDiskSpaceTask {
@@ -1038,11 +1046,15 @@ func NewAuditDiskSpaceTask(store SegmentAccounting, batches BatchTracker, storag
 		Batches:         batches,
 		StorageDir:      storageDir,
 		StaleSegmentAge: staleSegmentAge,
+		RecheckDelay:    auditRecheckDelay,
 	}
 }
 
 func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
-	res, err := t.audit()
+	res, err := t.auditWithRecheck(ctx)
+	if stderrors.Is(err, context.Canceled) {
+		return err
+	}
 	if err != nil {
 		logger.Errorf("AuditDiskSpaceTask: failed to walk storage dir: %v", err)
 		return err
@@ -1080,6 +1092,21 @@ type auditResult struct {
 type staleSegment struct {
 	wal.SegmentInfo
 	Batched bool
+}
+
+// auditWithRecheck audits and, on a mismatch, audits again after RecheckDelay so a mismatch caused by segments created
+// or removed while the audit ran is not reported.
+func (t *AuditDiskSpaceTask) auditWithRecheck(ctx context.Context) (auditResult, error) {
+	res, err := t.audit()
+	if err != nil || !res.Mismatch {
+		return res, err
+	}
+	select {
+	case <-ctx.Done():
+		return res, ctx.Err()
+	case <-time.After(t.RecheckDelay):
+	}
+	return t.audit()
 }
 
 func (t *AuditDiskSpaceTask) audit() (auditResult, error) {

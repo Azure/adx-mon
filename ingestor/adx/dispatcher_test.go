@@ -120,11 +120,18 @@ func TestDispatcher_QueuedPathContinuesWhileRealtimePathIsBlocked(t *testing.T) 
 // and never removed: the oldest segment age grows without bound.
 func TestDispatcher_UnknownDatabaseReleasesBatch(t *testing.T) {
 	u := NewFakeUploader("db")
-	d := newTestDispatcher(t, u)
+	d := NewDispatcher([]Uploader{u})
+	d.unroutableDelay = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go d.upload(ctx)
 
 	batch := &cluster.Batch{Database: "unknown", Prefix: "unknown_table"}
 	d.UploadQueue() <- batch
 
+	// The batch is held so it is not rebuilt and redispatched on every sweep, then released so it can be retried.
+	time.Sleep(10 * time.Millisecond)
+	require.False(t, batch.IsReleased())
 	require.Eventually(t, batch.IsReleased, time.Second, time.Millisecond)
 	require.Empty(t, u.UploadQueue())
 }

@@ -63,6 +63,9 @@ type Service struct {
 	metrics ingestormetrics.Service
 
 	scheduler *scheduler.Periodic
+	// localScheduler runs tasks on every ingestor rather than only the leader, for work on local state such as the
+	// WAL segments on this host.
+	localScheduler *scheduler.Periodic
 
 	dropFilePrefixes []string
 	health           interface{ IsHealthy() bool }
@@ -339,6 +342,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		metrics:          metricsSvc,
 		health:           health,
 		scheduler:        sched,
+		localScheduler:   scheduler.NewScheduler(nil),
 		dropFilePrefixes: opts.DropFilePrefixes,
 	}, nil
 }
@@ -373,6 +377,10 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	if err := s.scheduler.Open(svcCtx); err != nil {
+		return err
+	}
+
+	if err := s.localScheduler.Open(svcCtx); err != nil {
 		return err
 	}
 
@@ -434,7 +442,8 @@ func (s *Service) Open(ctx context.Context) error {
 		// segment that is stuck can be identified.
 		staleAge := max(3*s.opts.MaxSegmentAge, 15*time.Minute)
 		t := adx.NewAuditDiskSpaceTask(accounting, batches, s.opts.StorageDir, staleAge)
-		s.scheduler.ScheduleEvery(5*time.Minute, "audit-disk-space", func(ctx context.Context) error {
+		// WAL segments and batch claims are local to each ingestor, so the audit runs on every instance.
+		s.localScheduler.ScheduleEvery(5*time.Minute, "audit-disk-space", func(ctx context.Context) error {
 			return t.Run(ctx)
 		})
 	}
@@ -446,6 +455,10 @@ func (s *Service) Close() error {
 	s.closeFn()
 
 	if err := s.scheduler.Close(); err != nil {
+		return err
+	}
+
+	if err := s.localScheduler.Close(); err != nil {
 		return err
 	}
 
