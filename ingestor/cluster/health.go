@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -22,6 +23,9 @@ type Health struct {
 
 	mu    sync.RWMutex
 	state map[string]*HealthStatus
+
+	// jitter returns a random duration in [0, n).
+	jitter func(n time.Duration) time.Duration
 }
 
 type HealthStatus struct {
@@ -47,6 +51,7 @@ type HealthOpts struct {
 type PeerHealthReporter interface {
 	IsPeerHealthy(peer string) bool
 	SetPeerUnhealthy(peer string)
+	SetPeerUnhealthyFor(peer string, retryAfter time.Duration)
 	SetPeerHealthy(peer string)
 }
 
@@ -70,6 +75,12 @@ func NewHealth(opts HealthOpts) *Health {
 		opts:       opts,
 		QueueSizer: opts.QueueSizer,
 		state:      make(map[string]*HealthStatus),
+		jitter: func(n time.Duration) time.Duration {
+			if n <= 0 {
+				return 0
+			}
+			return rand.N(n)
+		},
 	}
 	return h
 }
@@ -115,6 +126,11 @@ func (h *Health) IsPeerHealthy(peer string) bool {
 }
 
 func (h *Health) SetPeerUnhealthy(peer string) {
+	h.SetPeerUnhealthyFor(peer, 0)
+}
+
+// SetPeerUnhealthyFor marks the peer unhealthy for at least retryAfter, capped at UnhealthyTimeout.
+func (h *Health) SetPeerUnhealthyFor(peer string, retryAfter time.Duration) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -124,26 +140,32 @@ func (h *Health) SetPeerUnhealthy(peer string) {
 	}
 
 	now := time.Now().UTC()
+	failures := s.Failures
 	if !s.Healthy && s.Failures > 0 && now.Before(s.NextCheck) {
 		// A failure while the peer is already backing off, such as another in-flight request, restarts the current
 		// backoff without escalating it.
-		s.NextCheck = now.Add(h.peerBackoff(s.Failures - 1))
+		failures--
 	} else {
-		s.NextCheck = now.Add(h.peerBackoff(s.Failures))
 		s.Failures++
 	}
+	s.NextCheck = now.Add(min(max(h.peerBackoff(failures), retryAfter), h.opts.UnhealthyTimeout))
 
 	s.Healthy = false
 	h.state[peer] = s
 }
 
-// peerBackoff returns InitialUnhealthyTimeout doubled once per prior failure, capped at UnhealthyTimeout.
+// peerBackoff returns InitialUnhealthyTimeout doubled once per prior failure, capped at UnhealthyTimeout.  An
+// escalating backoff is jittered over its upper half so senders that failed together don't retry together.
 func (h *Health) peerBackoff(failures int) time.Duration {
 	d := h.opts.InitialUnhealthyTimeout
 	for i := 0; i < failures && d < h.opts.UnhealthyTimeout; i++ {
 		d *= 2
 	}
-	return min(d, h.opts.UnhealthyTimeout)
+	d = min(d, h.opts.UnhealthyTimeout)
+	if h.opts.InitialUnhealthyTimeout < h.opts.UnhealthyTimeout {
+		d = d/2 + h.jitter(d-d/2)
+	}
+	return d
 }
 
 func (h *Health) SetPeerHealthy(peer string) {

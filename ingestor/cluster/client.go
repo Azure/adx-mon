@@ -29,6 +29,9 @@ var gzipWriterPool = sync.Pool{
 // PeerOverloadedError represents a peer overloaded error with optional requestId.
 type PeerOverloadedError struct {
 	requestId string
+
+	// RetryAfter is how long the peer asked senders to wait before retrying.
+	RetryAfter time.Duration
 }
 
 func (e *PeerOverloadedError) Error() string {
@@ -308,10 +311,7 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 				}
 				return &wal.TableOverloadedError{Destination: d, Reason: resp.Header.Get(OverloadReasonHeader), RetryAfter: retryDelay(resp.Header.Get("Retry-After"))}
 			}
-			if perr, ok := ErrPeerOverloaded.(*PeerOverloadedError); ok {
-				return perr.WithRequestId(requestId)
-			}
-			return ErrPeerOverloaded
+			return &PeerOverloadedError{requestId: requestId, RetryAfter: retryDelay(resp.Header.Get("Retry-After"))}
 		}
 
 		if resp.StatusCode == http.StatusRequestEntityTooLarge {

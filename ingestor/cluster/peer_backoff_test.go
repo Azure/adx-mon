@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -108,6 +109,7 @@ func failAfterBackoff(h *Health, peer string) time.Duration {
 // Repeated failures back off exponentially up to UnhealthyTimeout, and a success resets the backoff.
 func TestHealthPeerBackoffEscalatesAndResets(t *testing.T) {
 	h := NewHealth(HealthOpts{UnhealthyTimeout: 10 * time.Second, InitialUnhealthyTimeout: time.Second})
+	h.jitter = func(n time.Duration) time.Duration { return n }
 
 	require.Equal(t, 1*time.Second, failAfterBackoff(h, "peer"))
 
@@ -137,4 +139,74 @@ func TestHealthPeerBackoffDefaultIsUnhealthyTimeout(t *testing.T) {
 	// A failure while the peer is skipped restarts the full UnhealthyTimeout.
 	h.SetPeerUnhealthy("peer")
 	require.Equal(t, time.Minute, time.Until(nextCheck(h, "peer")).Round(time.Second))
+}
+
+// overloadedPeerBackoff sends one transfer to a peer that rejects it as overloaded with the given Retry-After and
+// returns how long the peer is then skipped.
+func overloadedPeerBackoff(t *testing.T, health *Health, retryAfter string) time.Duration {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", retryAfter)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer s.Close()
+
+	rep, err := NewReplicator(ReplicatorOpts{
+		Partitioner:            &fakePartitioner{owner: "remote", addr: s.URL},
+		Health:                 health,
+		Hostname:               "local",
+		MaxTransferConcurrency: 1,
+		DisableGzip:            true,
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, rep.Open(ctx))
+	defer rep.Close()
+
+	seg, err := wal.NewSegment(t.TempDir(), "DB_Table")
+	require.NoError(t, err)
+	_, err = seg.Write(ctx, []byte("payload"))
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+
+	batch := &Batch{Database: "DB", Table: "Table", Segments: []wal.SegmentInfo{seg.Info()}, batcher: &fakeBatcher{}}
+	rep.TransferQueue() <- batch
+	require.Eventually(t, batch.IsReleased, time.Second, time.Millisecond)
+	require.False(t, health.IsPeerHealthy("remote"))
+	return time.Until(nextCheck(health, "remote")).Round(100 * time.Millisecond)
+}
+
+// An overloaded peer's Retry-After is honored instead of retrying sooner, capped at UnhealthyTimeout.
+func TestReplicatorPeerOverloadHonorsRetryAfter(t *testing.T) {
+	collector := func() *Health {
+		return NewHealth(HealthOpts{UnhealthyTimeout: time.Minute, InitialUnhealthyTimeout: time.Second})
+	}
+	require.Equal(t, 3*time.Second, overloadedPeerBackoff(t, collector(), "3"))
+	require.Equal(t, time.Minute, overloadedPeerBackoff(t, collector(), "300"))
+
+	// Without InitialUnhealthyTimeout, as on the ingestor, the peer is still skipped for the full UnhealthyTimeout.
+	require.Equal(t, time.Minute, overloadedPeerBackoff(t, NewHealth(HealthOpts{UnhealthyTimeout: time.Minute}), "3"))
+}
+
+// Senders that fail at the same time must not all retry at the same instant.
+func TestHealthPeerBackoffIsJittered(t *testing.T) {
+	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute, InitialUnhealthyTimeout: time.Second})
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 50; i++ {
+		peer := fmt.Sprintf("peer-%d", i)
+		before := time.Now()
+		h.SetPeerUnhealthy(peer)
+		d := nextCheck(h, peer).Sub(before)
+		require.GreaterOrEqual(t, d, 500*time.Millisecond)
+		require.LessOrEqual(t, d, time.Second+10*time.Millisecond)
+		seen[d.Round(10*time.Millisecond)] = true
+	}
+	require.Greater(t, len(seen), 5, "first backoffs should be spread out, got %v", seen)
+
+	// A fixed UnhealthyTimeout, as on the ingestor, is not jittered.
+	h = NewHealth(HealthOpts{UnhealthyTimeout: time.Minute})
+	before := time.Now()
+	h.SetPeerUnhealthy("peer")
+	require.Equal(t, time.Minute, nextCheck(h, "peer").Sub(before).Round(time.Second))
 }

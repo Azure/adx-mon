@@ -243,8 +243,13 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 				// Segment is locked, retry later.
 				return nil
 			} else if errors.Is(err, ErrPeerOverloaded) {
-				// Ingestor is overloaded, mark the peer as unhealthy and retry later.
-				r.Health.SetPeerUnhealthy(owner)
+				// Ingestor is overloaded, mark the peer as unhealthy and retry no sooner than it asked.
+				var retryAfter time.Duration
+				var overloaded *PeerOverloadedError
+				if errors.As(err, &overloaded) {
+					retryAfter = overloaded.RetryAfter
+				}
+				r.Health.SetPeerUnhealthyFor(owner, retryAfter)
 				return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
 			}
 			// Unknown error, assume it's transient and retry after some backoff.
