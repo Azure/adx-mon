@@ -73,6 +73,8 @@ func (healthyPeers) IsPeerHealthy(string) bool { return true }
 func (healthyPeers) SetPeerUnhealthy(string)   {}
 func (healthyPeers) SetPeerHealthy(string)     {}
 
+func (healthyPeers) SetPeerUnhealthyFor(string, time.Duration) {}
+
 type streamingTestEnv struct {
 	dir      string
 	idx      *wal.Index

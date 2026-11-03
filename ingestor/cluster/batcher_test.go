@@ -624,6 +624,8 @@ func (f fakeHealthChecker) IsPeerHealthy(peer string) bool { return true }
 func (f fakeHealthChecker) SetPeerUnhealthy(peer string)   {}
 func (f fakeHealthChecker) SetPeerHealthy(peer string)     {}
 
+func (f fakeHealthChecker) SetPeerUnhealthyFor(peer string, retryAfter time.Duration) {}
+
 func newPriorityTestBatcher(t *testing.T, idx *wal.Index, owner string) *batcher {
 	t.Helper()
 	countMetric, sizeMetric, ageMetric := newTestMetrics()
