@@ -48,6 +48,9 @@ type eventBatcher struct {
 	retryDelay    time.Duration
 	sweepInterval time.Duration
 
+	// maxRetryDelay, when set, doubles retryDelay for each consecutive release of a prefix up to maxRetryDelay.
+	maxRetryDelay time.Duration
+
 	// seq is the last sequence number assigned to a pending prefix.  It is guarded by mu.
 	seq uint64
 
@@ -55,6 +58,8 @@ type eventBatcher struct {
 	// pending tracks prefixes with unbatched segments.
 	pending map[string]pendingPrefix
 	wake    chan struct{}
+	// releases counts consecutive releases of a prefix without a removal.
+	releases map[string]int
 
 	// emitMu serializes building batches so segments are never added to more than one batch.
 	emitMu  sync.Mutex
@@ -73,6 +78,7 @@ func newEventBatcher(b *batcher, policy eventPolicy, sweepInterval time.Duration
 		sweepInterval: sweepInterval,
 		pending:       make(map[string]pendingPrefix),
 		wake:          make(chan struct{}, 1),
+		releases:      make(map[string]int),
 	}
 }
 
@@ -109,8 +115,26 @@ func (r *eventBatcher) onSegment(si wal.SegmentInfo) {
 
 // released is called when a batch is released without being removed so its segments are retried.
 func (r *eventBatcher) released(prefix string) {
-	retryAfter := time.Now().Add(r.retryDelay)
+	delay := r.retryDelay
+	if r.maxRetryDelay > 0 {
+		r.mu.Lock()
+		n := r.releases[prefix]
+		r.releases[prefix] = n + 1
+		r.mu.Unlock()
+		for i := 0; i < n && delay < r.maxRetryDelay; i++ {
+			delay *= 2
+		}
+		delay = min(delay, r.maxRetryDelay)
+	}
+	retryAfter := time.Now().Add(delay)
 	r.markPendingWithRetry(prefix, retryAfter, retryAfter)
+}
+
+// removed resets the retry backoff of prefix after one of its batches is delivered.
+func (r *eventBatcher) removed(prefix string) {
+	r.mu.Lock()
+	delete(r.releases, prefix)
+	r.mu.Unlock()
 }
 
 // pendingPrefix is a prefix with unbatched segments.

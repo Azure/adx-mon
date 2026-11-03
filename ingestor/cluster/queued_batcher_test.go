@@ -350,3 +350,57 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 		})
 	}
 }
+
+// A queued batch released without being removed, such as after a failed transfer or upload, is retried after the
+// retry delay instead of waiting for its prefix's next segment or the one minute sweep.
+func TestQueuedBatcher_RetriesReleasedBatches(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, 10*time.Millisecond)
+	env.b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: env.b.hostname}
+	env.b.queued.retryDelay = 50 * time.Millisecond
+
+	for _, tc := range []struct {
+		table string
+		queue chan *Batch
+	}{{"Owned", env.upload}, {"Peer", env.transfer}} {
+		si := env.add(t, tc.table, 100, ingestpolicy.PriorityQueued)
+		batch := receiveBatch(t, tc.queue, time.Second)
+
+		released := time.Now()
+		batch.Release()
+		retry := receiveBatch(t, tc.queue, time.Second)
+		require.GreaterOrEqual(t, time.Since(released), 40*time.Millisecond)
+		require.Equal(t, []string{si.Path}, retry.Paths())
+
+		// A batch that was delivered and removed is not retried.
+		require.NoError(t, retry.Remove())
+		retry.Release()
+		select {
+		case b := <-tc.queue:
+			t.Fatalf("unexpected batch %v", b.Paths())
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+}
+
+// A prefix that keeps failing backs off to the sweep interval, and a delivered batch resets the backoff.
+func TestQueuedBatcher_ReleasedBatchesBackOff(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
+	r := newQueuedBatcher(env.b, time.Millisecond)
+	require.Equal(t, queuedSweepInterval, r.maxRetryDelay)
+	r.maxRetryDelay = 5 * time.Second
+
+	prefix := "db_Cpu"
+	retryDelay := func() time.Duration {
+		before := time.Now()
+		r.released(prefix)
+		return r.pending[prefix].retryAfter.Sub(before).Round(time.Second)
+	}
+	require.Equal(t, 1*time.Second, retryDelay())
+	require.Equal(t, 2*time.Second, retryDelay())
+	require.Equal(t, 4*time.Second, retryDelay())
+	require.Equal(t, 5*time.Second, retryDelay())
+	require.Equal(t, 5*time.Second, retryDelay())
+
+	r.removed(prefix)
+	require.Equal(t, 1*time.Second, retryDelay())
+}
