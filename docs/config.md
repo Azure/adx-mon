@@ -345,6 +345,8 @@ The host log config configures file, journald, and kernel log collection. By def
 
 On upgrade, legacy checkpoints containing only a sequence number are ignored because their boot cannot be identified. This can replay messages still in the kernel buffer until a new boot-aware checkpoint is acknowledged. Invalid checkpoints are also ignored with a warning, favoring replay over silently losing logs.
 
+Kernel messages have the single trailing newline added by `/dev/kmsg` removed before forwarding, matching journal collection. Other whitespace and embedded message newlines are preserved.
+
 On hosts using journald, a `journal-target` with `matches = ["_TRANSPORT=kernel"]` is an alternative to `kernel-target`. Add `journal-fields = ["PRIORITY"]` to retain priority as a resource field without filtering entries. This includes debug messages unless additional matches exclude them, whereas a kernel target with `priority = "info"` excludes debug messages.
 
 ### Log Transforms

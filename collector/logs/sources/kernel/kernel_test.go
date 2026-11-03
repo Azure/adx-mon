@@ -228,6 +228,72 @@ func TestKernelSourceWithMultipleTargets(t *testing.T) {
 	require.Equal(t, uint64(3), offset)
 }
 
+func TestKernelSourceMessageNewline(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "record newline", message: "kernel message\n", want: "kernel message"},
+		{name: "no newline", message: "kernel message", want: "kernel message"},
+		{name: "empty message", message: "", want: ""},
+		{name: "newline only", message: "\n", want: ""},
+		{name: "preserve whitespace", message: "  kernel message \\x09\n", want: "  kernel message \t"},
+		{name: "preserve whitespace without newline", message: "  kernel message \\x09", want: "  kernel message \t"},
+		{name: "preserve embedded newline", message: "first\\x0asecond\n", want: "first\nsecond"},
+		{name: "preserve message newline", message: "kernel message\\x0a\n", want: "kernel message\n"},
+		{name: "preserve carriage return", message: "kernel message\\x0d\n", want: "kernel message\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message, err := kmsg.ParseMessage([]byte("6,42,100,-;"+tc.message), time.Unix(1000, 0))
+			require.NoError(t, err)
+
+			source, err := NewKernelSource(KernelSourceConfig{
+				Targets: []KernelTargetConfig{
+					{Database: "Logs", Table: "Kernel"},
+					{Database: "Logs", Table: "KernelCopy"},
+				},
+			})
+			require.NoError(t, err)
+			require.NoError(t, source.loadOffsets())
+
+			packets := make(chan kmsg.Packet, 1)
+			packets <- kmsg.Packet{Message: message}
+			close(packets)
+			source.reader = &mockKernelReader{ch: packets}
+
+			output := make(chan *types.Log, len(source.targets))
+			source.readKernelLogs(t.Context(), output)
+			require.Len(t, output, len(source.targets))
+			for _, target := range source.targets {
+				log := <-output
+				t.Cleanup(func() {
+					log.Reset()
+					types.LogPool.Put(log)
+				})
+
+				body, ok := log.GetBodyValue(types.BodyKeyMessage)
+				require.True(t, ok)
+				require.Equal(t, tc.want, body)
+				require.Equal(t, uint64(message.Timestamp.UnixNano()), log.GetTimestamp())
+				for key, want := range map[string]any{
+					"priority":                  kmsg.Info,
+					types.AttributeDatabaseName: target.Database,
+					types.AttributeTableName:    target.Table,
+					kernelSequenceAttr:          uint64(42),
+					kernelCursorFilename:        target.cursorFile,
+				} {
+					value, ok := log.GetAttributeValue(key)
+					require.True(t, ok, key)
+					require.Equal(t, want, value, key)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkKernelSource(b *testing.B) {
 	testDir := b.TempDir()
 

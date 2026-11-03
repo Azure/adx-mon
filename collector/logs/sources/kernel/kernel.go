@@ -218,7 +218,7 @@ func (s *KernelSource) readKernelLogs(ctx context.Context, outputQueue chan<- *t
 
 			log.SetTimestamp(uint64(pkt.Message.Timestamp.UnixNano()))
 			log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
-			log.SetBodyValue(types.BodyKeyMessage, pkt.Message.Message)
+			log.SetBodyValue(types.BodyKeyMessage, strings.TrimSuffix(pkt.Message.Message, "\n"))
 			log.SetAttributeValue("priority", pkt.Message.Priority)
 
 			log.SetAttributeValue(types.AttributeDatabaseName, target.Database)
