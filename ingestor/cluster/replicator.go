@@ -86,11 +86,12 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		transferConcurrency = opts.MaxTransferConcurrency
 	}
 
+	// Keep every connection the default per-host limit of 5 allows so bursts reuse them instead of reconnecting.
 	cli, err := NewClient(ClientOpts{
 		Timeout:               30 * time.Second,
 		InsecureSkipVerify:    opts.InsecureSkipVerify,
 		Close:                 false,
-		MaxIdleConnsPerHost:   1,
+		MaxIdleConnsPerHost:   5,
 		MaxIdleConns:          transferConcurrency,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 20 * time.Second,
