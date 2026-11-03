@@ -816,7 +816,8 @@ func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.Sum
 	if err != nil {
 		logger.Errorf("Failed to resubmit async operation %s for rule %s.%s (window %s to %s): %v",
 			operation.OperationId, rule.Spec.Database, rule.Name, operation.StartTime, operation.EndTime, err)
-		return
+		// Retry the window as backlog without relying on ADX retaining the old operation.
+		operationId = ""
 	}
 	if operationId == operation.OperationId {
 		return
@@ -881,6 +882,9 @@ func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.
 		// This order ensures that if timestamp advancement succeeds, the operation is tracked;
 		// if timestamp parsing fails, we still track the operation but without advancing the timestamp.
 		rule.SetAsyncOperation(operation)
+	} else {
+		logger.Errorf("Failed to submit backlog operation for rule %s.%s (window %s to %s): %v",
+			rule.Spec.Database, rule.Name, operation.StartTime, operation.EndTime, err)
 	}
 }
 
