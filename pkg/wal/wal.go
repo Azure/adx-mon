@@ -252,18 +252,18 @@ func (w *WAL) closeActiveSegment() {
 	w.setSegment(nil)
 	w.mu.Unlock()
 
-	// Indexed before closing so a failed close still leaves the backlog
-	// discoverable by the uploader rather than stranding it until restart.
+	// Closed before indexing so the segment is fully written when it is dispatched.  A failed close still indexes
+	// it so the backlog stays discoverable by the uploader rather than stranded until restart.
+	if err := toClose.Close(); err != nil {
+		logger.Errorf("Failed to close throttled segment: %s %s", toClose.Path(), err.Error())
+	}
+
 	if toClose.Size() > 8 {
 		info := toClose.Info()
 		info.Priority = w.opts.Priority
 		w.index.Add(info)
 	} else {
 		_ = w.Remove(toClose.Path())
-	}
-
-	if err := toClose.Close(); err != nil {
-		logger.Errorf("Failed to close throttled segment: %s %s", toClose.Path(), err.Error())
 	}
 }
 
@@ -442,6 +442,11 @@ func (w *WAL) rotateSegmentIfNecessary() {
 	w.mu.Unlock()
 
 	if toClose != nil {
+		// Closed before indexing so the segment is fully written when it is dispatched.
+		if err := toClose.Close(); err != nil {
+			logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
+		}
+
 		// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
 		// delete it so that we don't end up uploading empty segments to Kusto.
 		if toClose.Size() > 8 {
@@ -451,10 +456,6 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		} else {
 			// Removed through the WAL so the table budget is released.
 			_ = w.Remove(toClose.Path())
-		}
-
-		if err := toClose.Close(); err != nil {
-			logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
 		}
 	}
 }

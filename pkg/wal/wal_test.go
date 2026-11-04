@@ -555,9 +555,10 @@ func TestWAL_IdleWALStopsCreatingSegments(t *testing.T) {
 	require.NoError(t, w.Write(context.Background(), []byte("foo")))
 	require.Eventually(t, func() bool { return w.Segment() == nil }, time.Second, time.Millisecond)
 
-	// Only the segment with data remains and no new segments are created while idle.
+	// Only the segment with data remains and no new segments are created while idle.  The empty segment is removed
+	// after it is no longer the active segment.
+	require.Eventually(t, func() bool { return len(walFiles(t, dir)) == 1 }, time.Second, time.Millisecond)
 	files := walFiles(t, dir)
-	require.Len(t, files, 1)
 	time.Sleep(50 * time.Millisecond)
 	require.Equal(t, files, walFiles(t, dir))
 	require.Nil(t, w.Segment())
