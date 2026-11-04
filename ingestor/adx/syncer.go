@@ -48,7 +48,7 @@ type Syncer struct {
 
 	tables map[string]struct{}
 
-	// streamingMu serializes enabling streaming ingestion policies.  streamingPolicies records the result per table.
+	// streamingMu guards streamingPolicies, which records the result of enabling the streaming policy per table.
 	streamingMu       sync.Mutex
 	streamingPolicies map[string]streamingPolicyState
 
@@ -222,10 +222,14 @@ type streamingPolicyState struct {
 // for every batch.  A failure does not necessarily prevent streaming ingestion since the policy may be enabled at the
 // database level.
 func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error {
-	s.streamingMu.Lock()
-	defer s.streamingMu.Unlock()
+	// Serialize only callers for this table so a stalled command does not block other tables.
+	entry := s.mappingLock("streaming:" + table)
+	entry.Lock()
+	defer entry.Unlock()
 
+	s.streamingMu.Lock()
 	state := s.streamingPolicies[table]
+	s.streamingMu.Unlock()
 	if state.enabled {
 		return nil
 	}
@@ -236,13 +240,19 @@ func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error 
 	stmt := kql.New(".alter table ").AddTable(table).AddLiteral(" policy streamingingestion enable")
 	if _, err := s.KustoCli.Mgmt(ctx, s.database, stmt); err != nil {
 		err = fmt.Errorf("enable streaming ingestion policy for %s.%s: %w", s.database, table, err)
-		s.streamingPolicies[table] = streamingPolicyState{err: err, retryAt: time.Now().Add(streamingPolicyRetryInterval)}
+		s.setStreamingPolicy(table, streamingPolicyState{err: err, retryAt: time.Now().Add(streamingPolicyRetryInterval)})
 		return err
 	}
 
 	logger.Infof("Enabled streaming ingestion policy for %s.%s", s.database, table)
-	s.streamingPolicies[table] = streamingPolicyState{enabled: true}
+	s.setStreamingPolicy(table, streamingPolicyState{enabled: true})
 	return nil
+}
+
+func (s *Syncer) setStreamingPolicy(table string, state streamingPolicyState) {
+	s.streamingMu.Lock()
+	defer s.streamingMu.Unlock()
+	s.streamingPolicies[table] = state
 }
 
 // EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
@@ -414,9 +424,12 @@ func (s *Syncer) ensureOTLPLogsFunctions(ctx context.Context) error {
 	return nil
 }
 
+// reconcileInterval is how often cached tables and mappings are checked against the database.
+var reconcileInterval = 15 * time.Minute
+
 func (s *Syncer) reconcileTables(ctx context.Context) {
 	defer s.wg.Done()
-	t := time.NewTicker(15 * time.Minute)
+	t := time.NewTicker(reconcileInterval)
 	defer t.Stop()
 
 	for {
@@ -438,8 +451,11 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 				}
 
 				tableExists := make(map[string]struct{})
+				// Mapping names are prefixed with the normalized table name, which differs from names such as my_logs.
+				mappingTableExists := make(map[string]struct{})
 				for _, v := range tables {
 					tableExists[v.TableName] = struct{}{}
+					mappingTableExists[string(schema.NormalizeMetricName([]byte(v.TableName)))] = struct{}{}
 				}
 
 				s.mu.Lock()
@@ -455,7 +471,7 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 				for k := range s.mappings {
 					tableName := strings.Split(k, "_")[0]
 
-					if _, ok := tableExists[tableName]; !ok {
+					if _, ok := mappingTableExists[tableName]; !ok {
 						logger.Debugf("Removing cached ingestion mapping %s from %s", k, s.database)
 						delete(s.mappings, k)
 					}
