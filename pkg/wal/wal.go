@@ -80,8 +80,9 @@ type WAL struct {
 	// the latter requires taking an RLock on the segments which creates lock contention.
 	segmentSize int64
 
-	// segmentCreatedAt is the creation time of the current segment in Unix nanoseconds, or 0 when there is no
-	// current segment.  This is tracked separately from Segment itself to avoid lock contention.
+	// segmentCreatedAt is when the current segment became active, in Unix nanoseconds on the monotonic clock (see
+	// monoNow), or 0 when there is no segment.  Rotation ages use it rather than the segment's wall clock creation
+	// time so a clock step does not delay or advance rotations.
 	segmentCreatedAt int64
 }
 
@@ -367,7 +368,22 @@ func (w *WAL) requiresRotation() bool {
 	}
 
 	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
-	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Since(time.Unix(0, createdAt)) >= w.segmentMaxAge()
+	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Duration(monoNow()-createdAt) >= w.segmentMaxAge()
+}
+
+// processStart anchors segment ages to the monotonic clock.
+var processStart = time.Now()
+
+// monoNow returns the current time in Unix nanoseconds, measured on the monotonic clock since processStart so it
+// does not move when the wall clock is stepped.
+func monoNow() int64 {
+	return processStart.UnixNano() + int64(time.Since(processStart))
+}
+
+// monoTime returns the time for a monoNow value with a monotonic reading, so timers and comparisons against it
+// also ignore wall clock steps.
+func monoTime(ns int64) time.Time {
+	return processStart.Add(time.Duration(ns - processStart.UnixNano()))
 }
 
 // rotationJitterFraction is the largest fraction of the max segment age by which a segment rotates early.
@@ -405,7 +421,7 @@ func (w *WAL) setSegment(seg Segment) {
 		return
 	}
 	atomic.StoreInt64(&w.segmentSize, seg.Size())
-	atomic.StoreInt64(&w.segmentCreatedAt, seg.CreatedAt().UnixNano())
+	atomic.StoreInt64(&w.segmentCreatedAt, monoNow())
 	var jitter time.Duration
 	if window := w.opts.SegmentMaxAge / rotationJitterFraction; window > 0 {
 		jitter = rand.N(window)
@@ -430,7 +446,7 @@ func (w *WAL) scheduleRotationLocked() {
 	if createdAt == 0 {
 		return
 	}
-	w.scheduler.schedule(w, time.Unix(0, createdAt).Add(w.segmentMaxAge()))
+	w.scheduler.schedule(w, monoTime(createdAt).Add(w.segmentMaxAge()))
 }
 
 func (w *WAL) rotateSegmentIfNecessary() {

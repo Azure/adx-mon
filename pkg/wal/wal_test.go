@@ -308,9 +308,10 @@ func TestWAL_TracksCreatedAtForLazySegment(t *testing.T) {
 
 	require.NoError(t, w.Write(context.Background(), []byte("foo")))
 
+	// The rotation age is tracked on the monotonic clock from when the segment became active.
 	seg := w.Segment()
 	require.NotNil(t, seg)
-	require.Equal(t, seg.CreatedAt().UnixNano(), atomic.LoadInt64(&w.segmentCreatedAt))
+	require.WithinDuration(t, seg.CreatedAt(), time.Unix(0, atomic.LoadInt64(&w.segmentCreatedAt)), time.Second)
 }
 
 func TestWAL_TracksCreatedAtForLazyAppendSegment(t *testing.T) {
@@ -323,9 +324,10 @@ func TestWAL_TracksCreatedAtForLazyAppendSegment(t *testing.T) {
 	w := newTestWAL(t, WALOpts{SegmentMaxAge: time.Hour})
 	require.NoError(t, w.Append(context.Background(), b))
 
+	// The rotation age is tracked on the monotonic clock from when the segment became active.
 	seg := w.Segment()
 	require.NotNil(t, seg)
-	require.Equal(t, seg.CreatedAt().UnixNano(), atomic.LoadInt64(&w.segmentCreatedAt))
+	require.WithinDuration(t, seg.CreatedAt(), time.Unix(0, atomic.LoadInt64(&w.segmentCreatedAt)), time.Second)
 }
 
 func TestWAL_FirstSegmentNotRotatedBeforeMaxAge(t *testing.T) {
@@ -358,10 +360,11 @@ func TestWAL_SubSecondMaxAge(t *testing.T) {
 
 	// The replacement segment may already have been rotated away as idle, so only check its tracking if present.
 	w.mu.RLock()
-	if w.segment != nil {
-		require.Equal(t, w.segment.CreatedAt().UnixNano(), atomic.LoadInt64(&w.segmentCreatedAt))
-	}
+	seg := w.segment
 	w.mu.RUnlock()
+	if seg != nil {
+		require.WithinDuration(t, seg.CreatedAt(), time.Unix(0, atomic.LoadInt64(&w.segmentCreatedAt)), time.Second)
+	}
 }
 
 func TestWAL_RotatesEachSegmentAtMaxAge(t *testing.T) {
@@ -402,7 +405,7 @@ func TestWAL_UsesSharedScheduler(t *testing.T) {
 	// The deadline is jittered up to a tenth of the max age earlier.
 	deadline, ok := sched.next()
 	require.True(t, ok)
-	createdAt := w.Segment().CreatedAt()
+	createdAt := time.Unix(0, atomic.LoadInt64(&w.segmentCreatedAt))
 	require.False(t, deadline.After(createdAt.Add(time.Hour)))
 	require.False(t, deadline.Before(createdAt.Add(time.Hour-time.Hour/rotationJitterFraction)))
 

@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
+	"github.com/Azure/adx-mon/pkg/pool"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/status"
@@ -97,6 +98,9 @@ func (s *LogsService) beginRequest() bool {
 	return true
 }
 
+// maxLogsBodyBytes bounds the size of an OTLP logs request body.
+var maxLogsBodyBytes int64 = 64 << 20
+
 func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/v1/logs"})
 	defer r.Body.Close()
@@ -110,24 +114,25 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Content-Type") {
 	case "application/x-protobuf":
 
-		// Consume the request body and marshal into a protobuf
-		b := gbp.Get(int(r.ContentLength))
-		defer gbp.Put(b)
+		// Consume the request body and marshal into a protobuf.  The body is read up to the limit rather than sized
+		// from Content-Length, which is -1 for chunked requests and is not trusted for its size.
+		bodyBuf := pool.BytesBufferPool.Get(512 * 1024).(*gbp.Buffer)
+		defer pool.BytesBufferPool.Put(bodyBuf)
+		bodyBuf.Reset()
 
-		n, err := io.ReadFull(r.Body, b)
+		n, err := io.Copy(bodyBuf, io.LimitReader(r.Body, maxLogsBodyBytes+1))
 		if err != nil {
 			s.logger.Error("Failed to read request body", "Error", err)
 			status := newErrorStatus("Failed to read request body")
 			writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
 			return
 		}
-		if n < int(r.ContentLength) {
-			s.logger.Warn("Short read")
-			status := newErrorStatus("Request body shorter than Content-Length header")
-			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
+		if n > maxLogsBodyBytes {
+			status := newErrorStatus(fmt.Sprintf("Request body larger than %d bytes", maxLogsBodyBytes))
+			writeErrorStatusResponse(w, http.StatusRequestEntityTooLarge, status, m)
 			return
 		}
-		b = b[:n]
+		b := bodyBuf.Bytes()
 
 		if logger.IsDebug() {
 			s.logger.Debug("Received request body", "Bytes", n)
