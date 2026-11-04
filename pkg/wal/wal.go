@@ -63,6 +63,10 @@ type WAL struct {
 	closed  bool
 	segment Segment
 
+	// rotateMu serializes rotations so writers that fill the segment together create one next segment rather than
+	// one each.
+	rotateMu sync.Mutex
+
 	// inflightWriteBytes is the sum of bytes from goroutines with active writes in progress but not written
 	// to the active segment.
 	inflightWriteBytes int64
@@ -208,21 +212,22 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 }
 
 // writeWithRetry calls write, retrying when the segment rotates concurrently.  A write that exceeds the max segment
-// size rotates the segment and is retried once.
+// size rotates the segment and is retried, up to maxSegmentClosedRetries times since concurrent writers can fill
+// the next segment first.
 //
 // A write rejected by a table budget releases the active segment: the uploader
 // only drains closed segments, so otherwise a throttled table whose segment has
 // not reached its rotation size or age would never free capacity and could stay
 // throttled indefinitely.
 func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) error {
-	rotated := false
+	rotations := 0
 	for closedRetries := 0; ; {
 		n, err := write()
 		atomic.AddInt64(&w.segmentSize, int64(n))
 
 		switch {
-		case errors.Is(err, ErrMaxSegmentSizeExceeded) && !rotated:
-			rotated = true
+		case errors.Is(err, ErrMaxSegmentSizeExceeded) && rotations < maxSegmentClosedRetries:
+			rotations++
 			w.rotateSegmentIfNecessary()
 		case errors.Is(err, ErrSegmentClosed) && closedRetries < maxSegmentClosedRetries:
 			closedRetries++
@@ -360,8 +365,14 @@ func (w *WAL) requiresRotation() bool {
 	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Since(time.Unix(0, createdAt)) >= w.opts.SegmentMaxAge
 }
 
+// testHookSegmentCreated, if set, is called each time a WAL creates a segment.
+var testHookSegmentCreated func()
+
 // newSegment creates a new segment for the WAL.
 func (w *WAL) newSegment() (Segment, error) {
+	if testHookSegmentCreated != nil {
+		testHookSegmentCreated()
+	}
 	return NewSegment(w.opts.StorageDir, w.opts.Prefix,
 		WithFlushIntervale(w.opts.WALFlushInterval),
 		WithFsync(w.opts.EnableWALFsync),
@@ -405,6 +416,13 @@ func (w *WAL) scheduleRotationLocked() {
 }
 
 func (w *WAL) rotateSegmentIfNecessary() {
+	if !w.requiresRotation() {
+		return
+	}
+
+	// A rotation that finished while waiting resets the segment size, so the check below returns early.
+	w.rotateMu.Lock()
+	defer w.rotateMu.Unlock()
 	if !w.requiresRotation() {
 		return
 	}

@@ -715,7 +715,8 @@ func TestWAL_WriteRetriesClosedSegmentBounded(t *testing.T) {
 	require.Equal(t, maxSegmentClosedRetries+1, calls)
 }
 
-func TestWAL_WriteRotatesForSizeOnce(t *testing.T) {
+// A write that keeps exceeding the max segment size is retried a bounded number of times, not forever.
+func TestWAL_WriteRotatesForSizeBounded(t *testing.T) {
 	w := newTestWAL(t, WALOpts{})
 
 	calls := 0
@@ -724,7 +725,7 @@ func TestWAL_WriteRotatesForSizeOnce(t *testing.T) {
 		return 0, ErrMaxSegmentSizeExceeded
 	})
 	require.ErrorIs(t, err, ErrMaxSegmentSizeExceeded)
-	require.Equal(t, 2, calls)
+	require.Equal(t, maxSegmentClosedRetries+1, calls)
 }
 
 func TestWAL_ConcurrentRotationDiscardsUnusedSegments(t *testing.T) {
