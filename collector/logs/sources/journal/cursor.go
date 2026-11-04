@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Azure/adx-mon/pkg/atomicfile"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/cespare/xxhash"
 )
@@ -40,15 +41,7 @@ func writeCursor(cursorFilePath string, cursor string) {
 	}
 
 	cursorVal := fmt.Sprintf(`{"cursor":"%s"}`, cursor)
-	output, err := os.Create(cursorFilePath)
-	if err != nil {
-		logger.Errorf("journal: failed to create cursor file: %v", err)
-		return
-	}
-	defer output.Close()
-
-	_, err = output.Write([]byte(cursorVal))
-	if err != nil {
+	if err := atomicfile.WriteFile(cursorFilePath, []byte(cursorVal), 0644); err != nil {
 		logger.Errorf("journal: failed to write cursor file: %v", err)
 	}
 }
