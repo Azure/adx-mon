@@ -32,6 +32,10 @@ const (
 	batchUploadTimeout = 10 * time.Minute
 )
 
+// schemaMgmtTimeout bounds the table and mapping management commands so a stalled command releases the batch for
+// retry instead of holding an upload worker for the full batchUploadTimeout.
+var schemaMgmtTimeout = 30 * time.Second
+
 type Uploader interface {
 	service.Component
 
@@ -221,11 +225,13 @@ func (n *uploader) uploadReader(ctx context.Context, reader io.Reader, database,
 	ctx, cancel := context.WithTimeout(ctx, batchUploadTimeout)
 	defer cancel()
 
-	if err := n.syncer.EnsureTable(ctx, table, mapping); err != nil {
+	mgmtCtx, mgmtCancel := context.WithTimeout(ctx, schemaMgmtTimeout)
+	defer mgmtCancel()
+	if err := n.syncer.EnsureTable(mgmtCtx, table, mapping); err != nil {
 		return err
 	}
 
-	name, err := n.syncer.EnsureMapping(ctx, table, mapping)
+	name, err := n.syncer.EnsureMapping(mgmtCtx, table, mapping)
 	if err != nil {
 		return err
 	}
