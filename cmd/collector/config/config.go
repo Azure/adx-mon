@@ -137,7 +137,8 @@ type PrometheusScrape struct {
 	Database                 string          `toml:"database" comment:"Database to store metrics in."`
 	StaticScrapeTarget       []*ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
-	ScrapeTimeout            int             `toml:"scrape-timeout" comment:"Scrape timeout in seconds."`
+	ScrapeTimeout            int             `toml:"scrape-timeout" comment:"Scrape timeout in seconds.  Scrapes time out at their interval if it is shorter."`
+	ScrapeConcurrency        int             `toml:"scrape-concurrency,omitempty" comment:"Maximum number of targets scraped at once.  Defaults to 4."`
 	DisableMetricsForwarding bool            `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 	DisableDiscovery         bool            `toml:"disable-discovery" comment:"Disable discovery of kubernetes pod targets."`
 
@@ -165,6 +166,10 @@ func (s *PrometheusScrape) Validate() error {
 
 	if s.ScrapeIntervalSeconds <= 0 {
 		return errors.New("prom-scrape.scrape-interval must be greater than 0")
+	}
+
+	if s.ScrapeConcurrency < 0 {
+		return errors.New("prom-scrape.scrape-concurrency must not be negative")
 	}
 	return nil
 }

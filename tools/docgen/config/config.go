@@ -184,12 +184,13 @@ func getContents() Contents {
 					"Each static target can independently set `scrape-interval` to a positive Go duration string such as `60s`, `500ms`, or `1m30s`. Omit the field on a static target to inherit the configured global interval. Explicitly empty, invalid, zero, and negative values fail collector configuration validation with the target index. For example:\n\n" +
 					"```toml\n[prometheus-scrape]\ndatabase = 'Metrics'\nscrape-interval = 30\nstatic-scrape-target = [\n  { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector', scrape-interval = '60s' }\n]\n```\n\n" +
 					"This example scrapes the static collector target every 60 seconds; other targets without overrides still use 30 seconds. Static target matching and labels are unchanged. Static configuration changes require a collector restart. Deploy an image containing static-target interval support before enabling this field.\n\n" +
-					"New targets are staggered within their interval. Scrapes run serially, so scrape and forwarding durations can delay deadlines. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` continues to apply to every endpoint.",
+					"New targets are staggered within their interval. Up to `scrape-concurrency` targets (default 4) are scraped at once, so a slow target only delays itself. A target that is still being scraped when it is due again skips that interval. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` applies to every endpoint, capped at the endpoint's interval.",
 				Config: &config.Config{
 					PrometheusScrape: &config.PrometheusScrape{
 						Database:              "Metrics",
 						ScrapeIntervalSeconds: 10,
 						ScrapeTimeout:         5,
+						ScrapeConcurrency:     4,
 						DropMetrics: []string{
 							"^kube_pod_ips$",
 							"etcd_grpc.*",

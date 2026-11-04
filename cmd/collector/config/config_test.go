@@ -1054,6 +1054,17 @@ func TestConfig_PromScrape_Interval(t *testing.T) {
 	}
 }
 
+func TestConfig_PromScrape_Concurrency(t *testing.T) {
+	c := Config{
+		PrometheusScrape: &PrometheusScrape{
+			Database:              "foo",
+			ScrapeIntervalSeconds: 10,
+			ScrapeConcurrency:     -1,
+		},
+	}
+	require.Equal(t, "prom-scrape.scrape-concurrency must not be negative", c.Validate().Error())
+}
+
 func TestConfig_PromScrape_Database(t *testing.T) {
 	c := Config{
 		PrometheusScrape: &PrometheusScrape{

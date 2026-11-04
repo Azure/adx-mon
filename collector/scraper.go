@@ -48,8 +48,11 @@ type ScraperOpts struct {
 	// ScrapeInterval is the interval at which to scrape metrics from the targets.
 	ScrapeInterval time.Duration
 
-	// ScrapeTimeout is the timeout for scraping metrics from a target.
+	// ScrapeTimeout is the timeout for scraping metrics from a target.  It is capped at the target's scrape interval.
 	ScrapeTimeout time.Duration
+
+	// ScrapeConcurrency is the maximum number of targets scraped at once.  Defaults to DefaultScrapeConcurrency.
+	ScrapeConcurrency int
 
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
@@ -167,6 +170,9 @@ func (s *Scraper) Open(ctx context.Context) error {
 	if s.opts.ScrapeInterval <= 0 {
 		return errors.New("scrape interval must be greater than zero")
 	}
+	if timeout := s.scrapeTimeout(); timeout > s.opts.ScrapeInterval {
+		logger.Warnf("Scrape timeout %s exceeds the scrape interval %s; scrapes time out at their interval", timeout, s.opts.ScrapeInterval)
+	}
 	logger.Infof("Starting prometheus scraper for node %s", s.opts.NodeName)
 	ctx, cancelFn := context.WithCancel(ctx)
 	s.cancel = cancelFn
@@ -221,12 +227,20 @@ func (s *Scraper) scrape(ctx context.Context) {
 	defer t.Stop()
 	timerC := t.C
 	schedule := make(scrapeSchedule)
+
+	// Each target is scraped in its own goroutine, at most ScrapeConcurrency at once, so a slow target only delays
+	// itself.  A target that is still being scraped when it is due again skips that interval.
+	slots := make(chan struct{}, s.scrapeConcurrency())
+	inflight := make(map[ScrapeTarget]bool)
+	done := make(chan ScrapeTarget)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timerC:
 		case <-s.targetsChanged:
+		case target := <-done:
+			delete(inflight, target)
 		case <-reconnectTimer.C:
 			for _, remoteClient := range s.remoteClients {
 				remoteClient.CloseIdleConnections()
@@ -241,9 +255,30 @@ func (s *Scraper) scrape(ctx context.Context) {
 			if !s.healthChecker.IsHealthy() {
 				logger.Warnf("Collector is unhealthy, skipping scrape")
 			} else {
-				s.scrapeTargets(ctx, targets)
+				for _, target := range targets {
+					if inflight[target] {
+						logger.Warnf("Skipping scrape of %s, previous scrape still running", target.String())
+						continue
+					}
+					inflight[target] = true
+					s.wg.Add(1)
+					go func() {
+						defer s.wg.Done()
+						select {
+						case slots <- struct{}{}:
+						case <-ctx.Done():
+							return
+						}
+						s.scrapeTarget(ctx, target)
+						<-slots
+						select {
+						case done <- target:
+						case <-ctx.Done():
+						}
+					}()
+				}
 			}
-			schedule.advance(now, time.Now())
+			schedule.advance(now, now)
 		}
 
 		timerC = nil
@@ -255,64 +290,87 @@ func (s *Scraper) scrape(ctx context.Context) {
 	}
 }
 
-func (s *Scraper) scrapeTargets(ctx context.Context, targets []ScrapeTarget) {
+// scrapeTimeout returns the configured scrape timeout or the client default.
+func (s *Scraper) scrapeTimeout() time.Duration {
+	if s.opts.ScrapeTimeout > 0 {
+		return s.opts.ScrapeTimeout
+	}
+	return ClientOpts{}.WithDefaults().ScrapeTimeOut
+}
+
+// DefaultScrapeConcurrency is the default maximum number of targets scraped at once.
+const DefaultScrapeConcurrency = 4
+
+func (s *Scraper) scrapeConcurrency() int {
+	if s.opts.ScrapeConcurrency > 0 {
+		return s.opts.ScrapeConcurrency
+	}
+	return DefaultScrapeConcurrency
+}
+
+// scrapeTarget scrapes one target and writes its series.  The fetch times out at the scrape timeout or the target's
+// interval, whichever is shorter.
+func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) {
+	if ctx.Err() != nil {
+		return
+	}
+	interval := target.ScrapeInterval
+	if interval <= 0 {
+		interval = s.opts.ScrapeInterval
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, min(s.scrapeTimeout(), interval))
+	defer cancel()
+
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := prompb.WriteRequestPool.Get()
 	defer prompb.WriteRequestPool.Put(wr)
 
-	for _, target := range targets {
-		if ctx.Err() != nil {
-			break
-		}
-		logger.Infof("Scraping %s", target.String())
-		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
+	logger.Infof("Scraping %s", target.String())
+	iter, err := s.scrapeClient.FetchMetricsIterator(fetchCtx, target.Addr)
+	if err != nil {
+		logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
+			target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
+		return
+	}
+	for iter.Next() {
+		pt := prompb.TimeSeriesPool.Get()
+		ts, err := iter.TimeSeriesInto(pt)
 		if err != nil {
-			logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
+			logger.Warnf("Failed to parse series %s/%s/%s at %s: %s",
 				target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 			continue
 		}
-		for iter.Next() {
-			pt := prompb.TimeSeriesPool.Get()
-			ts, err := iter.TimeSeriesInto(pt)
-			if err != nil {
-				logger.Warnf("Failed to parse series %s/%s/%s at %s: %s",
-					target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
-				continue
+
+		for i, s := range ts.Samples {
+			if s.Timestamp == 0 {
+				s.Timestamp = scrapeTime
 			}
-
-			for i, s := range ts.Samples {
-				if s.Timestamp == 0 {
-					s.Timestamp = scrapeTime
-				}
-				ts.Samples[i] = s
-			}
-
-			if target.Namespace != "" {
-				ts.AppendLabelString("adxmon_namespace", target.Namespace)
-			}
-
-			if target.Pod != "" {
-				ts.AppendLabelString("adxmon_pod", target.Pod)
-			}
-
-			if target.Container != "" {
-				ts.AppendLabelString("adxmon_container", target.Container)
-			}
-
-			prompb.Sort(ts.Labels)
-
-			wr.Timeseries = append(wr.Timeseries, ts)
-			wr = s.flushBatchIfNecessary(ctx, wr)
-		}
-		if err := iter.Err(); err != nil {
-			logger.Warnf("Failed to scrape %s/%s/%s at %s: %s", target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
+			ts.Samples[i] = s
 		}
 
-		if err := iter.Close(); err != nil {
-			logger.Errorf("Failed to close iterator for %s/%s/%s: %s", target.Namespace, target.Pod, target.Container, err.Error())
+		if target.Namespace != "" {
+			ts.AppendLabelString("adxmon_namespace", target.Namespace)
 		}
 
+		if target.Pod != "" {
+			ts.AppendLabelString("adxmon_pod", target.Pod)
+		}
+
+		if target.Container != "" {
+			ts.AppendLabelString("adxmon_container", target.Container)
+		}
+
+		prompb.Sort(ts.Labels)
+
+		wr.Timeseries = append(wr.Timeseries, ts)
 		wr = s.flushBatchIfNecessary(ctx, wr)
+	}
+	if err := iter.Err(); err != nil {
+		logger.Warnf("Failed to scrape %s/%s/%s at %s: %s", target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
+	}
+
+	if err := iter.Close(); err != nil {
+		logger.Errorf("Failed to close iterator for %s/%s/%s: %s", target.Namespace, target.Pod, target.Container, err.Error())
 	}
 
 	s.flushBatch(ctx, wr)
