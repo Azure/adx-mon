@@ -32,6 +32,19 @@ func (o *WriteOutcome) add(other *WriteOutcome) {
 	o.RejectedSeries = append(o.RejectedSeries, other.RejectedSeries...)
 }
 
+// PartialWriteError reports that a write stopped because storage was full.  The items before Written were written
+// or shed; the rest were not written and can be retried without duplicating the others.
+type PartialWriteError struct {
+	Written int
+	Err     error
+}
+
+func (e *PartialWriteError) Error() string {
+	return fmt.Sprintf("stopped after %d items: %s", e.Written, e.Err)
+}
+
+func (e *PartialWriteError) Unwrap() error { return e.Err }
+
 // SplitOutcome separates intentional shedding from failures that require a
 // retry. A successful local write must never mask a failure reported by
 // another destination.

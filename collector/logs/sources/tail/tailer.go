@@ -114,7 +114,7 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 	tailer.wg.Add(1)
 	go func() {
 		defer tailer.wg.Done()
-		worker.Run()
+		worker.RunWaitingForStorage(ctx)
 	}()
 
 	return tailer, nil

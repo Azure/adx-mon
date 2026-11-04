@@ -172,6 +172,27 @@ func (a *Admission) globalBytesLimit(d Destination) int64 {
 	return max - reserved
 }
 
+// Fits reports whether bytes more fit in the global byte budget available to d.
+func (a *Admission) Fits(d Destination, bytes int64) bool {
+	if a == nil {
+		return true
+	}
+	limit := a.globalBytesLimit(d)
+	return limit <= 0 || a.totalBytes.Load()+bytes <= limit
+}
+
+// FitsAll reports whether bytes more fit in the global byte budget of every destination.
+func (a *Admission) FitsAll(bytes int64) bool {
+	if a == nil {
+		return true
+	}
+	limit, reserved := a.opts.Global.Bytes, a.opts.RealtimeReservedBytes
+	if limit > 0 && reserved > 0 && reserved < limit && a.opts.Policy.HasRealtime() {
+		limit -= reserved
+	}
+	return limit <= 0 || a.totalBytes.Load()+bytes <= limit
+}
+
 func (a *Admission) Limit(d Destination) Usage {
 	if a == nil {
 		return Usage{}

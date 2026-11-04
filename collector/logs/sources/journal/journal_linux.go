@@ -116,7 +116,7 @@ func (s *Source) Open(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			worker.Run()
+			worker.RunWaitingForStorage(ctx)
 		}()
 
 		tailers = append(tailers, tailer)
