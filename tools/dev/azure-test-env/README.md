@@ -164,19 +164,77 @@ queued-path test. The test script never recreates or deletes Azure resources.
 
 ### Scrape parallelism evaluation
 
-The current test target is first in the collector's sorted target list. In
-120 observed one-second cycles before the selective-drop fix, its scrape log
-preceded the next target by about **0.4 ms**. Its scrape-to-send-complete time
-was 208 ms median / 315 ms p95, including 108 ms median remote-write time;
-roughly 98 ms median was spent fetching/parsing other targets before sending.
-Each cycle still forwarded **8,158 unrelated series** because a keep rule
-alone did not enable default dropping. The harness now sets both
-`default-drop-metrics = true` and the keep rule. Parallel target fetching
-cannot shorten a one-second wait for a target already fetched first, and at
-most saves the relatively small time behind other targets. We have **not**
-introduced concurrency into the production scraper on this evidence. Revisit
-bounded parallelism if profiling with more/slow targets shows that target
-ordering or cycle durations, rather than scrape cadence, dominate p95.
+Measured before the collector scraped targets concurrently: the test target
+was first in the sorted target list, so its scrape-to-send time (208 ms median,
+315 ms p95) was dominated by cadence, not ordering. A single fast target cannot
+show the benefit of concurrent scraping; the soak `slow-target` scenario adds
+slow targets on the workload's node to measure it.
+
+## A/B soak tests
+
+`soak.sh` compares two builds under the same conditions with thousands of
+samples per path, background load and injected faults. Latency is computed in
+Kusto for every row as `ingestion_time() - emitted_ms`, so it does not include
+polling or query round trips.
+
+```bash
+# Optional: record an environment whose state file was lost (never deleted by
+# this tool), and scale it so peer transfers run across nodes.
+tools/dev/azure-test-env/cluster.sh adopt --subscription '<sub>' --resource-group jw-adx-mon
+tools/dev/azure-test-env/cluster.sh scale --resource-group jw-adx-mon --node-count 3
+
+# Build both sides once. Images are tagged by commit; the workload by its sources.
+tools/dev/azure-test-env/soak.sh build --resource-group jw-adx-mon \
+  --ref origin/main --ref my-branch
+#   origin/main: --tag <a> --workload-tag <wl>
+#   my-branch:   --tag <b> --workload-tag <wl>
+
+tools/dev/azure-test-env/soak.sh soak --resource-group jw-adx-mon --tag <a> --label main --scenario steady
+tools/dev/azure-test-env/soak.sh soak --resource-group jw-adx-mon --tag <b> --label branch --scenario steady
+tools/dev/azure-test-env/soak.sh compare .adx-mon-test-env/results/jw-adx-mon/soak/{main,branch}-steady-*
+```
+
+Each soak deploys 3 ingestors (`--ingestor-replicas`), a load Deployment
+spread over the nodes (200 remote-write metric tables x 20 series and 5 OTLP
+log tables per replica every second), sets ADX queued batching to 10 s
+(`--batching-seconds`), warms every table, then streams `--rate` signals per
+second for `--duration` seconds on six paths: pod-tail logs, OTLP logs, OTLP
+metrics, remote write, the Prometheus scrape, and a queued OTLP control.
+Every emitted seq is either delivered or recorded as a failed send by the
+workload, so `missing` counts only data accepted and then lost. The scrape
+path is sampled, so it has latency but no missing or duplicate counts.
+
+| Scenario | Fault |
+|---|---|
+| `steady` | none |
+| `ingestor-kill` | deletes `--fault-pod` (default `ingestor-1`) at `--fault-at` |
+| `ingestor-rollout` | `rollout restart statefulset/ingestor` at `--fault-at` |
+| `ingestor-stall` | SIGSTOPs the ingestor process on its node from a privileged hostPID pod for `--fault-duration` seconds; TCP still accepts, as with a hung peer |
+| `slow-target` | `--slow-targets` scrape targets on the workload's node that answer after `--slow-delay` |
+| `collector-restart` | deletes the workload node's collector every `--fault-interval` seconds for `--fault-duration` |
+| `chunked-otlp` | sends OTLP logs with `Transfer-Encoding: chunked` |
+
+The collector's WAL segment age is set to 5 s (`--collector-max-segment-age`)
+on both sides; its built-in 30 s default otherwise dominates end-to-end
+latency. Kusto tokens are requested for the environment's tenant, which may
+differ from the Azure CLI's default account. If this machine cannot connect to
+the ADX endpoint (for example, when it only accepts Azure networks), add
+`--kusto-via-aks`: Kusto calls are relayed through a TCP pod in AKS with
+`curl --connect-to`, so TLS still terminates at the real host name and its
+certificate is verified. Only use it where that routing is permitted.
+
+Pass branch-only settings with `--ingestor-arg=--forward-transfers` or
+`--collector-toml 'scrape-concurrency = 4'`; older builds may reject unknown
+settings. Each run writes `result.json`, `rows.json` (every seq's emitted and
+ingested time), `report.md` and the component logs. The report shows per-path
+p50/p95/p99/p99.9/max, missing, duplicates and failed sends, the same split
+before, during and after the fault, error-like counter increases from every
+pod's `/metrics`, log errors grouped by message, `kubectl top` CPU and memory,
+ADX ingestion failures and `.create-merge` command counts. Run each side at
+least twice, alternating, because ADX ingestion latency varies between runs.
+
+Offline tests for the harness: `python3 -m unittest discover -s tools/dev/azure-test-env -p 'test_*.py'`
+and `go test ./tools/dev/azure-test-env/workload`.
 
 ## Cleanup
 
