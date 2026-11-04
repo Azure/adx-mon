@@ -48,6 +48,10 @@ type Syncer struct {
 
 	tables map[string]struct{}
 
+	// schemas holds the columns of each table at startup, by table and column name, so tables that already have a
+	// mapping's columns are not created again on their first upload.  It is guarded by mu.
+	schemas map[string]map[string]string
+
 	// streamingMu guards streamingPolicies, which records the result of enabling the streaming policy per table.
 	streamingMu       sync.Mutex
 	streamingPolicies map[string]streamingPolicyState
@@ -86,6 +90,10 @@ func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMappi
 func (s *Syncer) Open(ctx context.Context) error {
 	if err := s.loadIngestionMappings(ctx); err != nil {
 		return err
+	}
+
+	if err := s.loadTableSchemas(ctx); err != nil {
+		logger.Warnf("Failed to load table schemas for %s, tables are created on their first upload: %s", s.database, err)
 	}
 
 	if err := s.ensureFunctions(ctx); err != nil {
@@ -139,6 +147,65 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 	return nil
 }
 
+type tableSchema struct {
+	TableName string `kusto:"TableName"`
+	Schema    string `kusto:"Schema"`
+}
+
+// loadTableSchemas loads the columns of the database's tables.
+func (s *Syncer) loadTableSchemas(ctx context.Context) error {
+	stmt := kql.New("").AddUnsafe(fmt.Sprintf(".show database %s cslschema", s.database))
+	ds, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	if err != nil {
+		return err
+	}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return fmt.Errorf("missing primary result table")
+	}
+
+	schemas := make(map[string]map[string]string)
+	for _, row := range table.Rows() {
+		var v tableSchema
+		if err := row.ToStruct(&v); err != nil {
+			return err
+		}
+		columns := make(map[string]string)
+		// The schema is formatted as name:type pairs separated by commas, with names quoted as ['name'] when needed.
+		for _, col := range strings.Split(v.Schema, ",") {
+			col = strings.TrimSpace(col)
+			i := strings.LastIndex(col, ":")
+			if i <= 0 {
+				continue
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(col[:i], "['"), "']")
+			columns[name] = col[i+1:]
+		}
+		schemas[v.TableName] = columns
+	}
+
+	s.mu.Lock()
+	s.schemas = schemas
+	s.mu.Unlock()
+	return nil
+}
+
+// hasColumns reports whether table had every column in mapping, with the same type, when the schemas were loaded.
+func (s *Syncer) hasColumns(table string, mapping schema.SchemaMapping) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	columns, ok := s.schemas[table]
+	if !ok {
+		return false
+	}
+	for _, c := range mapping {
+		if columns[c.Column] != c.DataType {
+			return false
+		}
+	}
+	return true
+}
+
 // EnsureDefaultTable creates a table with the default schema mapping if it does not exist.
 func (s *Syncer) EnsureDefaultTable(ctx context.Context, table string) error {
 	return s.EnsureTable(ctx, table, s.defaultMapping)
@@ -164,6 +231,15 @@ func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.S
 	_, exists = s.tables[table]
 	s.mu.RUnlock()
 	if exists {
+		return nil
+	}
+
+	if s.hasColumns(table, mapping) {
+		// The loaded schema is used once, so a table dropped later is created again like any other uncached table.
+		s.mu.Lock()
+		s.tables[table] = struct{}{}
+		delete(s.schemas, table)
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -465,6 +541,11 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 					if _, ok := tableExists[tblName]; !ok {
 						logger.Debugf("Removing cached table %s from %s", tblName, s.database)
 						delete(s.tables, tblName)
+					}
+				}
+				for tblName := range s.schemas {
+					if _, ok := tableExists[tblName]; !ok {
+						delete(s.schemas, tblName)
 					}
 				}
 
