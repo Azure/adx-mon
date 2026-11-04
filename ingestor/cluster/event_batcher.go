@@ -4,7 +4,9 @@
 package cluster
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -266,15 +268,26 @@ func (r *eventBatcher) Flush(ctx context.Context) {
 // process batches the segments of pending prefixes that reached their deadline or size trigger.  When force is true,
 // all pending prefixes are batched.
 func (r *eventBatcher) process(ctx context.Context, now time.Time, force bool) {
+	type entry struct {
+		prefix string
+		p      pendingPrefix
+	}
 	r.mu.Lock()
-	prefixes := make([]string, 0, len(r.pending))
-	for prefix := range r.pending {
-		prefixes = append(prefixes, prefix)
+	pending := make([]entry, 0, len(r.pending))
+	for prefix, p := range r.pending {
+		pending = append(pending, entry{prefix, p})
 	}
 	r.mu.Unlock()
 
-	for _, prefix := range prefixes {
-		r.processPrefix(ctx, prefix, now, force)
+	// The most overdue prefixes go first so they are not queued behind newer data when the queues are full.
+	slices.SortFunc(pending, func(a, b entry) int {
+		if c := a.p.deadline.Compare(b.p.deadline); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.p.seq, b.p.seq)
+	})
+	for _, e := range pending {
+		r.processPrefix(ctx, e.prefix, now, force)
 	}
 }
 
