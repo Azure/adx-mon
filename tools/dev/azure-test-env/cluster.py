@@ -204,6 +204,47 @@ def create(a):
     print(f"Ready. State: {p}\nNext: tools/dev/azure-test-env/test.sh run --resource-group {a.resource_group}")
 
 
+def adopt(a):
+    """Record an environment that an earlier cluster.sh create made but whose
+    state file was lost. Adopted environments are never deleted by this tool."""
+    p = state_path(a.resource_group)
+    if p.exists():
+        raise RuntimeError(f"State already exists: {p}")
+    sub = az_json("account", "show", "--subscription", a.subscription)
+    n = names(a.resource_group, sub["id"])
+    group = existing("group", "show", "-g", a.resource_group, "--subscription", a.subscription)
+    if group is None:
+        raise RuntimeError("Resource group not found")
+    aks = existing("aks", "show", "-g", a.resource_group, "-n", n["aks"], "--subscription", a.subscription)
+    acr = existing("acr", "show", "-g", a.resource_group, "-n", n["acr"], "--subscription", a.subscription)
+    adx = existing("kusto", "cluster", "show", "-g", a.resource_group, "-n", n["kusto"],
+                   "--subscription", a.subscription)
+    missing = [k for k, v in (("aks", aks), ("acr", acr), ("kusto", adx)) if v is None]
+    if missing:
+        raise RuntimeError(f"No harness-named {', '.join(missing)} in {a.resource_group}: expected {n}")
+    state = dict(subscription=sub["id"], tenant=sub["tenantId"], region=group["location"],
+                 resource_group=a.resource_group, names=n,
+                 node_sku=aks["agentPoolProfiles"][0]["vmSize"], owned=False,
+                 kubelet_client_id=aks["identityProfile"]["kubeletidentity"]["clientId"],
+                 kusto_sku=adx["sku"]["name"], endpoint=adx["uri"], ready=True)
+    save(p, state)
+    print(f"Adopted {a.resource_group} (not owned; delete is disabled). State: {p}")
+
+
+def scale(a):
+    state = load(a.resource_group)
+    aks = az_json("aks", "show", "-g", a.resource_group, "-n", state["names"]["aks"],
+                  "--subscription", state["subscription"])
+    pool = aks["agentPoolProfiles"][0]
+    if pool["count"] == a.node_count:
+        print(f"{pool['name']} already has {a.node_count} node(s)")
+        return
+    print(f"Scaling {pool['name']} ({pool['vmSize']}) from {pool['count']} to {a.node_count} node(s)", flush=True)
+    run("az", "aks", "nodepool", "scale", "-g", a.resource_group, "--cluster-name",
+        state["names"]["aks"], "-n", pool["name"], "--node-count", a.node_count,
+        "--subscription", state["subscription"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -213,6 +254,12 @@ def main():
     c.add_argument("--resource-group", required=True)
     c.add_argument("--aks-sku")
     c.add_argument("--kusto-sku")
+    ad = sub.add_parser("adopt")
+    ad.add_argument("--subscription", required=True)
+    ad.add_argument("--resource-group", required=True)
+    sc = sub.add_parser("scale")
+    sc.add_argument("--resource-group", required=True)
+    sc.add_argument("--node-count", type=int, required=True)
     for verb in ("status", "delete"):
         s = sub.add_parser(verb)
         s.add_argument("--resource-group", required=True)
@@ -222,6 +269,10 @@ def main():
     try:
         if a.command == "create":
             create(a)
+        elif a.command == "adopt":
+            adopt(a)
+        elif a.command == "scale":
+            scale(a)
         elif a.command == "status":
             print(json.dumps(load(a.resource_group), indent=2))
         else:

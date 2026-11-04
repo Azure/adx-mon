@@ -24,6 +24,9 @@ TABLES = {"pod_logs": ("Logs", "E2ePodLogs"),
           "otlp_metrics": ("Metrics", "E2eOtlpSample"),
           "scraped_metrics": ("Metrics", "E2eScrapedSample"),
           "queued_control": ("Logs", "E2eQueuedControl")}
+# Soak-only paths. Kept out of TABLES so the queued/realtime/isolation phases
+# keep their original four-path contract.
+SOAK_TABLES = {**TABLES, "remote_write": ("Metrics", "E2eRemoteWrite")}
 REALTIME_PATHS = tuple(path for path in TABLES if path != "queued_control")
 # The isolation phase deliberately sheds large logs at the collector while
 # healthy records in the same request and other paths continue to Kusto.
@@ -57,19 +60,21 @@ def docker_available():
         return False
 
 
-def build(state, tag, mode="auto"):
+def build(state, tag, mode="auto", root=ROOT, components=("ingestor", "collector", "workload")):
     if mode == "auto":
         mode = "docker" if docker_available() else "acr"
     if mode == "docker" and not docker_available():
         raise RuntimeError("Docker daemon is unavailable; start it or use --build-mode acr")
-    print(f"Building current checkout using {'local Docker' if mode == 'docker' else 'remote ACR Tasks'}", flush=True)
+    print(f"Building {', '.join(components)} from {root} using {'local Docker' if mode == 'docker' else 'remote ACR Tasks'}", flush=True)
     if mode == "docker":
         run("az", "acr", "login", "-n", state["names"]["acr"],
             "--subscription", state["subscription"])
-    commit = output("git", "-C", ROOT, "rev-parse", "HEAD")
-    for component in ("ingestor", "collector", "workload"):
+    commit = output("git", "-C", root, "rev-parse", "HEAD")
+    for component in components:
+        # The workload always comes from this checkout; adx-mon images from root.
+        context = ROOT if component == "workload" else root
         dockerfile = (HERE / "Dockerfile.workload" if component == "workload" else
-                      ROOT / "build" / "images" / f"Dockerfile.{component}")
+                      root / "build" / "images" / f"Dockerfile.{component}")
         ref = image(state, component, tag)
         build_args = []
         if component != "workload":
@@ -77,17 +82,17 @@ def build(state, tag, mode="auto"):
                           f"GIT_COMMIT={commit}"]
         if mode == "docker":
             run("docker", "build", "--platform", "linux/amd64", "-f", dockerfile,
-                "-t", ref, *build_args, ROOT)
+                "-t", ref, *build_args, context)
             run("docker", "push", ref)
         else:
             # ACR builds the uploaded *local checkout* and pushes the tag. No
             # Docker daemon or registry login is needed on the caller's Mac.
-            relative_file = dockerfile.relative_to(ROOT).as_posix()
+            relative_file = dockerfile.relative_to(context).as_posix()
             command = ["az", "acr", "build", "--registry", state["names"]["acr"],
                        "--resource-group", state["resource_group"],
                        "--subscription", state["subscription"], "--platform", "linux/amd64",
                        "--file", relative_file, "--image", f"adx-mon/{component}:{tag}",
-                       *build_args, str(ROOT)]
+                       *build_args, str(context)]
             print("+", " ".join(command), flush=True)
             # Stream remote-build progress and errors; this operation can take minutes.
             subprocess.run(command, check=True)
@@ -102,14 +107,18 @@ def verify_images(state, tag):
             raise RuntimeError(f"Missing {image(state, component, tag)}; omit --reuse-tag to build")
 
 
-def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100, table_limits=()):
+def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100, table_limits=(),
+                     keep_metrics=(), prefix=""):
     text = text.replace("scrape-interval = 30", "scrape-interval = 1")
     text = text.replace("scrape-timeout = 25", "scrape-timeout = 1")
     # Keep-metrics only takes effect when default-drop-metrics is true.  Without
     # both settings the one-second scraper forwards thousands of unrelated
     # series per cycle and dominates the latency experiment.
     text = text.replace("default-drop-metrics = false", "default-drop-metrics = true", 1)
-    text = text.replace("keep-metrics = []", "keep-metrics = ['^e2e_scraped_sample$']", 1)
+    keep = ", ".join(repr(k) for k in ("^e2e_scraped_sample$", *keep_metrics))
+    text = text.replace("keep-metrics = []", f"keep-metrics = [{keep}]", 1)
+    # Top-level TOML keys must precede the first table.
+    text = prefix + text
     if daemonset and table_limits:
         settings = "enforce-table-limits = true\n"
         for db, table, max_bytes in table_limits:
@@ -130,7 +139,8 @@ def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100, 
     return text
 
 
-def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=(), collector_limits=()):
+def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=(), collector_limits=(),
+           ingestor_replicas=1, ingestor_args=(), keep_metrics=(), collector_prefix=""):
     vars = {"ADX_URL": state["endpoint"], "CLIENT_ID": state["kubelet_client_id"],
             "CLUSTER": state["names"]["aks"], "REGION": state["region"]}
     def render(file):
@@ -149,6 +159,13 @@ def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=()
         marker = f'            - "--logs-kusto-endpoints=Logs={state["endpoint"]}"\n'
         assert marker in ingestor
         ingestor = ingestor.replace(marker, marker + flags)
+    if ingestor_replicas != 1:
+        ingestor = ingestor.replace("  replicas: 1\n", f"  replicas: {ingestor_replicas}\n", 1)
+    if ingestor_args:
+        marker = f'            - "--logs-kusto-endpoints=Logs={state["endpoint"]}"\n'
+        assert marker in ingestor
+        ingestor = ingestor.replace(marker, marker + "".join(
+            f"            - {json.dumps(arg)}\n" for arg in ingestor_args))
     if table_limits:
         flags = '            - "--enforce-table-limits"\n'
         for db, table, max_bytes in table_limits:
@@ -190,7 +207,8 @@ def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=()
         config = "\n".join(line[4:] if line.startswith("    ") else line for line in raw.rstrip("\n").splitlines()) + "\n"
         replacement = "  config.toml: |\n" + "".join(
             "    " + line + "\n" for line in collector_config(
-                config, realtime, daemonset, realtime_log_batch_wait_ms, collector_limits).splitlines())
+                config, realtime, daemonset, realtime_log_batch_wait_ms, collector_limits,
+                keep_metrics, collector_prefix if daemonset else "").splitlines())
         collector = collector[:start] + replacement + collector[end:]
     run("kubectl", "apply", "-f", "-", input=collector)
     service = {"apiVersion": "v1", "kind": "Service", "metadata": {
@@ -361,10 +379,10 @@ def wait_noisy_rows(state, run_id, pulses, deadline):
 
 
 def rows_for(state, path, run_id):
-    db, table = TABLES[path]
+    db, table = SOAK_TABLES[path]
     # The OTLP writer currently renders AnyValue labels as protobuf text
     # (string_value:"..."); scraped metric labels are plain strings.
-    if path.endswith("metrics"):
+    if path.endswith("metrics") or path == "remote_write":
         csl = (f"{table} | where tostring(Labels.run_id) contains '{run_id}' "
                "| summarize Rows=count() by Seq=toint(extract('[0-9]+', 0, tostring(Labels.seq)))")
     elif path in ("otlp_logs", "queued_control"):

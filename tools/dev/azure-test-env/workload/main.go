@@ -150,5 +150,12 @@ func main() {
 	http.HandleFunc("/emit", emit)
 	http.HandleFunc("/mixed", mixed)
 	http.HandleFunc("/metrics", scrape)
+	http.HandleFunc("/stream", stream)
+	http.HandleFunc("/status", status)
+	http.HandleFunc("/slow-metrics", slowMetrics)
+	go load()
+	if target := os.Getenv("FORWARD_TO"); target != "" {
+		go forward(target)
+	}
 	log.Fatal(http.ListenAndServe(":8088", nil))
 }

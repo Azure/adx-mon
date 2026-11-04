@@ -1,12 +1,15 @@
 """Shared, dependency-free Azure/Kusto helpers for the disposable E2E environment."""
 import json
 import subprocess
+import urllib.parse
 import threading
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT / ".adx-mon-test-env"
+KUSTO_CONNECT_TO = ""  # set by soak.py --kusto-via-aks
+KUSTO_TENANT = ""  # set by load() so tokens match the environment's tenant
 _token = None
 _token_deadline = 0
 _token_lock = threading.Lock()
@@ -35,8 +38,9 @@ def kusto(endpoint, db, csl, management=False):
     global _token, _token_deadline
     with _token_lock:
         if not _token or time.monotonic() >= _token_deadline:
+            tenant = ("--tenant", KUSTO_TENANT) if KUSTO_TENANT else ()
             _token = output("az", "account", "get-access-token", "--resource",
-                            "https://api.kusto.windows.net", "--query", "accessToken", "-o", "tsv")
+                            "https://api.kusto.windows.net", *tenant, "--query", "accessToken", "-o", "tsv")
             _token_deadline = time.monotonic() + 1800
         token = _token
     url = endpoint.rstrip("/") + ("/v1/rest/mgmt" if management else "/v2/rest/query")
@@ -47,6 +51,10 @@ def kusto(endpoint, db, csl, management=False):
                "--http1.1", "--tlsv1.2", "--tls-max", "1.2",
                "--header", "Authorization: Bearer " + token,
                "--header", "Content-Type: application/json", "--data-binary", "@-", url]
+    # Opt-in tunnel (host:port), keeping the real host name for TLS.
+    if KUSTO_CONNECT_TO:
+        host = urllib.parse.urlparse(endpoint).hostname
+        command[1:1] = ["--connect-to", f"{host}:443:{KUSTO_CONNECT_TO}"]
     for attempt in range(3):
         response = subprocess.run(command, input=json.dumps({"db": db, "csl": csl}),
                                   text=True, capture_output=True)
@@ -81,4 +89,8 @@ def state_path(group):
 
 
 def load(group):
-    return json.loads(state_path(group).read_text())
+    global KUSTO_TENANT
+    state = json.loads(state_path(group).read_text())
+    # The CLI's default account may be in another tenant than the environment.
+    KUSTO_TENANT = state.get("tenant", "")
+    return state
