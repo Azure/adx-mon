@@ -29,7 +29,11 @@ func (s *fillingStore) WriteNativeLogs(_ context.Context, batch *types.LogBatch)
 	for i, log := range batch.Logs {
 		if s.full.Load() && i == 3 {
 			s.full.Store(false)
-			return &storage.PartialWriteError{Written: i, Err: wal.ErrMaxDiskUsageExceeded}
+			var pending []int
+			for j := i; j < len(batch.Logs); j++ {
+				pending = append(pending, j)
+			}
+			return &storage.PartialWriteError{Pending: pending, Err: wal.ErrMaxDiskUsageExceeded}
 		}
 		s.written[log]++
 	}
@@ -120,5 +124,5 @@ func TestWorkerWithoutStorageWaitFailsWhenFull(t *testing.T) {
 type alwaysFull struct{ storage.Store }
 
 func (alwaysFull) WriteNativeLogs(context.Context, *types.LogBatch) error {
-	return &storage.PartialWriteError{Written: 0, Err: wal.ErrMaxDiskUsageExceeded}
+	return &storage.PartialWriteError{Pending: []int{0}, Err: wal.ErrMaxDiskUsageExceeded}
 }

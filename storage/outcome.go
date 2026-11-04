@@ -32,15 +32,16 @@ func (o *WriteOutcome) add(other *WriteOutcome) {
 	o.RejectedSeries = append(o.RejectedSeries, other.RejectedSeries...)
 }
 
-// PartialWriteError reports that a write stopped because storage was full.  The items before Written were written
-// or shed; the rest were not written and can be retried without duplicating the others.
+// PartialWriteError reports that a write stopped because storage was full.  Pending holds the indices, in order, of
+// the items that were not written; the others were written or shed, so the pending items can be retried without
+// duplicating them.
 type PartialWriteError struct {
-	Written int
+	Pending []int
 	Err     error
 }
 
 func (e *PartialWriteError) Error() string {
-	return fmt.Sprintf("stopped after %d items: %s", e.Written, e.Err)
+	return fmt.Sprintf("%d items not written: %s", len(e.Pending), e.Err)
 }
 
 func (e *PartialWriteError) Unwrap() error { return e.Err }

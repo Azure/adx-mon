@@ -51,8 +51,8 @@ func TestWriteTimeSeriesWritesNothingWhenFull(t *testing.T) {
 	require.Zero(t, writtenTables(a), "series written before the store filled would be duplicated by the retry")
 }
 
-// A log batch that fills the store reports how many leading logs were handled, so a retry resumes after them
-// instead of writing them again.
+// A log batch that fills the store reports which logs were not written, so a retry writes only those instead of
+// writing the others again.
 func TestWriteNativeLogsReportsWhereItStopped(t *testing.T) {
 	s, a := newFullStore(t)
 	batch := &types.LogBatch{}
@@ -68,7 +68,8 @@ func TestWriteNativeLogsReportsWhereItStopped(t *testing.T) {
 	require.ErrorIs(t, err, wal.ErrMaxDiskUsageExceeded)
 	var partial *storage.PartialWriteError
 	require.ErrorAs(t, err, &partial)
-	t.Logf("store filled after %d of 50 logs", partial.Written)
-	require.Positive(t, partial.Written)
-	require.Equal(t, partial.Written, writtenTables(a))
+	written := 50 - len(partial.Pending)
+	t.Logf("store filled after %d of 50 logs", written)
+	require.Positive(t, written)
+	require.Equal(t, written, writtenTables(a))
 }
