@@ -231,27 +231,51 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		return err
 	}
 
+	// Each table's series are written as one block rather than one per series, since every block is compressed,
+	// checksummed, written under the segment lock and admitted separately.
+	type tableSeries struct {
+		key    []byte
+		series []*prompb.TimeSeries
+	}
+	var tables []*tableSeries
+	byKey := make(map[string]int)
 	for _, v := range req.Timeseries {
 		key, err := SegmentKey(b[:0], req, v, enc.SchemaHash())
 		if err != nil {
 			return err
 		}
+		i, ok := byKey[string(key)]
+		if !ok {
+			i = len(tables)
+			byKey[string(key)] = i
+			tables = append(tables, &tableSeries{key: append([]byte(nil), key...)})
+		}
+		tables[i].series = append(tables[i].series, v)
+	}
 
-		if quota := s.preAdmit(key); quota != nil {
-			s.recordRejection(quota, int64(len(v.Samples)), 0, "metrics")
-			outcome.Rejected += int64(len(v.Samples))
-			outcome.RejectedSeries = append(outcome.RejectedSeries, v)
+	for _, t := range tables {
+		var samples int64
+		for _, v := range t.series {
+			samples += int64(len(v.Samples))
+		}
+
+		if quota := s.preAdmit(t.key); quota != nil {
+			s.recordRejection(quota, samples, 0, "metrics")
+			outcome.Rejected += samples
+			outcome.RejectedSeries = append(outcome.RejectedSeries, t.series...)
 			continue
 		}
 
-		w, err := s.GetWAL(ctx, key)
+		w, err := s.GetWAL(ctx, t.key)
 		if err != nil {
 			return err
 		}
 
 		enc.Reset()
-		if err := enc.MarshalCSV(req, v); err != nil {
-			return err
+		for _, v := range t.series {
+			if err := enc.MarshalCSV(req, v); err != nil {
+				return err
+			}
 		}
 
 		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
@@ -265,15 +289,15 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
 			if errors.As(err, &quota) {
-				s.recordRejection(quota, int64(len(v.Samples)), int64(len(enc.Bytes())), "metrics")
-				outcome.Rejected += int64(len(v.Samples))
-				outcome.RejectedSeries = append(outcome.RejectedSeries, v)
+				s.recordRejection(quota, samples, int64(len(enc.Bytes())), "metrics")
+				outcome.Rejected += samples
+				outcome.RejectedSeries = append(outcome.RejectedSeries, t.series...)
 				continue
 			}
 			return err
 		}
-		outcome.Accepted += int64(len(v.Samples))
-		metrics.SamplesStored.Add(float64(len(v.Samples)))
+		outcome.Accepted += samples
+		metrics.SamplesStored.Add(float64(samples))
 		// Decrement the inflight write bytes after writing to avoid double counting.
 		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 	}
@@ -357,6 +381,14 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 	// Each log can potentially have a different destination.
 	// Instead of splitting ahead of time and allocating n slices, just encode and write to the wal on
 	// a per-log basis.
+	// Each table's logs are written as one block rather than one per log, since every block is compressed,
+	// checksummed, written under the segment lock and admitted separately.
+	type tableLogs struct {
+		key  []byte
+		logs []int
+	}
+	var tables []*tableLogs
+	byKey := make(map[string]int)
 	for i, log := range logs.Logs {
 		// If we don't have a destination, we can't do anything with the log.
 		// Skip instead of trying again, which will just repeat the same error.
@@ -384,43 +416,64 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 
 		key = fmt.Appendf(key[:0], "%s_%s_", sanitizedDB, sanitizedTable)
 		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
+		j, ok := byKey[string(key)]
+		if !ok {
+			j = len(tables)
+			byKey[string(key)] = j
+			tables = append(tables, &tableLogs{key: append([]byte(nil), key...)})
+		}
+		tables[j].logs = append(tables[j].logs, i)
+	}
 
-		if quota := s.preAdmit(key); quota != nil {
-			s.recordRejection(quota, 1, 0, "logs")
-			outcome.Rejected++
+	// pending returns the logs of the tables from i on, which were not written.
+	pending := func(i int) []int {
+		var p []int
+		for _, t := range tables[i:] {
+			p = append(p, t.logs...)
+		}
+		return p
+	}
+
+	for i, t := range tables {
+		n := int64(len(t.logs))
+		if quota := s.preAdmit(t.key); quota != nil {
+			s.recordRejection(quota, n, 0, "logs")
+			outcome.Rejected += n
 			continue
 		}
 
-		w, err := s.GetWAL(ctx, key)
+		w, err := s.GetWAL(ctx, t.key)
 		if err != nil {
 			return err
 		}
 
 		enc.Reset()
-		if err := enc.MarshalNativeLog(log); err != nil {
-			return err
+		for _, j := range t.logs {
+			if err := enc.MarshalNativeLog(logs.Logs[j]); err != nil {
+				return err
+			}
 		}
 		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 
 		if s.diskUsageExceeded(w) {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
-			return &PartialWriteError{Written: i, Err: wal.ErrMaxDiskUsageExceeded}
+			return &PartialWriteError{Pending: pending(i), Err: wal.ErrMaxDiskUsageExceeded}
 		}
 
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
 			if errors.As(err, &quota) {
-				s.recordRejection(quota, 1, int64(len(enc.Bytes())), "logs")
-				outcome.Rejected++
+				s.recordRejection(quota, n, int64(len(enc.Bytes())), "logs")
+				outcome.Rejected += n
 				continue
 			}
 			if errors.Is(err, wal.ErrMaxDiskUsageExceeded) || errors.Is(err, wal.ErrMaxSegmentsExceeded) {
-				return &PartialWriteError{Written: i, Err: err}
+				return &PartialWriteError{Pending: pending(i), Err: err}
 			}
 			return err
 		}
-		outcome.Accepted++
+		outcome.Accepted += n
 
 		// Decrement the inflight write bytes after writing to avoid double counting.
 		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))

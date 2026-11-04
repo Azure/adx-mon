@@ -41,7 +41,7 @@ func (s *StoreSink) Send(ctx context.Context, batch *types.LogBatch) error {
 }
 
 // waitForStorage retries the logs that were not written because storage was full until they are written or stop is
-// done.  Logs written before storage filled are not written again.
+// done.  Logs that were written are not written again.
 func (s *StoreSink) waitForStorage(ctx, stop context.Context, batch *types.LogBatch, err error) error {
 	remaining := batch.Logs
 	delay := 100 * time.Millisecond
@@ -51,9 +51,13 @@ func (s *StoreSink) waitForStorage(ctx, stop context.Context, batch *types.LogBa
 			return err
 		}
 		if delay == 100*time.Millisecond {
-			logger.Warnf("Storage is full, waiting to store %d logs", len(remaining)-partial.Written)
+			logger.Warnf("Storage is full, waiting to store %d logs", len(partial.Pending))
 		}
-		remaining = remaining[partial.Written:]
+		unwritten := make([]*types.Log, 0, len(partial.Pending))
+		for _, i := range partial.Pending {
+			unwritten = append(unwritten, remaining[i])
+		}
+		remaining = unwritten
 		select {
 		case <-stop.Done():
 			return err
