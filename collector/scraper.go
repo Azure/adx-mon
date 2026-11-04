@@ -335,7 +335,9 @@ func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) {
 	wr := prompb.WriteRequestPool.Get()
 	defer prompb.WriteRequestPool.Put(wr)
 
-	logger.Infof("Scraping %s", target.String())
+	if logger.IsDebug() {
+		logger.Debugf("Scraping %s", target.String())
+	}
 	iter, err := s.scrapeClient.FetchMetricsIterator(fetchCtx, target.Addr)
 	if err != nil {
 		logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
@@ -446,7 +448,7 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 
 	start := time.Now()
 	defer func() {
-		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.remoteClients), time.Since(start))
+		logger.Debugf("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.remoteClients), time.Since(start))
 	}()
 
 	_, err := storage.SplitOutcome(remote.WriteRequest(ctx, s.remoteClients, wr))
