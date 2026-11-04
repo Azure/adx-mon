@@ -484,10 +484,14 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := n.queuedUpload(ctx, data, database, table, mapping); err != nil {
+		err = n.queuedUpload(ctx, data, database, table, mapping)
+		metrics.IngestorUploadDuration.WithLabelValues(database, "queued").Observe(time.Since(now).Seconds())
+		if err != nil {
+			metrics.IngestorUploadFailures.WithLabelValues(database, table).Inc()
 			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
 			return
 		}
+		metrics.IngestorUploadLatency.WithLabelValues(database, "queued").Observe(time.Since(oldestSegment(batch)).Seconds())
 
 		if logger.IsDebug() {
 			logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())

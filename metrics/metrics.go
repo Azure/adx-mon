@@ -24,6 +24,27 @@ const (
 )
 
 var (
+	// LatencyBuckets are the histogram buckets in seconds for data age, from sub-second realtime delivery to a
+	// half hour backlog.
+	LatencyBuckets = []float64{0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800}
+
+	// DurationBuckets are the histogram buckets in seconds for request durations.
+	DurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 600}
+)
+
+// newTransferLatency creates the transfer latency metric for subsystem.  The replicator is shared by the collector and
+// the ingestor, which each record their own.
+func newTransferLatency(subsystem string) *prometheus.HistogramVec {
+	return promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: subsystem,
+		Name:      "transfer_latency_seconds",
+		Help:      "Age in seconds of the oldest segment in a batch when it is transferred to an ingestor",
+		Buckets:   LatencyBuckets,
+	}, []string{"database"})
+}
+
+var (
 	// DebugMetricsEnabled is a flag to enable debug metrics.  If set, additional metrics will be collected that are
 	// useful for debugging but may be too verbose for regular production use.
 	DebugMetricsEnabled bool
@@ -135,6 +156,31 @@ var (
 		Name:      "realtime_ingest_latency_seconds",
 		Help:      "Gauge of the age in seconds of the oldest segment of the most recent realtime batch ingested with streaming ingestion",
 	}, []string{"database", "table"})
+
+	IngestorUploadLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "upload_latency_seconds",
+		Help:      "Age in seconds of the oldest segment in a batch when the batch is uploaded, by upload method (streaming or queued)",
+		Buckets:   LatencyBuckets,
+	}, []string{"database", "method"})
+
+	IngestorUploadDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "upload_duration_seconds",
+		Help:      "Duration in seconds of upload requests to Kusto, by upload method (streaming or queued)",
+		Buckets:   DurationBuckets,
+	}, []string{"database", "method"})
+
+	IngestorUploadFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "upload_failures_total",
+		Help:      "Counter of queued ingestion uploads that failed and will be retried",
+	}, []string{"database", "table"})
+
+	IngestorTransferLatency = newTransferLatency("ingestor")
 
 	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
@@ -264,6 +310,23 @@ var (
 		Name:      "exporter_failed_total",
 		Help:      "Counter of the number of telemetry points that failed to be sent by an exporter",
 	}, []string{"exporter", "endpoint"})
+
+	CollectorTransferLatency = newTransferLatency("collector")
+
+	CollectorScrapeDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "scrape_duration_seconds",
+		Help:      "Duration in seconds of scraping a target, including writing its series",
+		Buckets:   DurationBuckets,
+	}, []string{"database"})
+
+	CollectorScrapesSkipped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "scrapes_skipped_total",
+		Help:      "Counter of target scrapes skipped because the previous scrape was still running (in_flight) or the collector was unhealthy (unhealthy)",
+	}, []string{"reason"})
 
 	SamplesStored = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: Namespace,

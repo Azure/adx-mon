@@ -264,6 +264,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxTransferConcurrency:       opts.MaxTransferConcurrency,
 		DisableGzip:                  true,
 		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
+		TransferLatency:              metrics.IngestorTransferLatency,
 	})
 	if err != nil {
 		return nil, err

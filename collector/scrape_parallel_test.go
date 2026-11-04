@@ -9,10 +9,27 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
+
+func counter(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, c.Write(m))
+	return m.GetCounter().GetValue()
+}
+
+func histogram(t *testing.T, o prometheus.Observer) (count uint64, sum float64) {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, o.(prometheus.Metric).Write(m))
+	return m.GetHistogram().GetSampleCount(), m.GetHistogram().GetSampleSum()
+}
 
 // sampleRecorder records the timestamps of the samples written for each pod.
 type sampleRecorder struct {
@@ -49,7 +66,10 @@ func TestScraper_SlowTargetDoesNotDelayOthers(t *testing.T) {
 		var mu sync.Mutex
 		fetches := make(map[string][]int64)
 		recorder := &sampleRecorder{timestamps: make(map[string][]int64)}
+		skipped := counter(t, metrics.CollectorScrapesSkipped.WithLabelValues("in_flight"))
+		scrapes, _ := histogram(t, metrics.CollectorScrapeDuration.WithLabelValues("SlowTargetDB"))
 		startTestScraper(t, &ScraperOpts{
+			Database:       "SlowTargetDB",
 			ScrapeInterval: time.Second,
 			ScrapeTimeout:  10 * time.Second,
 			Targets:        targets,
@@ -93,6 +113,11 @@ func TestScraper_SlowTargetDoesNotDelayOthers(t *testing.T) {
 			require.Zero(t, skew, "%s samples were not stamped with their fetch time", pod)
 		}
 		t.Logf("busy: %d scrapes", len(fetches["busy"]))
+
+		// The slow target's skipped intervals are counted, and every completed scrape records its duration.
+		require.Positive(t, counter(t, metrics.CollectorScrapesSkipped.WithLabelValues("in_flight"))-skipped)
+		count, _ := histogram(t, metrics.CollectorScrapeDuration.WithLabelValues("SlowTargetDB"))
+		require.GreaterOrEqual(t, count-scrapes, uint64(45))
 	})
 }
 
@@ -150,5 +175,23 @@ func TestScraper_ConcurrencyIsBounded(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
 		require.EqualValues(t, 4, peak.Load())
+	})
+}
+
+// Scrapes skipped while the collector is unhealthy are counted rather than silently dropped.
+func TestScraper_CountsUnhealthySkips(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		health := &scrapeTestHealth{}
+		skipped := counter(t, metrics.CollectorScrapesSkipped.WithLabelValues("unhealthy"))
+		startTestScraper(t, &ScraperOpts{
+			ScrapeInterval: time.Second,
+			HealthChecker:  health,
+			Targets:        []ScrapeTarget{{Addr: "http://localhost/a", Pod: "a"}, {Addr: "http://localhost/b", Pod: "b"}},
+		}, func(req *http.Request) (*http.Response, error) {
+			return scrapeResponse(http.StatusOK), nil
+		})
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		require.Equal(t, 6.0, counter(t, metrics.CollectorScrapesSkipped.WithLabelValues("unhealthy"))-skipped)
 	})
 }

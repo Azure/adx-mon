@@ -431,6 +431,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			MaxTransferConcurrency:       opts.MaxTransferConcurrency,
 			DisableGzip:                  opts.DisableGzip,
 			QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
+			TransferLatency:              metrics.CollectorTransferLatency,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)
