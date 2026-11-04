@@ -142,16 +142,18 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	}
 	buffered := buf.Bytes()
 
-	if err := n.syncer.EnsureTable(ctx, table, mapping); err != nil {
+	mgmtCtx, mgmtCancel := context.WithTimeout(ctx, schemaMgmtTimeout)
+	defer mgmtCancel()
+	if err := n.syncer.EnsureTable(mgmtCtx, table, mapping); err != nil {
 		logger.Errorf("Failed to ensure table db=%s table=%s: %s", n.database, table, err)
 		return n.fallback(table, "schema", bytes.NewReader(buffered))
 	}
-	mappingName, err := n.syncer.EnsureMapping(ctx, table, mapping)
+	mappingName, err := n.syncer.EnsureMapping(mgmtCtx, table, mapping)
 	if err != nil {
 		logger.Errorf("Failed to ensure mapping db=%s table=%s: %s", n.database, table, err)
 		return n.fallback(table, "schema", bytes.NewReader(buffered))
 	}
-	if err := n.syncer.EnsureStreamingPolicy(ctx, table); err != nil {
+	if err := n.syncer.EnsureStreamingPolicy(mgmtCtx, table); err != nil {
 		// The policy may be enabled at the database level so streaming is still attempted.
 		logger.Warnf("%s", err)
 	}
