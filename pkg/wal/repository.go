@@ -80,12 +80,17 @@ func NewRepository(opts RepositoryOpts) *Repository {
 	return r
 }
 
-// sweepRotations rotates any WAL segments that require it.
+// sweepRotations rotates any WAL segments that require it.  They are rotated after the WALs are listed, since the
+// listing holds partition locks that block creating WALs, and in parallel like scheduled rotations.
 func (s *Repository) sweepRotations() {
+	var due []*WAL
 	_ = s.wals.Each(func(key string, value *WAL) error {
-		value.rotateSegmentIfNecessary()
+		if value.requiresRotation() {
+			due = append(due, value)
+		}
 		return nil
 	})
+	s.scheduler.rotate(due)
 }
 
 func (s *Repository) Open(ctx context.Context) error {
