@@ -352,7 +352,8 @@ func TestWAL_SubSecondMaxAge(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return w.index.TotalSegments() == 1
 	}, time.Second, time.Millisecond)
-	require.GreaterOrEqual(t, time.Since(createdAt), maxAge)
+	// Segments rotate up to a tenth of their max age early so WALs created together do not rotate together.
+	require.GreaterOrEqual(t, time.Since(createdAt), maxAge-maxAge/rotationJitterFraction)
 	require.NotEqual(t, path, w.Path())
 
 	// The replacement segment may already have been rotated away as idle, so only check its tracking if present.
@@ -398,9 +399,12 @@ func TestWAL_UsesSharedScheduler(t *testing.T) {
 	require.False(t, w.ownsScheduler)
 	require.NoError(t, w.Write(context.Background(), []byte("foo")))
 
+	// The deadline is jittered up to a tenth of the max age earlier.
 	deadline, ok := sched.next()
 	require.True(t, ok)
-	require.True(t, w.Segment().CreatedAt().Add(time.Hour).Equal(deadline))
+	createdAt := w.Segment().CreatedAt()
+	require.False(t, deadline.After(createdAt.Add(time.Hour)))
+	require.False(t, deadline.Before(createdAt.Add(time.Hour-time.Hour/rotationJitterFraction)))
 
 	require.NoError(t, w.Close())
 	_, ok = sched.next()

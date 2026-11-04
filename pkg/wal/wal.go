@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -70,6 +71,10 @@ type WAL struct {
 	// inflightWriteBytes is the sum of bytes from goroutines with active writes in progress but not written
 	// to the active segment.
 	inflightWriteBytes int64
+
+	// rotationJitter is how much earlier than its max age the current segment rotates.  WALs whose segments are
+	// created together, such as at startup or by one rotation sweep, would otherwise keep rotating at the same moment.
+	rotationJitter int64
 
 	// segmentSize tracks the size of the current segment.  This is tracked separately from Segment.Size() because
 	// the latter requires taking an RLock on the segments which creates lock contention.
@@ -362,7 +367,15 @@ func (w *WAL) requiresRotation() bool {
 	}
 
 	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
-	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Since(time.Unix(0, createdAt)) >= w.opts.SegmentMaxAge
+	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Since(time.Unix(0, createdAt)) >= w.segmentMaxAge()
+}
+
+// rotationJitterFraction is the largest fraction of the max segment age by which a segment rotates early.
+const rotationJitterFraction = 10
+
+// segmentMaxAge returns the age at which the current segment rotates: its max age less its jitter.
+func (w *WAL) segmentMaxAge() time.Duration {
+	return w.opts.SegmentMaxAge - time.Duration(atomic.LoadInt64(&w.rotationJitter))
 }
 
 // testHookSegmentCreated, if set, is called each time a WAL creates a segment.
@@ -393,6 +406,11 @@ func (w *WAL) setSegment(seg Segment) {
 	}
 	atomic.StoreInt64(&w.segmentSize, seg.Size())
 	atomic.StoreInt64(&w.segmentCreatedAt, seg.CreatedAt().UnixNano())
+	var jitter time.Duration
+	if window := w.opts.SegmentMaxAge / rotationJitterFraction; window > 0 {
+		jitter = rand.N(window)
+	}
+	atomic.StoreInt64(&w.rotationJitter, int64(jitter))
 	w.scheduleRotationLocked()
 }
 
@@ -412,7 +430,7 @@ func (w *WAL) scheduleRotationLocked() {
 	if createdAt == 0 {
 		return
 	}
-	w.scheduler.schedule(w, time.Unix(0, createdAt).Add(w.opts.SegmentMaxAge))
+	w.scheduler.schedule(w, time.Unix(0, createdAt).Add(w.segmentMaxAge()))
 }
 
 func (w *WAL) rotateSegmentIfNecessary() {
