@@ -94,6 +94,10 @@ func withTransferDeadline(ctx context.Context, size int64) (context.Context, con
 const OverloadScopeHeader = "X-Adxmon-Overload-Scope"
 const OverloadReasonHeader = "X-Adxmon-Overload-Reason"
 
+// PeerTransferHeader marks transfers sent by an ingestor rather than a collector.  They are already routed to their
+// owner, so the receiver stores them instead of forwarding them again.
+const PeerTransferHeader = "X-Adxmon-Peer-Transfer"
+
 // MaxTransferBytesHeader advertises how many bytes a destination can accept, so
 // a sender holding an oversized batch can split instead of retrying it.
 const MaxTransferBytesHeader = "X-Adxmon-Max-Transfer-Bytes"
@@ -218,6 +222,9 @@ type ClientOpts struct {
 
 	// DisableGzip controls whether the client disables gzip compression.
 	DisableGzip bool
+
+	// PeerTransfer marks requests with PeerTransferHeader.
+	PeerTransfer bool
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -327,6 +334,9 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 	req.Header.Set("Content-Type", "text/csv")
 	req.Header.Set("User-Agent", "adx-mon")
 	req.Header.Set("X-Request-ID", requestId)
+	if c.opts.PeerTransfer {
+		req.Header.Set(PeerTransferHeader, "true")
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

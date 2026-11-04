@@ -40,6 +40,11 @@ is less than 100MB so that the file can be merged with other files before being 
 
 If the transfer fails, the instance will upload the file directly. 
 
+With `--forward-transfers`, a collector transfer for a table owned by another ingestor is forwarded to the owner as
+it is received, so it waits for one segment rotation instead of one on each ingestor.  The transfer is stored locally
+as above if the owner is unhealthy, does not respond within 3 seconds, or already has 5 forwards in flight.
+`adxmon_ingestor_transfer_forwards_total{outcome}` counts forwarded transfers and each fallback.
+
 During upload, batches of files, per table, are compressed and uploaded to ADX as stream.  This allows many small
 files to be merged into a single file which reduces the number of files that ADX must merge later.  Each batch is
 sized to be between 100MB and 1GB (uncompressed) to align with Kusto ingestion best practices.
