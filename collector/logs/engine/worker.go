@@ -36,8 +36,18 @@ func WorkerCreator(transforms []types.Transformer, sinks []types.Sink) func(stri
 // Run starts the worker and processes incoming log batches.
 // It will block until the input channel is closed.
 func (w *worker) Run() {
+	w.RunWaitingForStorage(nil)
+}
+
+// RunWaitingForStorage is like Run, but when storage is full the durable sink waits for room rather than dropping
+// the batch, until stop is done.  Sources that stop reading while the worker waits use it, so full storage delays
+// their logs instead of losing them.
+func (w *worker) RunWaitingForStorage(stop context.Context) {
 	for msg := range w.Input {
 		ctx, cancel := context.WithTimeout(context.Background(), w.BatchTimeout)
+		if stop != nil {
+			ctx = types.WithStorageWait(ctx, stop)
+		}
 		w.processBatch(ctx, msg)
 		cancel()
 	}

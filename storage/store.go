@@ -183,6 +183,37 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 	return &wal.TableOverloadedError{Destination: d, Reason: reason, RetryAfter: 5 * time.Second}
 }
 
+// rejectUnlessFits returns ErrMaxDiskUsageExceeded when req might not fit in the store's global budget, so the request
+// is rejected before any series is written and the sender's retry of the whole request does not duplicate them.  The
+// estimate is the request's uncompressed CSV size, an upper bound on what its compressed WAL blocks reserve.
+func (s *LocalStore) rejectUnlessFits(b []byte, req *prompb.WriteRequest, hash uint64) error {
+	a := s.opts.Admission
+	if a == nil {
+		return nil
+	}
+	var size int64
+	for _, v := range req.Timeseries {
+		var labels int64
+		for l := range req.Labels(v) {
+			labels += int64(len(l.Name) + len(l.Value) + 6)
+		}
+		size += int64(len(v.Samples)) * (labels + 64)
+	}
+	if a.FitsAll(size) {
+		return nil
+	}
+	for _, v := range req.Timeseries {
+		key, err := SegmentKey(b[:0], req, v, hash)
+		if err != nil {
+			continue
+		}
+		if d, err := wal.DestinationFromPrefix(string(key)); err == nil && !a.Fits(d, size) {
+			return wal.ErrMaxDiskUsageExceeded
+		}
+	}
+	return nil
+}
+
 func (s *LocalStore) WALCount() int {
 	return s.repository.Count()
 }
@@ -195,6 +226,10 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 
 	b := gbp.Get(256)
 	defer gbp.Put(b)
+
+	if err := s.rejectUnlessFits(b, req, enc.SchemaHash()); err != nil {
+		return err
+	}
 
 	for _, v := range req.Timeseries {
 		key, err := SegmentKey(b[:0], req, v, enc.SchemaHash())
@@ -322,7 +357,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 	// Each log can potentially have a different destination.
 	// Instead of splitting ahead of time and allocating n slices, just encode and write to the wal on
 	// a per-log basis.
-	for _, log := range logs.Logs {
+	for i, log := range logs.Logs {
 		// If we don't have a destination, we can't do anything with the log.
 		// Skip instead of trying again, which will just repeat the same error.
 		database := types.StringOrEmpty(log.GetAttributeValue(types.AttributeDatabaseName))
@@ -369,7 +404,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 
 		if s.diskUsageExceeded(w) {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
-			return wal.ErrMaxDiskUsageExceeded
+			return &PartialWriteError{Written: i, Err: wal.ErrMaxDiskUsageExceeded}
 		}
 
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
@@ -379,6 +414,9 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 				s.recordRejection(quota, 1, int64(len(enc.Bytes())), "logs")
 				outcome.Rejected++
 				continue
+			}
+			if errors.Is(err, wal.ErrMaxDiskUsageExceeded) || errors.Is(err, wal.ErrMaxSegmentsExceeded) {
+				return &PartialWriteError{Written: i, Err: err}
 			}
 			return err
 		}
