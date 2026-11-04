@@ -99,7 +99,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		MaxIdleConnsPerHost:   5,
 		MaxIdleConns:          transferConcurrency,
 		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 20 * time.Second,
+		ResponseHeaderTimeout: transferResponseHeaderTimeout,
 		DisableHTTP2:          true,
 		DisableKeepAlives:     false,
 		DisableGzip:           opts.DisableGzip,
@@ -214,8 +214,18 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 			return nil
 		}
 
+		var size int64
+		for _, seg := range segments {
+			size += seg.Size
+		}
 		start := time.Now()
-		if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
+		transferCtx, cancelTransfer := withTransferDeadline(ctx, size)
+		err = r.cli.Write(transferCtx, addr, filename, mr)
+		if context.Cause(transferCtx) == errTransferTimeout {
+			err = fmt.Errorf("%w after %s: %w", errTransferTimeout, transferTimeout(size), err)
+		}
+		cancelTransfer()
+		if err != nil {
 			var quota *wal.TableOverloadedError
 			if errors.As(err, &quota) {
 				// The authoritative backoff is per peer and destination. The

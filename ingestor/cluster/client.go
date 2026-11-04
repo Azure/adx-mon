@@ -3,12 +3,15 @@ package cluster
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
@@ -50,6 +53,43 @@ func (e *PeerOverloadedError) WithRequestId(id string) error {
 }
 
 var ErrPeerOverloaded error = &PeerOverloadedError{}
+
+var (
+	// transferBaseTimeout and transferMinBytesPerSecond bound how long a transfer may take once it has a connection:
+	// the base plus the time to send its body at the minimum throughput.
+	transferBaseTimeout             = 5 * time.Second
+	transferMinBytesPerSecond int64 = 10 << 20
+
+	// transferResponseHeaderTimeout bounds how long a peer may take to respond after receiving a transfer's body.
+	transferResponseHeaderTimeout = 5 * time.Second
+
+	errTransferTimeout = errors.New("transfer timed out")
+)
+
+// transferTimeout returns how long a transfer of size bytes may take once it has a connection.
+func transferTimeout(size int64) time.Duration {
+	return transferBaseTimeout + time.Duration(size*int64(time.Second)/transferMinBytesPerSecond)
+}
+
+// withTransferDeadline returns a context that is cancelled transferTimeout(size) after the request using it gets a
+// connection.  Waiting for a connection, which can queue behind other transfers to the same peer, does not count
+// against the transfer.
+func withTransferDeadline(ctx context.Context, size int64) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	var once sync.Once
+	var timer atomic.Pointer[time.Timer]
+	trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) {
+		once.Do(func() {
+			timer.Store(time.AfterFunc(transferTimeout(size), func() { cancel(errTransferTimeout) }))
+		})
+	}}
+	return httptrace.WithClientTrace(ctx, trace), func() {
+		if t := timer.Load(); t != nil {
+			t.Stop()
+		}
+		cancel(nil)
+	}
+}
 
 const OverloadScopeHeader = "X-Adxmon-Overload-Scope"
 const OverloadReasonHeader = "X-Adxmon-Overload-Reason"

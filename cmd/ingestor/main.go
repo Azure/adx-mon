@@ -386,6 +386,9 @@ func realMain(ctx *cli.Context) error {
 		// Close idle connections fairly often to establish new connections through the load balancer
 		// so that long-lived connections don't stay pinned to the same node indefinitely.
 		IdleTimeout: 5 * time.Minute,
+		// Transfer bodies are bounded by a stall timeout in the handler instead of a fixed ReadTimeout, so large
+		// transfers that keep arriving are not cut off.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	srv.ErrorLog = newLogger()
 
