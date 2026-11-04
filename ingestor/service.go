@@ -505,6 +505,22 @@ func (s *Service) HandleReady(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("not ready"))
 }
 
+// transferStallTimeout is how long a transfer body may go without receiving any data before the request is abandoned.
+var transferStallTimeout = 10 * time.Second
+
+// stallReader extends the connection's read deadline before each read, so a sender that stops sending is cut off
+// while a large body that keeps arriving is not.
+type stallReader struct {
+	io.ReadCloser
+	rc *http.ResponseController
+}
+
+func (r stallReader) Read(p []byte) (int, error) {
+	// Deadlines are unsupported by test recorders, where there is no connection to stall.
+	_ = r.rc.SetReadDeadline(time.Now().Add(transferStallTimeout))
+	return r.ReadCloser.Read(p)
+}
+
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	adxhttp.MaybeCloseConnection(w, r)
@@ -530,7 +546,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		originalIP = r.RemoteAddr
 	}
 
-	cr := reader.NewCounterReader(r.Body)
+	cr := reader.NewCounterReader(stallReader{ReadCloser: r.Body, rc: http.NewResponseController(w)})
 	var body io.ReadCloser = cr
 	defer func() {
 		io.Copy(io.Discard, body)
