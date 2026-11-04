@@ -69,6 +69,9 @@ type Service struct {
 
 	dropFilePrefixes []string
 	health           interface{ IsHealthy() bool }
+
+	// forwarder, if set, forwards collector transfers to the ingestor that owns their table.
+	forwarder *transferForwarder
 }
 
 type ServiceOpts struct {
@@ -97,6 +100,10 @@ type ServiceOpts struct {
 
 	// Region is a location identifier
 	Region string
+
+	// ForwardTransfers forwards collector transfers for tables owned by another ingestor to the owner as they are
+	// received, rather than storing them and transferring them after the segment rotates.
+	ForwardTransfers bool
 
 	// DisablePeerTransfer disables peer discovery and prevents transfers of small segments to an owner.
 	// Each instance of ingestor will upload received segments directly.
@@ -263,6 +270,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentRemover:               store,
 		MaxTransferConcurrency:       opts.MaxTransferConcurrency,
 		DisableGzip:                  true,
+		PeerTransfer:                 true,
 		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 		TransferLatency:              metrics.IngestorTransferLatency,
 	})
@@ -332,6 +340,14 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	sched := scheduler.NewScheduler(coord)
 
+	var forwarder *transferForwarder
+	if opts.ForwardTransfers && !opts.DisablePeerTransfer {
+		forwarder, err = newTransferForwarder(opts.Hostname, coord, health, opts.InsecureSkipVerify)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Service{
 		opts:             opts,
 		databases:        databases,
@@ -345,6 +361,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		scheduler:        sched,
 		localScheduler:   scheduler.NewScheduler(nil),
 		dropFilePrefixes: opts.DropFilePrefixes,
+		forwarder:        forwarder,
 	}, nil
 }
 
@@ -605,7 +622,11 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		body = gzipReader
 	}
 
-	n, err := s.store.Import(f, body)
+	var forward func([]byte) bool
+	if s.forwarder != nil && r.Header.Get(cluster.PeerTransferHeader) == "" {
+		forward = func(data []byte) bool { return s.forwarder.forward(f, data) }
+	}
+	n, err := s.store.ImportWith(f, body, forward)
 	var oversized *wal.SegmentTooLargeError
 	if errors.As(err, &oversized) {
 		// Permanent for this payload: tell the sender how much this destination

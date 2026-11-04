@@ -48,6 +48,9 @@ type ReplicatorOpts struct {
 	// DefaultQueuedReservedWorkersPercent.
 	QueuedReservedWorkersPercent int
 
+	// PeerTransfer marks transfers as sent by an ingestor so the receiver does not forward them.
+	PeerTransfer bool
+
 	// TransferLatency, if set, records the age of the oldest segment in each transferred batch by database.
 	TransferLatency *prometheus.HistogramVec
 }
@@ -103,6 +106,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		DisableHTTP2:          true,
 		DisableKeepAlives:     false,
 		DisableGzip:           opts.DisableGzip,
+		PeerTransfer:          opts.PeerTransfer,
 	})
 	if err != nil {
 		return nil, err

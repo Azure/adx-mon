@@ -281,3 +281,24 @@ func TestClient_Write_GzipGoroutineExitsWhenRequestFails(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+// Only ingestors mark their transfers as peer transfers; collector transfers are unmarked so the receiving ingestor
+// may forward them to the owner.
+func TestClientMarksPeerTransfers(t *testing.T) {
+	for _, peer := range []bool{false, true} {
+		var header string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			header = r.Header.Get(PeerTransferHeader)
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		client, err := NewClient(ClientOpts{DisableGzip: true, PeerTransfer: peer})
+		require.NoError(t, err)
+		require.NoError(t, client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata")))
+		server.Close()
+		if peer {
+			require.Equal(t, "true", header)
+		} else {
+			require.Empty(t, header)
+		}
+	}
+}
