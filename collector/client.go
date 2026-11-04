@@ -179,8 +179,8 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 	return fams, err
 }
 
-func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, error) {
-	req, err := http.NewRequest("GET", target, nil)
+func (c *MetricsClient) FetchMetricsIterator(ctx context.Context, target string) (*prompb.Iterator, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
 	}

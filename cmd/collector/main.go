@@ -301,6 +301,7 @@ func realMain(ctx *cli.Context) error {
 			DisableDiscovery:          cfg.PrometheusScrape.DisableDiscovery,
 			ScrapeInterval:            time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
 			ScrapeTimeout:             time.Duration(cfg.PrometheusScrape.ScrapeTimeout) * time.Second,
+			ScrapeConcurrency:         cfg.PrometheusScrape.ScrapeConcurrency,
 			Targets:                   staticTargets,
 			MaxBatchSize:              cfg.MaxBatchSize,
 			RemoteClients:             remoteClients,
