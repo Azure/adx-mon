@@ -222,9 +222,10 @@ func TestCoordinator_LostPeer(t *testing.T) {
 		},
 	}
 
-	// Swap in fake pod lister to simulate a new peer
+	// Swap in fake pod lister to simulate the peer being deleted.  A peer that is only not ready stays in the
+	// partition for peerRemovalDelay.
 	coord.mu.Lock()
-	coord.pl = &fakePodLister{pods: []*v1.Pod{self, newPeer}}
+	coord.pl = &fakePodLister{pods: []*v1.Pod{self}}
 	coord.mu.Unlock()
 
 	coord.OnDelete(newPeer)

@@ -70,6 +70,9 @@ type coordinator struct {
 	// peerInfo is the last computed peer info.  It is guarded by mu.
 	peerInfo PeerInfo
 
+	// notReadySince records when each member of the partition stopped being ready.  It is guarded by mu.
+	notReadySince map[string]time.Time
+
 	subMu       sync.Mutex
 	subscribers map[int]func(PeerInfo)
 	nextSubID   int
@@ -120,6 +123,36 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 		peerInfo:    PeerInfo{Count: 1},
 		subscribers: make(map[int]func(PeerInfo)),
 	}, nil
+}
+
+// peerRemovalDelay is how long a member of the partition may be not ready before it is removed.  An ingestor is not
+// ready while its backlog is over its limits, and removing it at once would move its tables to other ingestors and
+// back as the backlog drains.  The load balancer still stops sending it new data while it is not ready.
+var peerRemovalDelay = 5 * time.Minute
+
+// isMember reports whether p belongs in the partition.  A pod joins once it is ready and stays while it is not ready
+// for up to peerRemovalDelay.  A terminating pod leaves at once.  mu must be held.
+func (c *coordinator) isMember(p *v1.Pod, now time.Time) bool {
+	if p.DeletionTimestamp != nil {
+		delete(c.notReadySince, p.Name)
+		return false
+	}
+	if IsPodReady(p) {
+		delete(c.notReadySince, p.Name)
+		return true
+	}
+	if _, member := c.peers[p.Name]; !member {
+		return false
+	}
+	since, ok := c.notReadySince[p.Name]
+	if !ok {
+		if c.notReadySince == nil {
+			c.notReadySince = make(map[string]time.Time)
+		}
+		since = now
+		c.notReadySince[p.Name] = now
+	}
+	return now.Sub(since) < peerRemovalDelay
 }
 
 func (c *coordinator) OnAdd(obj interface{}, isInitialList bool) {
@@ -315,7 +348,9 @@ func (c *coordinator) syncPeersLocked() error {
 	}
 
 	var leastNode string
+	now := time.Now()
 	set := make(map[string]string, len(c.peers))
+	listed := make(map[string]bool, len(pods))
 	for _, p := range pods {
 		if p.Status.PodIP == "" {
 			continue
@@ -325,8 +360,8 @@ func (c *coordinator) syncPeersLocked() error {
 			continue
 		}
 
-		ready := IsPodReady(p)
-		if !ready {
+		listed[p.Name] = true
+		if !c.isMember(p, now) {
 			continue
 		}
 
@@ -341,6 +376,12 @@ func (c *coordinator) syncPeersLocked() error {
 	c.leader = c.opts.Hostname == leastNode
 	if c.leader != wasLeader {
 		logger.Infof("Leader change: WasLeader=%t IsLeader=%t, Hostname=%s, LeastNode=%s", wasLeader, c.leader, c.opts.Hostname, leastNode)
+	}
+
+	for name := range c.notReadySince {
+		if !listed[name] {
+			delete(c.notReadySince, name)
+		}
 	}
 
 	if len(set) == 0 {
