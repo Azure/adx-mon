@@ -2,10 +2,12 @@ package ingestor
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,9 +31,12 @@ func (r *drainReplicator) RealtimeTransferQueue() chan *cluster.Batch { return r
 
 type drainBatcher struct {
 	cluster.Batcher
+	segments func() int64
 }
 
 func (b *drainBatcher) BatchSegments() error { return nil }
+
+func (b *drainBatcher) SegmentsTotal() int64 { return b.segments() }
 
 func newDrainService(queued int) *Service {
 	upload := make(chan *cluster.Batch, 16)
@@ -42,7 +47,7 @@ func newDrainService(queued int) *Service {
 	return &Service{
 		uploader:   &drainUploader{queue: upload},
 		replicator: &drainReplicator{queue: make(chan *cluster.Batch), realtime: make(chan *cluster.Batch)},
-		batcher:    &drainBatcher{},
+		batcher:    &drainBatcher{segments: func() int64 { return int64(len(upload)) }},
 	}
 }
 
@@ -102,4 +107,40 @@ func TestDrainReturnsWhenAlreadyEmpty(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, s.UploadSegments(ctx))
+}
+
+// Batches the upload scheduler has already taken off the upload queue are still pending work, so the drain must wait
+// for them to be uploaded rather than return as soon as the queue itself is empty.
+func TestDrainWaitsForBatchesHeldByScheduler(t *testing.T) {
+	const batches = 5
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Each queued batch is one closed segment that stays pending until a worker uploads it.
+	var segments atomic.Int64
+	segments.Store(batches)
+	upload := make(chan *cluster.Batch, batches)
+	scheduled := cluster.FairQueue(ctx, upload, cluster.FairQueueOpts{Workers: 1, QueueDepth: batches})
+	go func() {
+		for b := range scheduled {
+			time.Sleep(100 * time.Millisecond)
+			segments.Add(-1)
+			b.Release()
+		}
+	}()
+	for i := 0; i < batches; i++ {
+		upload <- &cluster.Batch{Database: "DB", Table: "Table", Segments: []wal.SegmentInfo{{Size: 1}}}
+	}
+	require.Eventually(t, func() bool { return len(upload) == 0 }, time.Second, time.Millisecond)
+
+	s := &Service{
+		uploader:   &drainUploader{queue: upload},
+		replicator: &drainReplicator{queue: make(chan *cluster.Batch), realtime: make(chan *cluster.Batch)},
+		batcher:    &drainBatcher{segments: segments.Load},
+	}
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer drainCancel()
+	require.NoError(t, s.UploadSegments(drainCtx))
+	t.Logf("drain returned with %d of %d batches still waiting to upload", segments.Load(), batches)
+	require.Zero(t, segments.Load(), "drain returned before the scheduled batches were uploaded")
 }

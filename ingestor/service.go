@@ -668,7 +668,7 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
-	remaining := s.uploadQueueLen() + s.transferQueueLen()
+	remaining := s.pendingSegments()
 	lastProgress := time.Now()
 	for {
 		if remaining == 0 {
@@ -683,7 +683,7 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", n)
 			}
 
-			current := s.uploadQueueLen() + s.transferQueueLen()
+			current := s.pendingSegments()
 			if current == 0 {
 				return nil
 			}
@@ -697,7 +697,7 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 				// A destination that cannot drain must not hold shutdown open
 				// for the whole deadline. Remaining work stays on disk and
 				// resumes after restart.
-				logger.Warnf("Backlog stopped draining with %d batches remaining; continuing shutdown", remaining)
+				logger.Warnf("Backlog stopped draining with %d segments remaining; continuing shutdown", remaining)
 				return nil
 			}
 		case <-ctx.Done():
@@ -722,6 +722,12 @@ func realtimeUploadQueue(u Uploader) chan *cluster.Batch {
 // uploadQueueLen returns the number of batches waiting to be uploaded.
 func (s *Service) uploadQueueLen() int {
 	return len(s.uploader.UploadQueue()) + len(realtimeUploadQueue(s.uploader))
+}
+
+// pendingSegments returns the number of closed segments not yet uploaded or transferred.  The upload and transfer
+// schedulers take batches off their queues as soon as they are queued, so the queue lengths miss most pending work.
+func (s *Service) pendingSegments() int {
+	return int(s.batcher.SegmentsTotal())
 }
 
 // transferQueueLen returns the number of batches waiting to be transferred to peers.
