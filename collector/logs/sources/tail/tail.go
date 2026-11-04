@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/pkg/atomicfile"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 )
@@ -237,17 +238,9 @@ func cursorPath(cursorDirectory string, filename string) string {
 
 func writeCursor(cursorPath string, file_id string, cursor int64) error {
 	cursorVal := fmt.Sprintf("{\"fid\":\"%s\",\"cursor\":%d}\n", file_id, cursor)
-	output, err := os.Create(cursorPath)
-	if err != nil {
-		return fmt.Errorf("writeCursor: failed to create/truncate cursor file %q: %w", cursorPath, err)
-	}
-	defer output.Close()
-
-	_, err = output.WriteString(cursorVal)
-	if err != nil {
+	if err := atomicfile.WriteFile(cursorPath, []byte(cursorVal), 0644); err != nil {
 		return fmt.Errorf("writeCursor: failed to write cursor file %q: %w", cursorPath, err)
 	}
-
 	return nil
 }
 
