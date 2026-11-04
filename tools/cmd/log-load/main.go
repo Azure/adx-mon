@@ -1,387 +1,218 @@
+// log-load generates OTLP HTTP load or application JSON lines for a file tailer.
 package main
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
-	otelv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
-	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
-	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/tools/data"
-	"github.com/golang/protobuf/proto"
 )
+
+type options struct {
+	target               string
+	concurrency          int
+	batchSize            int
+	totalSamples         int64
+	database             string
+	table                string
+	collectorLogDir      string
+	printCollectorConfig bool
+	dryRun               bool
+	verbose              bool
+}
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runCLI(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "log-load: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runCLI(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var opts options
+	flags := flag.NewFlagSet("log-load", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&opts.target, "target", "", "HTTP/HTTPS base URL or file:///absolute/directory")
+	flags.IntVar(&opts.concurrency, "concurrency", 1, "Concurrent writers (one file per writer for file targets)")
+	flags.IntVar(&opts.batchSize, "batch-size", 2500, "Maximum records per batch")
+	flags.Int64Var(&opts.totalSamples, "total-samples", 0, "Total records to generate (0 = continuous)")
+	flags.StringVar(&opts.database, "database", "AKSinfra", "Destination database")
+	flags.StringVar(&opts.table, "table", "IngestTest", "Destination table")
+	flags.StringVar(&opts.collectorLogDir, "collector-log-dir", "", "Absolute collector-visible file directory for printed config")
+	flags.BoolVar(&opts.printCollectorConfig, "print-collector-config", false, "Print a collector TOML fragment for a file target, without generating load")
+	flags.BoolVar(&opts.dryRun, "dry-run", false, "Generate and count records without opening files or making HTTP requests")
+	flags.BoolVar(&opts.verbose, "verbose", false, "Report progress to stderr once per second")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments: %v", flags.Args())
+	}
+	return run(ctx, opts, stdout, stderr)
+}
+
+func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
+	target, err := opts.validate()
+	if err != nil {
+		return err
+	}
+	if opts.printCollectorConfig {
+		return printCollectorConfig(stdout, opts, target)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var writers []batchWriter
+	if !opts.dryRun {
+		writers, err = openWriters(target, opts.concurrency)
+		if err != nil {
+			return err
+		}
+	}
+	gen := &continuousDataGenerator{
+		batchSize: opts.batchSize, totalSamples: opts.totalSamples,
+		database: opts.database, table: opts.table,
+	}
+	s := &stats{}
+	start := time.Now()
+	reportCtx, stopReport := context.WithCancel(context.Background())
+	var reportWG sync.WaitGroup
+	if opts.verbose {
+		reportWG.Go(func() { reportStats(reportCtx, stderr, s, start) })
+	}
+	err = runPipeline(ctx, gen, writers, s, opts.dryRun)
+	stopReport()
+	reportWG.Wait()
+	elapsed := time.Since(start)
+	_, printErr := fmt.Fprintf(stdout,
+		"Generated records: %d\nWritten records: %d\nWritten bytes: %d\nDry-run records: %d\nDuration: %s\nWritten records/sec: %.2f\nWritten bytes/sec: %.2f\n",
+		s.generated.Load(), s.written.Load(), s.bytes.Load(), s.dryRun.Load(), elapsed,
+		float64(s.written.Load())/elapsed.Seconds(), float64(s.bytes.Load())/elapsed.Seconds())
+	if target.directory != "" && !opts.dryRun {
+		_, noteErr := fmt.Fprintln(stdout, "File statistics measure generator output, not collector consumption or downstream delivery.")
+		printErr = errors.Join(printErr, noteErr)
+	}
+	return errors.Join(err, printErr)
+}
 
 type generator interface {
 	Read() (*v1.ExportLogsServiceRequest, error)
 }
 
-// This program generates remote write load against a target endpoint.
-func main() {
-	var (
-		target                          string
-		verbose, dryRun                 bool
-		concurrency                     int
-		batchSize, metrics, cardinality int
-		totalSamples                    int64
-	)
-
-	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
-	flag.StringVar(&target, "target", "", "Remote write URL")
-	flag.IntVar(&concurrency, "concurrency", 1, "Concurrent writers")
-
-	flag.IntVar(&batchSize, "batch-size", 2500, "Batch size of requests")
-	flag.BoolVar(&dryRun, "dry-run", false, "Read data but don't send it")
-	flag.Int64Var(&totalSamples, "total-samples", 0, "Total samples to send (0 = continuous)")
-
-	flag.Parse()
-
-	target = fmt.Sprintf("%s/v1/logs", target)
-
-	var dataGen generator
-
-	generator := &continuousDataGenerator{
-		set: data.NewDataSet(data.SetOptions{
-			NumMetrics:  metrics,
-			Cardinality: cardinality,
-		}),
-		startTime:    time.Now().UTC(),
-		batchSize:    batchSize,
-		totalSamples: totalSamples,
-	}
-	dataGen = generator
-
-	batches := make(chan *v1.ExportLogsServiceRequest, 1000)
-
-	stats := newStats()
-
+// runPipeline closes the queue when production ends and waits for every writer,
+// including its final flush/close. Cancellation stops queued work, but file
+// writers finish their current batch and flush their owned buffers.
+func runPipeline(parent context.Context, gen generator, writers []batchWriter, s *stats, dryRun bool) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	batches := make(chan *v1.ExportLogsServiceRequest, max(1, 2*len(writers)))
+	errs := make(chan error, len(writers))
 	var wg sync.WaitGroup
-	ctx, cancel := context.WithCancel(context.Background())
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			writer(ctx, target, stats, batches)
-		}()
-	}
-
-	go reportStats(ctx, stats, batches)
-
-	stats.StartTimer()
-
-	for {
-
-		var err error
-		batch, err := dataGen.Read()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-
-		if !dryRun {
-			batches <- batch
-		} else {
-			for _, ts := range batch.ResourceLogs {
-				for _, scope := range ts.ScopeLogs {
-					stats.IncTotalSent(len(scope.LogRecords))
+	for i, writer := range writers {
+		wg.Go(func() {
+			var writeErr error
+			defer func() {
+				result, closeErr := writer.Close()
+				s.add(result)
+				if err := errors.Join(writeErr, closeErr); err != nil {
+					cancel()
+					errs <- fmt.Errorf("writer %d: %w", i, err)
 				}
-			}
-		}
-	}
-
-	for len(batches) > 0 {
-		println(len(batches))
-		time.Sleep(100 * time.Millisecond)
-
-	}
-
-	stats.StopTimer()
-	cancel()
-	wg.Wait()
-
-	fmt.Printf("Total Metrics: %d\n", stats.TotalMetrics())
-	fmt.Printf("Total Samples: %d\n", stats.TotalSeries())
-	fmt.Printf("Duration: %s\n", stats.TimerDuration().String())
-	fmt.Printf("Load samples per/sec: %0.2f\n", float64(stats.TotalSeries())/stats.TimerDuration().Seconds())
-}
-
-func reportStats(ctx context.Context, stats *stats, batches chan *v1.ExportLogsServiceRequest) {
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	var lastTotal int64
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			sent := stats.TotalSent() - lastTotal
-			fmt.Printf("Samples per/sec: %d (%0.2f samples/sec) (%d/%s) queued=%d/%d\n", sent, float64(stats.TotalSent())/stats.ElapsedDuration().Seconds(), stats.TotalSent(), stats.ElapsedDuration(), len(batches), stats.TotalSeries())
-			lastTotal = stats.TotalSent()
-		}
-	}
-}
-
-func writer(ctx context.Context, endpoint string, stats *stats, ch chan *v1.ExportLogsServiceRequest) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case batch := <-ch:
-			b, err := proto.Marshal(batch)
-			if err != nil {
-				logger.Fatalf("marshal: %s", err)
-			}
-			req, err := http.NewRequest("POST", endpoint, bytes.NewReader(b))
-			if err != nil {
-				logger.Fatalf("new request: %s", err)
-			}
-			req.Header.Set("Content-Type", "application/x-protobuf")
-
-			// ts := time.Now()
+			}()
 			for {
-				if err := func() error {
-					resp, err := http.DefaultClient.Do(req)
-					if err != nil {
-						return err
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case batch, ok := <-batches:
+					if !ok || ctx.Err() != nil {
+						return
 					}
-					defer resp.Body.Close()
-					return nil
-				}(); err != nil {
-					logger.Warnf("write failed: %s.  Retrying...", err)
-					time.Sleep(1 * time.Second)
-					continue
-				}
-				break
-			}
-			// println(time.Since(ts).String(), len(batch.Timeseries))
-			for _, ts := range batch.ResourceLogs {
-				for _, scope := range ts.ScopeLogs {
-					stats.IncTotalSent(len(scope.LogRecords))
+					result, err := writer.WriteBatch(ctx, batch)
+					s.add(result)
+					if err != nil {
+						writeErr = err
+						cancel()
+						return
+					}
 				}
 			}
+		})
+	}
+	var generationErr error
+produce:
+	for ctx.Err() == nil {
+		batch, err := gen.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			generationErr = err
+			cancel()
+			break
+		}
+		n := recordCount(batch)
+		s.generated.Add(n)
+		if dryRun {
+			s.dryRun.Add(n)
+			continue
+		}
+		select {
+		case batches <- batch:
+		case <-ctx.Done():
+			break produce
 		}
 	}
-}
-
-type continuousDataGenerator struct {
-	set          *data.Set
-	startTime    time.Time
-	batchSize    int
-	totalSamples int64
-	sent         int64
-}
-
-func (c *continuousDataGenerator) Read() (*v1.ExportLogsServiceRequest, error) {
-	if c.totalSamples > 0 && atomic.LoadInt64(&c.sent) >= c.totalSamples {
-		return nil, io.EOF
+	close(batches)
+	wg.Wait()
+	close(errs)
+	result := errors.Join(generationErr, parent.Err())
+	for err := range errs {
+		result = errors.Join(result, err)
 	}
-
-	msg := newExportLogRequest()
-	for i := 0; i < c.batchSize; i++ {
-		msg.ResourceLogs[0].ScopeLogs[0].LogRecords = append(msg.ResourceLogs[0].ScopeLogs[0].LogRecords,
-			&otelv1.LogRecord{
-				TimeUnixNano:   uint64(time.Now().UnixNano()),
-				SeverityNumber: 17,
-				SeverityText:   "Error",
-				Body: &commonv1.AnyValue{
-					Value: &commonv1.AnyValue_KvlistValue{
-						KvlistValue: &commonv1.KeyValueList{
-							Values: []*commonv1.KeyValue{
-								{
-									Key: "message",
-									Value: &commonv1.AnyValue{
-										Value: &commonv1.AnyValue_StringValue{
-											StringValue: "something worth logging",
-										},
-									},
-								},
-								{
-									Key: "kusto.table",
-									Value: &commonv1.AnyValue{
-										Value: &commonv1.AnyValue_StringValue{
-											StringValue: "IngestTest",
-										},
-									},
-								},
-								{
-									Key: "kusto.database",
-									Value: &commonv1.AnyValue{
-										Value: &commonv1.AnyValue_StringValue{
-											StringValue: "AKSinfra",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-				DroppedAttributesCount: 1,
-				Flags:                  1,
-			},
-		)
-	}
-	c.startTime = c.startTime.Add(time.Second)
-	atomic.AddInt64(&c.sent, int64(c.batchSize))
-	return msg, nil
+	return result
 }
 
 type stats struct {
-	totalSeries int64
-	totalSent   int64
-
-	metrics map[string]struct{}
-
-	StartTime, StopTime time.Time
+	generated atomic.Int64
+	written   atomic.Int64
+	bytes     atomic.Int64
+	dryRun    atomic.Int64
 }
 
-func newStats() *stats {
-	return &stats{
-		metrics: map[string]struct{}{},
-	}
+func (s *stats) add(result writeResult) {
+	s.written.Add(result.records)
+	s.bytes.Add(result.bytes)
 }
 
-func (s *stats) IncTotalSeries(n int) {
-	atomic.AddInt64(&s.totalSeries, int64(n))
-}
-
-func (s *stats) TotalSeries() int64 {
-	return atomic.LoadInt64(&s.totalSeries)
-}
-
-func (s *stats) RecordMetric(name string) {
-	s.metrics[name] = struct{}{}
-}
-
-func (s *stats) TotalMetrics() int {
-	return len(s.metrics)
-}
-
-func (s *stats) StartTimer() {
-	s.StartTime = time.Now()
-}
-
-func (s *stats) StopTimer() {
-	s.StopTime = time.Now()
-}
-
-func (s *stats) ElapsedDuration() time.Duration {
-	return time.Since(s.StartTime)
-}
-
-func (s *stats) TimerDuration() time.Duration {
-	return s.StopTime.Sub(s.StartTime)
-}
-
-func (s *stats) IncTotalSent(n int) {
-	atomic.AddInt64(&s.totalSent, int64(n))
-}
-
-func (s *stats) TotalSent() int64 {
-	return atomic.LoadInt64(&s.totalSent)
-}
-
-func newExportLogRequest() *v1.ExportLogsServiceRequest {
-	return &v1.ExportLogsServiceRequest{
-		ResourceLogs: []*otelv1.ResourceLogs{
-			{
-				Resource: &resourcev1.Resource{
-					Attributes: []*commonv1.KeyValue{
-						{
-							Key: "source",
-							Value: &commonv1.AnyValue{
-								Value: &commonv1.AnyValue_StringValue{
-									StringValue: "hostname",
-								},
-							},
-						},
-					},
-					DroppedAttributesCount: 1,
-				},
-				ScopeLogs: []*otelv1.ScopeLogs{
-					{
-						Scope: &commonv1.InstrumentationScope{
-							Name:                   "name",
-							Version:                "version",
-							DroppedAttributesCount: 1,
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-var rawlog = []byte(`{
-	"resourceLogs": [
-		{
-			"resource": {
-				"attributes": [
-					{
-						"key": "source"
-						"value": {
-							"stringValue": "hostname"
-						}
-					}
-				],
-				"droppedAttributesCount": 1
-			},
-			"scopeLogs": [
-				{
-					"scope": {
-						"name": "name",
-						"version": "version",
-						"droppedAttributesCount": 1
-					},
-					"logRecords": [
-						{
-							"timeUnixNano": "1669112524001",
-							"observedTimeUnixNano": "1669112524001",
-							"severityNumber": 17,
-							"severityText": "Error",
-							"body": {
-								"kvlistValue": {
-									"values": [
-									  {
-										"key": "message",
-										"value": {
-										  "stringValue": "something worth logging"
-										}
-									  },
-									  {
-										"key": "kusto.table",
-										"value": {
-										  "stringValue": "ATable"
-										}
-									  },
-									  {
-										"key": "kusto.database",
-										"value": {
-										  "stringValue": "ADatabase"
-										}
-									  }
-									]
-								  }
-							},
-							"droppedAttributesCount": 1,
-							"flags": 1,
-							"traceId": "",
-							"spanId": ""
-						}
-					],
-					"schemaUrl": "scope_schema"
-				}
-			],
-			"schemaUrl": "resource_schema"
+func reportStats(ctx context.Context, output io.Writer, s *stats, start time.Time) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fmt.Fprintf(output, "generated=%d written=%d bytes=%d dry-run=%d elapsed=%s records/sec=%.2f\n",
+				s.generated.Load(), s.written.Load(), s.bytes.Load(), s.dryRun.Load(), time.Since(start),
+				float64(s.written.Load())/time.Since(start).Seconds())
 		}
-	]
-}`)
+	}
+}
