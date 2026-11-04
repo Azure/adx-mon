@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/multierr"
 )
 
@@ -46,6 +47,9 @@ type ReplicatorOpts struct {
 	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.  Defaults to
 	// DefaultQueuedReservedWorkersPercent.
 	QueuedReservedWorkersPercent int
+
+	// TransferLatency, if set, records the age of the oldest segment in each transferred batch by database.
+	TransferLatency *prometheus.HistogramVec
 }
 
 type SegmentRemover interface {
@@ -78,6 +82,7 @@ type replicator struct {
 	transferConcurrency int
 	reservedPercent     int
 	backoff             destinationBackoff
+	transferLatency     *prometheus.HistogramVec
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
@@ -113,6 +118,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		SegmentRemover:      opts.SegmentRemover,
 		transferConcurrency: transferConcurrency,
 		reservedPercent:     opts.QueuedReservedWorkersPercent,
+		transferLatency:     opts.TransferLatency,
 	}, nil
 }
 
@@ -259,6 +265,15 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 		}
 
 		r.Health.SetPeerHealthy(owner)
+		if r.transferLatency != nil {
+			var oldest time.Time
+			for _, seg := range segments {
+				if oldest.IsZero() || seg.CreatedAt.Before(oldest) {
+					oldest = seg.CreatedAt
+				}
+			}
+			r.transferLatency.WithLabelValues(db).Observe(time.Since(oldest).Seconds())
+		}
 
 		if logger.IsDebug() {
 			for _, seg := range segments {

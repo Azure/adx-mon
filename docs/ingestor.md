@@ -142,6 +142,30 @@ A rising rate of `fallback_*` outcomes means realtime batches are using queued i
 `retry_no_slot` usually mean the streaming budget is too small for the realtime volume, and `fallback_too_large`
 means `--realtime-max-batch-bytes` should be lowered.
 
+## Latency metrics
+
+Each stage records how long data waited before it left that stage, as histograms whose quantiles can be compared
+against a latency target.
+
+| Metric | Description |
+| --- | --- |
+| `adxmon_collector_transfer_latency_seconds{database}` | Age of the oldest collector segment in a batch when it is transferred to an ingestor. |
+| `adxmon_ingestor_transfer_latency_seconds{database}` | Age of the oldest segment in a batch when it is transferred to the peer that owns the table. |
+| `adxmon_ingestor_upload_latency_seconds{database,method}` | Age of the oldest ingestor segment in a batch when it is uploaded, by `method`: `streaming` or `queued`. |
+| `adxmon_ingestor_upload_duration_seconds{database,method}` | Duration of upload requests to Kusto. |
+| `adxmon_ingestor_upload_failures_total{database,table}` | Queued uploads that failed and will be retried. |
+| `adxmon_collector_scrape_duration_seconds{database}` | Duration of scraping a target, including writing its series. |
+| `adxmon_collector_scrapes_skipped_total{reason}` | Target scrapes skipped because the previous scrape was still running (`in_flight`) or the collector was unhealthy (`unhealthy`). |
+
+Segment ages restart at each hop, so these metrics show where time is spent rather than the end to end latency.  They
+also exclude the time Kusto takes to make queued data queryable.  Measure end to end latency in Kusto:
+
+```kusto
+Cpu
+| where ingestion_time() > ago(1h)
+| summarize percentiles(ingestion_time() - Timestamp, 50, 99)
+```
+
 ## ClickHouse sink
 
 The ingestor can stream batches to ClickHouse in addition to Azure Data Explorer. Switch the storage

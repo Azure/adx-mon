@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/metadata"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -254,10 +255,14 @@ func (s *Scraper) scrape(ctx context.Context) {
 		if targets := schedule.due(now); len(targets) > 0 {
 			if !s.healthChecker.IsHealthy() {
 				logger.Warnf("Collector is unhealthy, skipping scrape")
+				metrics.CollectorScrapesSkipped.WithLabelValues("unhealthy").Add(float64(len(targets)))
 			} else {
 				for _, target := range targets {
 					if inflight[target] {
-						logger.Warnf("Skipping scrape of %s, previous scrape still running", target.String())
+						if logger.IsDebug() {
+							logger.Debugf("Skipping scrape of %s, previous scrape still running", target.String())
+						}
+						metrics.CollectorScrapesSkipped.WithLabelValues("in_flight").Inc()
 						continue
 					}
 					inflight[target] = true
@@ -320,6 +325,11 @@ func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) {
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, min(s.scrapeTimeout(), interval))
 	defer cancel()
+
+	start := time.Now()
+	defer func() {
+		metrics.CollectorScrapeDuration.WithLabelValues(s.opts.Database).Observe(time.Since(start).Seconds())
+	}()
 
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := prompb.WriteRequestPool.Get()

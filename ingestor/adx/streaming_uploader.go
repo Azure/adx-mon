@@ -195,11 +195,13 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	cancel()
 	metrics.IngestorRealtimeStreamingRequests.WithLabelValues(n.database).Inc()
 	metrics.IngestorRealtimeStreamingDuration.WithLabelValues(n.database).Add(time.Since(start).Seconds())
+	metrics.IngestorUploadDuration.WithLabelValues(n.database, "streaming").Observe(time.Since(start).Seconds())
 
 	if err == nil {
 		release(false)
 		n.recordRealtime(table, "streamed")
 		metrics.IngestorRealtimeIngestLatency.WithLabelValues(n.database, table).Set(time.Since(oldest).Seconds())
+		metrics.IngestorUploadLatency.WithLabelValues(n.database, "streaming").Observe(time.Since(oldest).Seconds())
 		if logger.IsDebug() {
 			logger.Debugf("Streamed db=%s table=%s bytes=%d duration=%s", n.database, table, len(buffered), time.Since(start))
 		}
