@@ -183,13 +183,15 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 	return &wal.TableOverloadedError{Destination: d, Reason: reason, RetryAfter: 5 * time.Second}
 }
 
-// rejectUnlessFits returns ErrMaxDiskUsageExceeded when req might not fit in the store's global budget, so the request
-// is rejected before any series is written and the sender's retry of the whole request does not duplicate them.  The
-// estimate is the request's uncompressed CSV size, an upper bound on what its compressed WAL blocks reserve.
-func (s *LocalStore) rejectUnlessFits(b []byte, req *prompb.WriteRequest, hash uint64) error {
+// overBudget reports which of a request's tables might not fit in the store's global budget, or nil when they all
+// fit.  It returns ErrMaxDiskUsageExceeded when none fit, so the request is rejected before any series is written and
+// the sender's retry of the whole request does not duplicate them.  When only the queued share of the budget is used
+// up, the realtime tables fit and the queued ones are shed, so the realtime reservation keeps realtime data flowing.
+// The estimate is the request's uncompressed CSV size, an upper bound on what its compressed WAL blocks reserve.
+func (s *LocalStore) overBudget(req *prompb.WriteRequest, tables int, key func(int) []byte) ([]bool, error) {
 	a := s.opts.Admission
 	if a == nil {
-		return nil
+		return nil, nil
 	}
 	var size int64
 	for _, v := range req.Timeseries {
@@ -200,18 +202,19 @@ func (s *LocalStore) rejectUnlessFits(b []byte, req *prompb.WriteRequest, hash u
 		size += int64(len(v.Samples)) * (labels + 64)
 	}
 	if a.FitsAll(size) {
-		return nil
+		return nil, nil
 	}
-	for _, v := range req.Timeseries {
-		key, err := SegmentKey(b[:0], req, v, hash)
-		if err != nil {
-			continue
-		}
-		if d, err := wal.DestinationFromPrefix(string(key)); err == nil && !a.Fits(d, size) {
-			return wal.ErrMaxDiskUsageExceeded
-		}
+	full := make([]bool, tables)
+	fits := false
+	for i := range full {
+		d, err := wal.DestinationFromPrefix(string(key(i)))
+		full[i] = err == nil && !a.Fits(d, size)
+		fits = fits || !full[i]
 	}
-	return nil
+	if !fits {
+		return nil, wal.ErrMaxDiskUsageExceeded
+	}
+	return full, nil
 }
 
 func (s *LocalStore) WALCount() int {
@@ -226,10 +229,6 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 
 	b := gbp.Get(256)
 	defer gbp.Put(b)
-
-	if err := s.rejectUnlessFits(b, req, enc.SchemaHash()); err != nil {
-		return err
-	}
 
 	// Each table's series are written as one block rather than one per series, since every block is compressed,
 	// checksummed, written under the segment lock and admitted separately.
@@ -253,10 +252,23 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		tables[i].series = append(tables[i].series, v)
 	}
 
-	for _, t := range tables {
+	full, err := s.overBudget(req, len(tables), func(i int) []byte { return tables[i].key })
+	if err != nil {
+		return err
+	}
+
+	for i, t := range tables {
 		var samples int64
 		for _, v := range t.series {
 			samples += int64(len(v.Samples))
+		}
+
+		if full != nil && full[i] {
+			d, _ := wal.DestinationFromPrefix(string(t.key))
+			s.recordRejection(&wal.TableOverloadedError{Destination: d, Reason: "queued_budget"}, samples, 0, "metrics")
+			outcome.Rejected += samples
+			outcome.RejectedSeries = append(outcome.RejectedSeries, t.series...)
+			continue
 		}
 
 		if quota := s.preAdmit(t.key); quota != nil {
