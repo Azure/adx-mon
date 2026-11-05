@@ -172,6 +172,12 @@ func (a *Admission) globalBytesLimit(d Destination) int64 {
 	return max - reserved
 }
 
+// UsesReservation reports whether d may write into the realtime reservation, so its global limit is the whole budget
+// rather than the queued share.
+func (a *Admission) UsesReservation(d Destination) bool {
+	return a != nil && a.globalBytesLimit(d) == a.opts.Global.Bytes
+}
+
 // Fits reports whether bytes more fit in the global byte budget available to d.
 func (a *Admission) Fits(d Destination, bytes int64) bool {
 	if a == nil {
