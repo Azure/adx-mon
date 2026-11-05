@@ -82,6 +82,19 @@ func TestTransferTimeoutScalesWithSize(t *testing.T) {
 	require.Equal(t, 15*time.Second, transferTimeout(100<<20))
 }
 
+// A deadline that fires after the peer accepted a transfer must not turn the success into a timeout, or the segments
+// would be kept and sent again.
+func TestTransferErrorKeepsSuccessAfterDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errTransferTimeout)
+
+	require.NoError(t, transferError(ctx, 0, nil))
+
+	err := transferError(ctx, 0, context.Canceled)
+	require.ErrorIs(t, err, errTransferTimeout)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 // Waiting for a connection behind other transfers to the same peer does not count against a transfer's deadline, so
 // a busy but healthy peer is not marked unhealthy.
 func TestTransferDeadlineExcludesConnectionWait(t *testing.T) {

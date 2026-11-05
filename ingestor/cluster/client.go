@@ -91,6 +91,15 @@ func withTransferDeadline(ctx context.Context, size int64) (context.Context, con
 	}
 }
 
+// transferError marks a failed transfer as timed out when its deadline from withTransferDeadline cut it off.  A
+// transfer that succeeded stays a success even if the deadline fired after the peer accepted it.
+func transferError(ctx context.Context, size int64, err error) error {
+	if err != nil && context.Cause(ctx) == errTransferTimeout {
+		return fmt.Errorf("%w after %s: %w", errTransferTimeout, transferTimeout(size), err)
+	}
+	return err
+}
+
 const OverloadScopeHeader = "X-Adxmon-Overload-Scope"
 const OverloadReasonHeader = "X-Adxmon-Overload-Reason"
 
