@@ -104,6 +104,33 @@ func TestScraper_SchedulesMixedIntervals(t *testing.T) {
 	})
 }
 
+func TestScraper_StaticTargetIntervals(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := make(map[string][]time.Time)
+		startTestScraper(t, &ScraperOpts{
+			ScrapeInterval: 30 * time.Second,
+			Targets: []ScrapeTarget{
+				{Static: true, Addr: "http://localhost/self", ScrapeInterval: time.Minute},
+				{Static: true, Addr: "http://localhost/kubelet"},
+				{Static: true, Addr: "http://localhost/dcgm"},
+			},
+		}, func(req *http.Request) (*http.Response, error) {
+			calls[req.URL.Path] = append(calls[req.URL.Path], time.Now())
+			return scrapeResponse(http.StatusOK), nil
+		})
+		time.Sleep(5 * time.Minute)
+		synctest.Wait()
+		for path, interval := range map[string]time.Duration{
+			"/self": time.Minute, "/kubelet": 30 * time.Second, "/dcgm": 30 * time.Second,
+		} {
+			require.Len(t, calls[path], int(5*time.Minute/interval), path)
+			for i := 1; i < len(calls[path]); i++ {
+				require.Equal(t, interval, calls[path][i].Sub(calls[path][i-1]), path)
+			}
+		}
+	})
+}
+
 func TestScraper_HealthAndFailuresConsumeDeadlines(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		health := &scrapeTestHealth{}

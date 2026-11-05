@@ -200,11 +200,12 @@ type LabelMatcher struct {
 }
 
 type ScrapeTarget struct {
-	HostRegex string `toml:"host-regex" comment:"The regex to match the host name against.  If the hostname matches, the URL will be scraped."`
-	URL       string `toml:"url" comment:"The URL to scrape."`
-	Namespace string `toml:"namespace" comment:"The namespace label to add for metrics scraped at this URL."`
-	Pod       string `toml:"pod" comment:"The pod label to add for metrics scraped at this URL."`
-	Container string `toml:"container" comment:"The container label to add for metrics scraped at this URL."`
+	ScrapeInterval *string `toml:"scrape-interval,omitempty" comment:"Optional positive Go duration (e.g. 60s or 500ms). Omit to inherit the global scrape interval."`
+	HostRegex      string  `toml:"host-regex" comment:"The regex to match the host name against.  If the hostname matches, the URL will be scraped."`
+	URL            string  `toml:"url" comment:"The URL to scrape."`
+	Namespace      string  `toml:"namespace" comment:"The namespace label to add for metrics scraped at this URL."`
+	Pod            string  `toml:"pod" comment:"The pod label to add for metrics scraped at this URL."`
+	Container      string  `toml:"container" comment:"The container label to add for metrics scraped at this URL."`
 }
 
 type LiftLabel struct {
@@ -233,7 +234,23 @@ func (t *ScrapeTarget) Validate() error {
 	if t.Container == "" {
 		return errors.New("container must be set")
 	}
-	return nil
+	_, err := t.ParseScrapeInterval()
+	return err
+}
+
+// ParseScrapeInterval returns zero when omitted so the scheduler uses the global interval.
+func (t *ScrapeTarget) ParseScrapeInterval() (time.Duration, error) {
+	if t.ScrapeInterval == nil {
+		return 0, nil
+	}
+	interval, err := time.ParseDuration(*t.ScrapeInterval)
+	if err != nil {
+		return 0, fmt.Errorf("scrape-interval %q must be a positive Go duration: %w", *t.ScrapeInterval, err)
+	}
+	if interval <= 0 {
+		return 0, fmt.Errorf("scrape-interval %q must be greater than 0", *t.ScrapeInterval)
+	}
+	return interval, nil
 }
 
 type PrometheusRemoteWrite struct {

@@ -218,21 +218,9 @@ func realMain(ctx *cli.Context) error {
 		addLabels := mergeMaps(cfg.AddLabels, cfg.PrometheusScrape.AddLabels)
 		addLabels["adxmon_database"] = cfg.PrometheusScrape.Database
 
-		var staticTargets []collector.ScrapeTarget
-		for _, target := range cfg.PrometheusScrape.StaticScrapeTarget {
-			if match, err := regexp.MatchString(target.HostRegex, hostname); err != nil {
-				return fmt.Errorf("failed to match hostname %s with regex %s: %w", hostname, target.HostRegex, err)
-			} else if !match {
-				continue
-			}
-
-			staticTargets = append(staticTargets, collector.ScrapeTarget{
-				Static:    true,
-				Addr:      target.URL,
-				Namespace: target.Namespace,
-				Pod:       target.Pod,
-				Container: target.Container,
-			})
+		staticTargets, err := staticScrapeTargets(cfg.PrometheusScrape.StaticScrapeTarget, hostname)
+		if err != nil {
+			return err
 		}
 
 		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
@@ -1090,4 +1078,28 @@ func getMetricsExporters(exporterNames []string, exporters *config.Exporters, ca
 		cache[exporterName] = remoteClient
 	}
 	return remoteClients, nil
+}
+
+func staticScrapeTargets(targets []*config.ScrapeTarget, hostname string) ([]collector.ScrapeTarget, error) {
+	var staticTargets []collector.ScrapeTarget
+	for i, target := range targets {
+		if match, err := regexp.MatchString(target.HostRegex, hostname); err != nil {
+			return nil, fmt.Errorf("failed to match hostname %s with regex %s: %w", hostname, target.HostRegex, err)
+		} else if !match {
+			continue
+		}
+		interval, err := target.ParseScrapeInterval()
+		if err != nil {
+			return nil, fmt.Errorf("prom-scrape.static-scrape-target[%d].%w", i, err)
+		}
+		staticTargets = append(staticTargets, collector.ScrapeTarget{
+			Static:         true,
+			Addr:           target.URL,
+			Namespace:      target.Namespace,
+			Pod:            target.Pod,
+			Container:      target.Container,
+			ScrapeInterval: interval,
+		})
+	}
+	return staticTargets, nil
 }
