@@ -178,20 +178,22 @@ Kusto for every row as `ingestion_time() - emitted_ms`, so it does not include
 polling or query round trips.
 
 ```bash
+RG=my-adx-mon-test   # your resource group
+
 # Optional: record an environment whose state file was lost (never deleted by
 # this tool), and scale it so peer transfers run across nodes.
-tools/dev/azure-test-env/cluster.sh adopt --subscription '<sub>' --resource-group jw-adx-mon
-tools/dev/azure-test-env/cluster.sh scale --resource-group jw-adx-mon --node-count 3
+tools/dev/azure-test-env/cluster.sh adopt --subscription '<sub>' --resource-group "$RG"
+tools/dev/azure-test-env/cluster.sh scale --resource-group "$RG" --node-count 3
 
 # Build both sides once. Images are tagged by commit; the workload by its sources.
-tools/dev/azure-test-env/soak.sh build --resource-group jw-adx-mon \
+tools/dev/azure-test-env/soak.sh build --resource-group "$RG" \
   --ref origin/main --ref my-branch
 #   origin/main: --tag <a> --workload-tag <wl>
 #   my-branch:   --tag <b> --workload-tag <wl>
 
-tools/dev/azure-test-env/soak.sh soak --resource-group jw-adx-mon --tag <a> --label main --scenario steady
-tools/dev/azure-test-env/soak.sh soak --resource-group jw-adx-mon --tag <b> --label branch --scenario steady
-tools/dev/azure-test-env/soak.sh compare .adx-mon-test-env/results/jw-adx-mon/soak/{main,branch}-steady-*
+tools/dev/azure-test-env/soak.sh soak --resource-group "$RG" --tag <a> --label main --scenario steady
+tools/dev/azure-test-env/soak.sh soak --resource-group "$RG" --tag <b> --label branch --scenario steady
+tools/dev/azure-test-env/soak.sh compare .adx-mon-test-env/results/"$RG"/soak/{main,branch}-steady-*
 ```
 
 Each soak deploys 3 ingestors (`--ingestor-replicas`), a load Deployment
