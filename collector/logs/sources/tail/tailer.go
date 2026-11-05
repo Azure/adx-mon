@@ -86,7 +86,7 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 	tailer.wg.Add(1)
 	go func() {
 		defer tailer.wg.Done()
-		readLines(tailer, config.UpdateChan, batchQueue)
+		readLines(ctx, tailer, config.UpdateChan, batchQueue)
 	}()
 
 	batchConfig := engine.BatchConfig{
@@ -145,10 +145,14 @@ func (t *Tailer) Wait() {
 	t.wg.Wait()
 }
 
-// Consumes until tailer.tail is closed
-func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue chan<- *types.Log) {
+// Consumes until tailer.tail is closed or ctx is done.  A line still waiting for room in outputQueue when ctx is done
+// is dropped: the batcher stops reading at shutdown, and the line was never acknowledged, so it is read again from the
+// cursor on restart.
+func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue chan<- *types.Log) {
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		// Receive updates from the optional updateChannel.
 		case newTarget, ok := <-updateChannel:
 			if ok {
@@ -202,7 +206,13 @@ func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue 
 			log.SetAttributeValue(cursor_file_id, currentFileId)
 			log.SetAttributeValue(cursor_file_name, tailer.tail.Filename)
 
-			outputQueue <- log
+			select {
+			case outputQueue <- log:
+			case <-ctx.Done():
+				log.Reset()
+				types.LogPool.Put(log)
+				return
+			}
 		}
 	}
 }
