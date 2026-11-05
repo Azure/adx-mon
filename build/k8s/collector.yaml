@@ -203,9 +203,6 @@ spec:
       labels:
         adxmon: collector
       annotations:
-        adx-mon/scrape: "true"
-        adx-mon/port: "9091"
-        adx-mon/path: "/metrics"
         adx-mon/log-destination: "Logs:Collector"
         adx-mon/log-parsers: json
     spec:
@@ -414,7 +411,7 @@ spec:
         adxmon: collector
       annotations:
         adx-mon/scrape: "true"
-        adx-mon/port: "9091"
+        adx-mon/port: "metrics"
         adx-mon/path: "/metrics"
         adx-mon/log-destination: "Logs:Collector"
         adx-mon/log-parsers: json
@@ -438,6 +435,10 @@ spec:
             - "--config=/etc/config/config.toml"
             - "--hostname=$(HOSTNAME)"
             - "--host-ip=$(HOSTIP)"
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
           env:
             - name: LOG_LEVEL
               value: INFO
