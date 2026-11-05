@@ -14,8 +14,8 @@ RUN tdnf install -y \
   systemd-devel \
  && tdnf clean all
 
-# Install Go 1.26.0 to match go.mod requirements
-RUN tdnf install -y golang-1.26.0
+# Install Go 1.27.3 to meet go.mod requirements
+RUN tdnf install -y golang-1.27.3
 
 
 # Install controller-gen

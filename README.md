@@ -28,6 +28,14 @@ collection and analysis of observability data.
 
 ## Development
 
+Building from source requires Go 1.27 or newer.
+
+Compare the collector's JSON v2 streaming parser with the legacy parsing path:
+
+```bash
+go test ./collector/logs/transforms/parser -run '^$' -bench '^BenchmarkJsonParseVersions$' -benchmem
+```
+
 For repeatable tests of a local branch against real AKS and Azure Data Explorer,
 see [the Azure E2E environment harness](tools/dev/azure-test-env/README.md).
 

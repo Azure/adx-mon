@@ -89,6 +89,12 @@ adx-mon/log-destination: "Logs:Collector"
 adx-mon/log-parsers: json
 ```
 
+The JSON parser uses Go's JSON v2 streaming API while preserving its existing
+behavior: numbers become `float64`, duplicate object keys use the last value,
+and invalid UTF-8 is replaced with the Unicode replacement character. If parsing
+fails, the collector tries the next configured parser, or retains the raw line in
+the `message` field if none succeeds.
+
 ## Query Your Data
 
 After bootstrapping, the provided ADX cluster will begin to populate with metrics and logs. The `Metrics` database is configured with a default `30s` batch latency for ADX ingestion to optimize for latency, while `Logs` is configured with a default of `5m` to optimize for throughput.

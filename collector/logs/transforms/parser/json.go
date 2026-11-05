@@ -1,8 +1,10 @@
 package parser
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
+	"strings"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 )
@@ -18,11 +20,12 @@ type JsonParserConfig struct {
 }
 
 type JsonParser struct {
-	parsed map[string]interface{}
+	parsed map[string]any
+	reader strings.Reader
 }
 
 func NewJsonParser(config JsonParserConfig) (*JsonParser, error) {
-	return &JsonParser{parsed: make(map[string]interface{})}, nil
+	return &JsonParser{parsed: make(map[string]any)}, nil
 }
 
 // Attempts to parse the message as JSON and adds the parsed fields to the log body.
@@ -33,7 +36,13 @@ func (p *JsonParser) Parse(log *types.Log, msg string) error {
 	}
 
 	clear(p.parsed)
-	if err := json.Unmarshal([]byte(msg), &p.parsed); err != nil {
+	p.reader.Reset(msg)
+	// Preserve legacy values, but avoid the error-compatibility prescan: failed
+	// parses are never published, and callers only receive ErrNotJson.
+	err := jsonv2.UnmarshalRead(&p.reader, &p.parsed,
+		jsonv1.DefaultOptionsV1(), jsonv1.ReportErrorsWithLegacySemantics(false))
+	p.reader.Reset("")
+	if err != nil {
 		return ErrNotJson
 	}
 
