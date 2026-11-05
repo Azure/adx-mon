@@ -10,6 +10,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// newOverloadedPeerPod returns a pod whose container has been running for an hour and that stopped being ready at
+// notReady, as an ingestor does when its backlog goes over its limits.
+func newOverloadedPeerPod(name string, notReady time.Time) *v1.Pod {
+	p := newPeerPod(name, false)
+	setReadyTransition(p, notReady)
+	p.Status.ContainerStatuses = []v1.ContainerStatus{{
+		Name:  "ingestor",
+		State: v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: metav1.NewTime(notReady.Add(-time.Hour))}},
+	}}
+	return p
+}
+
+func setReadyTransition(p *v1.Pod, at time.Time) {
+	for i := range p.Status.Conditions {
+		if p.Status.Conditions[i].Type == v1.PodReady {
+			p.Status.Conditions[i].LastTransitionTime = metav1.NewTime(at)
+		}
+	}
+}
+
 func owners(c *coordinator, n int) map[string]string {
 	result := make(map[string]string, n)
 	for i := 0; i < n; i++ {
@@ -28,7 +48,7 @@ func TestCoordinator_OverloadedPeerKeepsItsTables(t *testing.T) {
 	require.NoError(t, c.syncPeers())
 	before := owners(c, 1000)
 
-	lister.pods[1] = newPeerPod("ingestor-1", false)
+	lister.pods[1] = newOverloadedPeerPod("ingestor-1", time.Now())
 	require.NoError(t, c.syncPeers())
 	moved := 0
 	for key, owner := range owners(c, 1000) {
@@ -50,13 +70,13 @@ func TestCoordinator_NotReadyPeerRemovedAfterDelay(t *testing.T) {
 	lister.pods = []*v1.Pod{newPeerPod("ingestor-0", true), newPeerPod("ingestor-1", true)}
 	require.NoError(t, c.syncPeers())
 
-	lister.pods[1] = newPeerPod("ingestor-1", false)
+	lister.pods[1] = newOverloadedPeerPod("ingestor-1", time.Now())
 	require.NoError(t, c.syncPeers())
 	require.Equal(t, 2, c.Peers().Count, "a not ready peer stays during the delay")
 
-	time.Sleep(60 * time.Millisecond)
-	require.NoError(t, c.syncPeers())
-	require.Equal(t, 1, c.Peers().Count, "a peer not ready for longer than the delay is removed")
+	// The coordinator re-syncs when the delay ends rather than waiting for its periodic resync.
+	require.Eventually(t, func() bool { return c.Peers().Count == 1 }, time.Second, 5*time.Millisecond,
+		"a peer not ready for longer than the delay is removed")
 
 	// A peer that left does not rejoin while it is not ready, and rejoins once it is.
 	require.NoError(t, c.syncPeers())
@@ -84,6 +104,55 @@ func TestCoordinator_TerminatingPeerRemoved(t *testing.T) {
 func TestCoordinator_StartingPeerDoesNotJoin(t *testing.T) {
 	c, lister := newPeerTestCoordinator(t, "ingestor-0")
 	lister.pods = []*v1.Pod{newPeerPod("ingestor-0", true), newPeerPod("ingestor-1", false)}
+	require.NoError(t, c.syncPeers())
+	require.Equal(t, 1, c.Peers().Count)
+}
+
+// Membership comes from the pods' status alone, so a coordinator that restarts while a peer is overloaded builds the
+// same partition and elects the same leader as one that saw the peer go not ready.
+func TestCoordinator_RestartedCoordinatorAgreesOnNotReadyPeer(t *testing.T) {
+	existing, existingPods := newPeerTestCoordinator(t, "ingestor-1")
+	existingPods.pods = []*v1.Pod{newPeerPod("ingestor-0", true), newPeerPod("ingestor-1", true), newPeerPod("ingestor-2", true)}
+	require.NoError(t, existing.syncPeers())
+
+	overloaded := newOverloadedPeerPod("ingestor-0", time.Now())
+	existingPods.pods[0] = overloaded
+	require.NoError(t, existing.syncPeers())
+
+	restarted, restartedPods := newPeerTestCoordinator(t, "ingestor-2")
+	restartedPods.pods = []*v1.Pod{overloaded, newPeerPod("ingestor-1", true), newPeerPod("ingestor-2", true)}
+	require.NoError(t, restarted.syncPeers())
+
+	require.Equal(t, owners(existing, 1000), owners(restarted, 1000))
+	require.False(t, existing.IsLeader())
+	require.False(t, restarted.IsLeader(), "the overloaded ingestor-0 is still the leader")
+}
+
+// An ingestor that is starting and not yet ready leaves itself out of the partition, as the other ingestors do, so it
+// neither keeps tables they send elsewhere nor acts as a second leader.
+func TestCoordinator_StartingSelfDoesNotJoin(t *testing.T) {
+	c, lister := newPeerTestCoordinator(t, "ingestor-0")
+	starting := newPeerPod("ingestor-0", false)
+	setReadyTransition(starting, time.Now().Add(-time.Second))
+	starting.Status.ContainerStatuses = []v1.ContainerStatus{{
+		Name:  "ingestor",
+		State: v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: metav1.Now()}},
+	}}
+	lister.pods = []*v1.Pod{starting, newPeerPod("ingestor-1", true)}
+	require.NoError(t, c.syncPeers())
+
+	require.False(t, c.IsLeader())
+	for _, owner := range owners(c, 100) {
+		require.Equal(t, "ingestor-1", owner)
+	}
+}
+
+// A pod whose container restarted has not been ready since it started, so it does not keep its place while it starts.
+func TestCoordinator_RestartedContainerDoesNotJoin(t *testing.T) {
+	c, lister := newPeerTestCoordinator(t, "ingestor-0")
+	restarted := newOverloadedPeerPod("ingestor-1", time.Now().Add(-time.Second))
+	restarted.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.Now()
+	lister.pods = []*v1.Pod{newPeerPod("ingestor-0", true), restarted}
 	require.NoError(t, c.syncPeers())
 	require.Equal(t, 1, c.Peers().Count)
 }

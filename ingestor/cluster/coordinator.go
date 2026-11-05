@@ -70,8 +70,11 @@ type coordinator struct {
 	// peerInfo is the last computed peer info.  It is guarded by mu.
 	peerInfo PeerInfo
 
-	// notReadySince records when each member of the partition stopped being ready.  It is guarded by mu.
-	notReadySince map[string]time.Time
+	// expiry re-syncs the peers when the next not-ready member's grace period ends, so every coordinator removes it
+	// at about the same time rather than at its next periodic resync.  It is guarded by mu.
+	expiry *time.Timer
+	// done is closed when the coordinator is closed.
+	done <-chan struct{}
 
 	subMu       sync.Mutex
 	subscribers map[int]func(PeerInfo)
@@ -131,28 +134,43 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 var peerRemovalDelay = 5 * time.Minute
 
 // isMember reports whether p belongs in the partition.  A pod joins once it is ready and stays while it is not ready
-// for up to peerRemovalDelay.  A terminating pod leaves at once.  mu must be held.
-func (c *coordinator) isMember(p *v1.Pod, now time.Time) bool {
+// for up to peerRemovalDelay.  A terminating pod leaves at once.
+//
+// Membership depends only on the pod's status in the API, never on what this coordinator has seen before, so every
+// coordinator, including one that just started, puts the same pods in the partition and elects the same leader.
+func isMember(p *v1.Pod, now time.Time) bool {
 	if p.DeletionTimestamp != nil {
-		delete(c.notReadySince, p.Name)
 		return false
 	}
 	if IsPodReady(p) {
-		delete(c.notReadySince, p.Name)
 		return true
 	}
-	if _, member := c.peers[p.Name]; !member {
-		return false
-	}
-	since, ok := c.notReadySince[p.Name]
-	if !ok {
-		if c.notReadySince == nil {
-			c.notReadySince = make(map[string]time.Time)
+	expires, ok := graceExpiry(p)
+	return ok && now.Before(expires)
+}
+
+// graceExpiry returns when a pod that went from ready to not ready leaves the partition.  It reports false for a pod
+// that has not been ready since its containers started, such as one that is starting or whose container restarted,
+// since such a pod has not joined.
+//
+// The API keeps only the Ready condition's last transition.  A pod starts not ready, before its containers start, so a
+// not-ready transition after every container started can only have come from being ready.
+func graceExpiry(p *v1.Pod) (time.Time, bool) {
+	var notReady time.Time
+	for _, cond := range p.Status.Conditions {
+		if cond.Type == v1.PodReady && cond.Status != v1.ConditionTrue {
+			notReady = cond.LastTransitionTime.Time
 		}
-		since = now
-		c.notReadySince[p.Name] = now
 	}
-	return now.Sub(since) < peerRemovalDelay
+	if notReady.IsZero() || len(p.Status.ContainerStatuses) == 0 {
+		return time.Time{}, false
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.State.Running == nil || !notReady.After(cs.State.Running.StartedAt.Time) {
+			return time.Time{}, false
+		}
+	}
+	return notReady.Add(peerRemovalDelay), true
 }
 
 func (c *coordinator) OnAdd(obj interface{}, isInitialList bool) {
@@ -203,6 +221,7 @@ func (c *coordinator) isPeer(p *v1.Pod) bool {
 func (c *coordinator) Open(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
+	c.done = ctx.Done()
 
 	tweakOptions := informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 		lo.LabelSelector = "app=ingestor"
@@ -318,6 +337,9 @@ func (c *coordinator) Owner(b []byte) (string, string) {
 
 func (c *coordinator) Close() error {
 	c.cancel()
+	c.mu.Lock()
+	c.scheduleExpiry(time.Time{})
+	c.mu.Unlock()
 	c.wg.Wait()
 	c.factory.Shutdown()
 	return nil
@@ -350,7 +372,7 @@ func (c *coordinator) syncPeersLocked() error {
 	var leastNode string
 	now := time.Now()
 	set := make(map[string]string, len(c.peers))
-	listed := make(map[string]bool, len(pods))
+	var nextExpiry time.Time
 	for _, p := range pods {
 		if p.Status.PodIP == "" {
 			continue
@@ -360,9 +382,11 @@ func (c *coordinator) syncPeersLocked() error {
 			continue
 		}
 
-		listed[p.Name] = true
-		if !c.isMember(p, now) {
+		if !isMember(p, now) {
 			continue
+		}
+		if expires, ok := graceExpiry(p); ok && !IsPodReady(p) && (nextExpiry.IsZero() || expires.Before(nextExpiry)) {
+			nextExpiry = expires
 		}
 
 		set[p.Name] = fmt.Sprintf("https://%s:9090", p.Status.PodIP)
@@ -378,11 +402,7 @@ func (c *coordinator) syncPeersLocked() error {
 		logger.Infof("Leader change: WasLeader=%t IsLeader=%t, Hostname=%s, LeastNode=%s", wasLeader, c.leader, c.opts.Hostname, leastNode)
 	}
 
-	for name := range c.notReadySince {
-		if !listed[name] {
-			delete(c.notReadySince, name)
-		}
-	}
+	c.scheduleExpiry(nextExpiry)
 
 	if len(set) == 0 {
 		return nil
@@ -407,6 +427,30 @@ func (c *coordinator) setPartitioner(set map[string]string) error {
 	}
 	c.part = part
 	return nil
+}
+
+// scheduleExpiry re-syncs the peers at expires, when a not-ready member's grace period ends.  A zero expires cancels
+// it.  mu must be held.
+func (c *coordinator) scheduleExpiry(expires time.Time) {
+	if c.expiry != nil {
+		c.expiry.Stop()
+		c.expiry = nil
+	}
+	if expires.IsZero() {
+		return
+	}
+	c.expiry = time.AfterFunc(time.Until(expires), func() {
+		if c.done != nil {
+			select {
+			case <-c.done:
+				return
+			default:
+			}
+		}
+		if err := c.syncPeers(); err != nil {
+			logger.Errorf("Failed to reconfigure peers: %s", err)
+		}
+	})
 }
 
 func (c *coordinator) resyncPeers(ctx context.Context) {
