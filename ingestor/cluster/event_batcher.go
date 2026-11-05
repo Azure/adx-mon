@@ -242,7 +242,9 @@ func (r *eventBatcher) run(ctx context.Context) {
 	}
 }
 
-// nextDeadline returns the earliest pending deadline.
+// nextDeadline returns the earliest time a pending prefix can be batched: its deadline, or its retryAfter when that is
+// later.  processPrefix skips a prefix until retryAfter, so waking for an earlier deadline would only reset an expired
+// timer over and over until the backoff ends.
 func (r *eventBatcher) nextDeadline() (time.Time, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -252,8 +254,12 @@ func (r *eventBatcher) nextDeadline() (time.Time, bool) {
 		ok   bool
 	)
 	for _, p := range r.pending {
-		if !ok || p.deadline.Before(next) {
-			next, ok = p.deadline, true
+		due := p.deadline
+		if p.retryAfter.After(due) {
+			due = p.retryAfter
+		}
+		if !ok || due.Before(next) {
+			next, ok = due, true
 		}
 	}
 	return next, ok
