@@ -144,7 +144,7 @@ lift-attributes = [
 
 Prometheus scrape discovers pods with the `adx-mon/scrape` annotation as well as any defined static scrape targets. It ships any metrics to the defined ADX database.
 
-The global `scrape-interval` is configured in seconds. To override it for all metrics endpoints on a pod, including those listed in `adx-mon/targets`, set `adx-mon/scrape-interval` to a positive Go duration:
+The global `scrape-interval` must be explicitly configured as a positive number of seconds. To override it for all metrics endpoints on a pod, including those listed in `adx-mon/targets`, set `adx-mon/scrape-interval` to a positive Go duration:
 
 ```yaml
 adx-mon/scrape: "true"
@@ -152,7 +152,20 @@ adx-mon/port: "metrics"
 adx-mon/scrape-interval: "30s"
 ```
 
-Values such as `500ms`, `15s`, and `2m` are supported. Missing or empty annotations inherit the global interval. Invalid, zero, or negative durations log a warning identifying the pod and fall back to the global interval. Changes are applied when pod discovery observes them; removing the annotation restores the default. Static targets inherit the global interval.
+Values such as `500ms`, `15s`, and `2m` are supported. Missing or empty annotations inherit the global interval. Invalid, zero, or negative durations log a warning identifying the pod and fall back to the global interval. Changes are applied when pod discovery observes them; removing the annotation restores the default. Pod annotations do not affect static targets.
+
+Each static target can independently set `scrape-interval` to a positive Go duration string such as `60s`, `500ms`, or `1m30s`. Omit the field on a static target to inherit the configured global interval. Explicitly empty, invalid, zero, and negative values fail collector configuration validation with the target index. For example:
+
+```toml
+[prometheus-scrape]
+database = 'Metrics'
+scrape-interval = 30
+static-scrape-target = [
+  { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector', scrape-interval = '60s' }
+]
+```
+
+This example scrapes the static collector target every 60 seconds; other targets without overrides still use 30 seconds. Static target matching and labels are unchanged. Static configuration changes require a collector restart. Deploy an image containing static-target interval support before enabling this field.
 
 New targets are staggered within their interval. Scrapes run serially, so scrape and forwarding durations can delay deadlines. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` continues to apply to every endpoint.
 
