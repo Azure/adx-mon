@@ -148,7 +148,10 @@ func (h *Health) SetPeerUnhealthyFor(peer string, retryAfter time.Duration) {
 	} else {
 		s.Failures++
 	}
-	s.NextCheck = now.Add(min(max(h.peerBackoff(failures), retryAfter), h.opts.UnhealthyTimeout))
+	// Never shorten a pause already in effect, such as an earlier response's Retry-After.
+	if next := now.Add(min(max(h.peerBackoff(failures), retryAfter), h.opts.UnhealthyTimeout)); next.After(s.NextCheck) {
+		s.NextCheck = next
+	}
 
 	s.Healthy = false
 	h.state[peer] = s

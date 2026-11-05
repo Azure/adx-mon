@@ -129,6 +129,17 @@ func TestHealthPeerBackoffEscalatesAndResets(t *testing.T) {
 	require.Equal(t, 1*time.Second, failAfterBackoff(h, "peer"))
 }
 
+// A concurrent request failing while the peer honors a longer Retry-After must not shorten that pause.
+func TestHealthConcurrentFailureKeepsRetryAfter(t *testing.T) {
+	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute, InitialUnhealthyTimeout: time.Second})
+	h.jitter = func(n time.Duration) time.Duration { return n }
+
+	h.SetPeerUnhealthyFor("peer", 30*time.Second)
+	h.SetPeerUnhealthy("peer")
+	require.Equal(t, 30*time.Second, time.Until(nextCheck(h, "peer")).Round(time.Second))
+	require.False(t, h.IsPeerHealthy("peer"))
+}
+
 // Without InitialUnhealthyTimeout every failure skips the peer for the full UnhealthyTimeout, as before.
 func TestHealthPeerBackoffDefaultIsUnhealthyTimeout(t *testing.T) {
 	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute})
