@@ -224,10 +224,7 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 		}
 		start := time.Now()
 		transferCtx, cancelTransfer := withTransferDeadline(ctx, size)
-		err = r.cli.Write(transferCtx, addr, filename, mr)
-		if context.Cause(transferCtx) == errTransferTimeout {
-			err = fmt.Errorf("%w after %s: %w", errTransferTimeout, transferTimeout(size), err)
-		}
+		err = transferError(transferCtx, size, r.cli.Write(transferCtx, addr, filename, mr))
 		cancelTransfer()
 		if err != nil {
 			var quota *wal.TableOverloadedError
