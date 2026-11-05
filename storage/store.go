@@ -187,34 +187,70 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 // fit.  It returns ErrMaxDiskUsageExceeded when none fit, so the request is rejected before any series is written and
 // the sender's retry of the whole request does not duplicate them.  When only the queued share of the budget is used
 // up, the realtime tables fit and the queued ones are shed, so the realtime reservation keeps realtime data flowing.
-// The estimate is the request's uncompressed CSV size, an upper bound on what its compressed WAL blocks reserve.
-func (s *LocalStore) overBudget(req *prompb.WriteRequest, tables int, key func(int) []byte) ([]bool, error) {
+//
+// The queued tables are checked against the queued share using only the queued part of the request, and the realtime
+// tables against the whole budget using only the part that is kept, so a large queued payload that is shed cannot
+// block a realtime one.  size(i) is table i's estimated size from seriesEstimate.
+func (s *LocalStore) overBudget(tables int, size func(int) int64, key func(int) []byte) ([]bool, error) {
 	a := s.opts.Admission
 	if a == nil {
 		return nil, nil
 	}
-	var size int64
-	for _, v := range req.Timeseries {
-		var labels int64
-		for l := range req.Labels(v) {
-			labels += int64(len(l.Name) + len(l.Value) + 6)
-		}
-		size += int64(len(v.Samples)) * (labels + 64)
+	var total int64
+	for i := 0; i < tables; i++ {
+		total += size(i)
 	}
-	if a.FitsAll(size) {
+	if a.FitsAll(total) {
 		return nil, nil
 	}
+
+	const (
+		noDestination = iota
+		realtimeTable
+		queuedTable
+	)
+	// Every realtime table shares one global limit and every queued table another, so any destination of a kind
+	// stands for all of them.
+	kinds := make([]int, tables)
+	var realtime, queued int64
+	var realtimeDest, queuedDest wal.Destination
+	for i := range kinds {
+		d, err := wal.DestinationFromPrefix(string(key(i)))
+		switch {
+		case err != nil:
+		case a.UsesReservation(d):
+			kinds[i], realtimeDest = realtimeTable, d
+			realtime += size(i)
+		default:
+			kinds[i], queuedDest = queuedTable, d
+			queued += size(i)
+		}
+	}
+	queuedFits := a.Fits(queuedDest, queued)
+	if queuedFits {
+		realtime += queued
+	}
+	realtimeFits := a.Fits(realtimeDest, realtime)
+
 	full := make([]bool, tables)
 	fits := false
-	for i := range full {
-		d, err := wal.DestinationFromPrefix(string(key(i)))
-		full[i] = err == nil && !a.Fits(d, size)
+	for i, kind := range kinds {
+		full[i] = (kind == realtimeTable && !realtimeFits) || (kind == queuedTable && !queuedFits)
 		fits = fits || !full[i]
 	}
 	if !fits {
 		return nil, wal.ErrMaxDiskUsageExceeded
 	}
 	return full, nil
+}
+
+// seriesEstimate is v's uncompressed CSV size, an upper bound on what its compressed WAL block reserves.
+func seriesEstimate(req *prompb.WriteRequest, v *prompb.TimeSeries) int64 {
+	var labels int64
+	for l := range req.Labels(v) {
+		labels += int64(len(l.Name) + len(l.Value) + 6)
+	}
+	return int64(len(v.Samples)) * (labels + 64)
 }
 
 func (s *LocalStore) WALCount() int {
@@ -233,8 +269,9 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 	// Each table's series are written as one block rather than one per series, since every block is compressed,
 	// checksummed, written under the segment lock and admitted separately.
 	type tableSeries struct {
-		key    []byte
-		series []*prompb.TimeSeries
+		key      []byte
+		series   []*prompb.TimeSeries
+		estimate int64
 	}
 	var tables []*tableSeries
 	byKey := make(map[string]int)
@@ -250,9 +287,10 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 			tables = append(tables, &tableSeries{key: append([]byte(nil), key...)})
 		}
 		tables[i].series = append(tables[i].series, v)
+		tables[i].estimate += seriesEstimate(req, v)
 	}
 
-	full, err := s.overBudget(req, len(tables), func(i int) []byte { return tables[i].key })
+	full, err := s.overBudget(len(tables), func(i int) int64 { return tables[i].estimate }, func(i int) []byte { return tables[i].key })
 	if err != nil {
 		return err
 	}

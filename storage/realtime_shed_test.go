@@ -69,3 +69,37 @@ func TestWriteTimeSeriesRejectsWhenRealtimeFull(t *testing.T) {
 	require.ErrorIs(t, s.WriteTimeSeries(ctx, r), wal.ErrMaxDiskUsageExceeded)
 	require.Zero(t, writtenTables(a))
 }
+
+// A large queued payload that is shed must not count against the realtime tables' budget, or it would reject a small
+// realtime portion that fits.
+func TestWriteTimeSeriesLargeQueuedPayloadDoesNotBlockRealtime(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "DB", Table: "Fast"}})
+	require.NoError(t, err)
+	a := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Global: wal.Usage{Bytes: 64 << 10}, Policy: policy, RealtimeReservedBytes: 32 << 10})
+	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: a, Policy: policy})
+	ctx := context.Background()
+	require.NoError(t, s.Open(ctx))
+	defer s.Close()
+
+	labels := []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}
+	// Fill the queued share of the budget.
+	for i := 0; ; i++ {
+		r := &prompb.WriteRequest{CommonLabels: labels, Timeseries: []*prompb.TimeSeries{newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1)}}
+		if err := s.WriteTimeSeries(ctx, r); err != nil {
+			require.ErrorIs(t, err, wal.ErrMaxDiskUsageExceeded)
+			break
+		}
+	}
+
+	// One realtime series alongside queued series whose estimate alone is larger than the whole budget.
+	r := &prompb.WriteRequest{CommonLabels: labels, Timeseries: []*prompb.TimeSeries{newTimeSeries("fast", nil, 1, 1)}}
+	for i := 0; i < 1000; i++ {
+		r.Timeseries = append(r.Timeseries, newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
+	}
+	err = s.WriteTimeSeries(ctx, r)
+
+	var outcome *storage.WriteOutcome
+	require.ErrorAs(t, err, &outcome, "the realtime series fits and should be written")
+	require.EqualValues(t, 1, outcome.Accepted)
+	require.EqualValues(t, 1000, outcome.Rejected)
+}
