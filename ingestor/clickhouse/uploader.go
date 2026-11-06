@@ -623,7 +623,7 @@ func isRetryable(err error) bool {
 	}
 
 	if netErr, ok := errors.AsType[net.Error](err); ok {
-		if netErr.Timeout() || netErr.Temporary() {
+		if netErr.Timeout() {
 			return true
 		}
 	}

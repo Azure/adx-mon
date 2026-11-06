@@ -18,11 +18,10 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
-	protoV2 "google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestLogsServiceE2E(t *testing.T) {
@@ -325,7 +324,7 @@ func TestLogsService_AllLogsDropped(t *testing.T) {
 			require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
 
 			statusResp := &statuspb.Status{}
-			require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+			require.NoError(t, proto.Unmarshal(resp.Body.Bytes(), statusResp))
 			require.Equal(t, tt.expectedMessage, statusResp.GetMessage())
 
 			require.NoError(t, store.Close())
@@ -372,7 +371,7 @@ func TestLogsService_Overloaded(t *testing.T) {
 	require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
 
 	statusResp := &statuspb.Status{}
-	require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+	require.NoError(t, proto.Unmarshal(resp.Body.Bytes(), statusResp))
 	require.Equal(t, "Overloaded. Retry later", statusResp.GetMessage())
 
 	require.NoError(t, store.Close())
@@ -511,7 +510,7 @@ func TestLogsService_ErrorStatusResponses(t *testing.T) {
 			require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
 
 			statusResp := &statuspb.Status{}
-			require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+			require.NoError(t, proto.Unmarshal(resp.Body.Bytes(), statusResp))
 			tt.assertMessage(t, statusResp.GetMessage())
 
 			require.NoError(t, store.Close())

@@ -327,7 +327,8 @@ func executeFunctionTarget(ctx context.Context, body string, target StatementExe
 	})
 	// Keep the last Kusto error when attempts are exhausted so status retains the
 	// service's diagnostic rather than a generic backoff timeout.
-	if err != nil && !stderrors.Is(err, wait.ErrWaitTimeout) {
+	attemptsExhausted := wait.Interrupted(err) && targetCtx.Err() == nil
+	if err != nil && !attemptsExhausted {
 		result.err = err
 	}
 	result.retryable = targetCtx.Err() != nil || isRetryableFunctionError(result.err)
