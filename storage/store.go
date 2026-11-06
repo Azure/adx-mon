@@ -184,13 +184,13 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 }
 
 // overBudget reports which of a request's tables might not fit in the store's global budget, or nil when they all
-// fit.  It returns ErrMaxDiskUsageExceeded when none fit, so the request is rejected before any series is written and
-// the sender's retry of the whole request does not duplicate them.  When only the queued share of the budget is used
-// up, the realtime tables fit and the queued ones are shed, so the realtime reservation keeps realtime data flowing.
+// fit.  It returns ErrMaxDiskUsageExceeded when the realtime tables do not fit, or when nothing fits, so the request
+// is rejected and retried rather than any realtime data being shed.  When only the queued share of the budget is used
+// up, the queued tables are shed and the rest are written, so the realtime reservation keeps realtime data flowing.
 //
-// The queued tables are checked against the queued share using only the queued part of the request, and the realtime
-// tables against the whole budget using only the part that is kept, so a large queued payload that is shed cannot
-// block a realtime one.  size(i) is table i's estimated size from seriesEstimate.
+// Realtime tables come first: they are checked against the whole budget using only their part of the request, so a
+// large queued payload cannot block them.  The queued tables are kept only if they fit in the queued share and also
+// fit alongside the realtime tables.  size(i) is table i's estimated size from seriesEstimate.
 func (s *LocalStore) overBudget(tables int, size func(int) int64, key func(int) []byte) ([]bool, error) {
 	a := s.opts.Admission
 	if a == nil {
@@ -226,16 +226,15 @@ func (s *LocalStore) overBudget(tables int, size func(int) int64, key func(int) 
 			queued += size(i)
 		}
 	}
-	queuedFits := a.Fits(queuedDest, queued)
-	if queuedFits {
-		realtime += queued
+	if realtime > 0 && !a.Fits(realtimeDest, realtime) {
+		return nil, wal.ErrMaxDiskUsageExceeded
 	}
-	realtimeFits := a.Fits(realtimeDest, realtime)
+	queuedFits := a.Fits(queuedDest, queued) && (realtime == 0 || a.Fits(realtimeDest, realtime+queued))
 
 	full := make([]bool, tables)
 	fits := false
 	for i, kind := range kinds {
-		full[i] = (kind == realtimeTable && !realtimeFits) || (kind == queuedTable && !queuedFits)
+		full[i] = kind == queuedTable && !queuedFits
 		fits = fits || !full[i]
 	}
 	if !fits {
