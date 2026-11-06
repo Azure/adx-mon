@@ -191,6 +191,10 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 // Realtime tables come first: they are checked against the whole budget using only their part of the request, so a
 // large queued payload cannot block them.  The queued tables are kept only if they fit in the queued share and also
 // fit alongside the realtime tables.  size(i) is table i's estimated size from seriesEstimate.
+//
+// The estimate is an upper bound, so one larger than a whole limit would be rejected even by an empty store, and the
+// sender's retries could never make progress.  Such an estimate is taken as the limit: it fits once the store is
+// empty, and the write then checks the tables' actual size.
 func (s *LocalStore) overBudget(tables int, size func(int) int64, key func(int) []byte) ([]bool, error) {
 	a := s.opts.Admission
 	if a == nil {
@@ -226,18 +230,18 @@ func (s *LocalStore) overBudget(tables int, size func(int) int64, key func(int) 
 			queued += size(i)
 		}
 	}
-	if realtime > 0 && !a.Fits(realtimeDest, realtime) {
+	if realtime > 0 && !a.FitsEstimate(realtimeDest, realtime) {
 		return nil, wal.ErrMaxDiskUsageExceeded
 	}
-	queuedFits := a.Fits(queuedDest, queued) && (realtime == 0 || a.Fits(realtimeDest, realtime+queued))
+	queuedFits := a.FitsEstimate(queuedDest, queued) && (realtime == 0 || a.FitsEstimate(realtimeDest, realtime+queued))
 
 	full := make([]bool, tables)
-	fits := false
+	anyFits := false
 	for i, kind := range kinds {
 		full[i] = kind == queuedTable && !queuedFits
-		fits = fits || !full[i]
+		anyFits = anyFits || !full[i]
 	}
-	if !fits {
+	if !anyFits {
 		return nil, wal.ErrMaxDiskUsageExceeded
 	}
 	return full, nil

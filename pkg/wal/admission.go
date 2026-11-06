@@ -187,6 +187,19 @@ func (a *Admission) Fits(d Destination, bytes int64) bool {
 	return limit <= 0 || a.totalBytes.Load()+bytes <= limit
 }
 
+// FitsEstimate is like Fits for an upper-bound estimate of the bytes.  An estimate larger than the whole limit is
+// taken as the limit, so a write whose estimate could never pass the check still fits in an empty store, and is then
+// checked against its actual size, rather than being rejected on every retry.
+func (a *Admission) FitsEstimate(d Destination, bytes int64) bool {
+	if a == nil {
+		return true
+	}
+	if limit := a.globalBytesLimit(d); limit > 0 && bytes > limit {
+		bytes = limit
+	}
+	return a.Fits(d, bytes)
+}
+
 // FitsAll reports whether bytes more fit in the global byte budget of every destination.
 func (a *Admission) FitsAll(bytes int64) bool {
 	if a == nil {

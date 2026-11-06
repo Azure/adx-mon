@@ -12,24 +12,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newFullStore returns a store whose global budget holds only a few small writes.
+// filler is the table that newFullStore fills its budget with.
+var filler = wal.Destination{Database: "DB", Table: "Filler"}
+
+// newFullStore returns a store whose global budget has room left for only a few small writes.
 func newFullStore(t *testing.T) (*storage.LocalStore, *wal.Admission) {
 	t.Helper()
-	a := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Global: wal.Usage{Bytes: 2000, Segments: 1000}})
+	a := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Global: wal.Usage{Bytes: 20000, Segments: 1000}})
 	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: a})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, s.Open(ctx))
 	t.Cleanup(func() { s.Close() })
+	r, err := a.Reserve("DB_Filler_1.wal", filler, 18000, 0)
+	require.NoError(t, err)
+	t.Cleanup(r.Release)
 	return s, a
 }
 
-// writtenTables returns the number of tables with data in the store.  A segment holding only its 8 byte header has
-// no data.
+// writtenTables returns the number of tables with data in the store, other than newFullStore's filler.  A segment
+// holding only its 8 byte header has no data.
 func writtenTables(a *wal.Admission) int {
 	n := 0
-	for _, u := range a.Snapshot() {
-		if u.Bytes > 8 {
+	for d, u := range a.Snapshot() {
+		if d != filler && u.Bytes > 8 {
 			n++
 		}
 	}
