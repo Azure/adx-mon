@@ -54,7 +54,7 @@ func newBlockStore(t *testing.T) (*storage.LocalStore, string) {
 func TestWriteTimeSeriesWritesOneBlockPerTable(t *testing.T) {
 	s, dir := newBlockStore(t)
 	req := &prompb.WriteRequest{}
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		req.Timeseries = append(req.Timeseries, newTimeSeries(fmt.Sprintf("metric%d", i%100), map[string]string{"adxmon_database": "DB", "series": fmt.Sprint(i)}, 1, 1))
 	}
 	require.NoError(t, s.WriteTimeSeries(context.Background(), req))
@@ -70,7 +70,7 @@ func TestWriteTimeSeriesWritesOneBlockPerTable(t *testing.T) {
 func TestWriteNativeLogsWritesOneBlockPerTable(t *testing.T) {
 	s, dir := newBlockStore(t)
 	batch := &types.LogBatch{}
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		log := types.NewLog()
 		log.SetAttributeValue(types.AttributeDatabaseName, "DB")
 		log.SetAttributeValue(types.AttributeTableName, fmt.Sprintf("Table%d", i%10))
@@ -92,15 +92,14 @@ func BenchmarkWriteNativeLogs(b *testing.B) {
 	require.NoError(b, s.Open(context.Background()))
 	defer s.Close()
 	batch := &types.LogBatch{}
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		log := types.NewLog()
 		log.SetAttributeValue(types.AttributeDatabaseName, "DB")
 		log.SetAttributeValue(types.AttributeTableName, fmt.Sprintf("Table%d", i%10))
 		log.SetBodyValue("message", fmt.Sprintf("line %d", i))
 		batch.Logs = append(batch.Logs, log)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		require.NoError(b, s.WriteNativeLogs(context.Background(), batch))
 	}
 }

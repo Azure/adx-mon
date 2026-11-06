@@ -957,8 +957,7 @@ func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 		Timeseries: []*prompb.TimeSeries{ts},
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		f.TransformWriteRequest(wr)
 	}
 }

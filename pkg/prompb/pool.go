@@ -13,7 +13,7 @@ type Pool[T Resetter] struct {
 
 func NewPool[T Resetter](new func() T) *Pool[T] {
 	return &Pool[T]{
-		p:   &sync.Pool{New: func() interface{} { return new() }},
+		p:   &sync.Pool{New: func() any { return new() }},
 		New: new,
 	}
 }

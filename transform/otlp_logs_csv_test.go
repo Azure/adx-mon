@@ -263,8 +263,7 @@ func BenchmarkMarshalCSV_OTLPLog(b *testing.B) {
 		Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w.MarshalLog(logs)
 	}
 }
@@ -311,9 +310,9 @@ type logrecord struct {
 	SpanId            string
 	SeverityText      string
 	SeverityNumber    string
-	Body              map[string]interface{}
-	Resource          map[string]interface{}
-	Attributes        map[string]interface{}
+	Body              map[string]any
+	Resource          map[string]any
+	Attributes        map[string]any
 }
 
 func getLogRecord(fields []string) (*logrecord, error) {
@@ -321,17 +320,17 @@ func getLogRecord(fields []string) (*logrecord, error) {
 		return nil, fmt.Errorf("expected 9 fields, got %d", len(fields))
 	}
 
-	body := map[string]interface{}{}
+	body := map[string]any{}
 	if err := json.Unmarshal([]byte(fields[6]), &body); err != nil {
 		return nil, err
 	}
 
-	resource := map[string]interface{}{}
+	resource := map[string]any{}
 	if err := json.Unmarshal([]byte(fields[7]), &resource); err != nil {
 		return nil, err
 	}
 
-	attributes := map[string]interface{}{}
+	attributes := map[string]any{}
 	if err := json.Unmarshal([]byte(fields[8]), &attributes); err != nil {
 		return nil, err
 	}
@@ -356,8 +355,7 @@ func BenchmarkProtojson(b *testing.B) {
 	// the serialized format, so we want to make sure we're benchmarking apples to apples.
 	var buf bytes.Buffer
 	logRecord := log.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		body := logRecord.GetBody().GetKvlistValue()
 		serialized, _ := protojson.Marshal(body)
@@ -381,8 +379,7 @@ func BenchmarkSerializeKvList(b *testing.B) {
 
 	var buf strings.Builder
 	logRecord := log.ResourceLogs[0].ScopeLogs[0].LogRecords[0]
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		body := logRecord.GetBody()
 		serializeAnyValue(&buf, body, 0)
 	}
@@ -411,25 +408,25 @@ func prettyPrintOTLPCSV(s string) string {
 		return "malformed fields"
 	}
 
-	sb.WriteString(fmt.Sprintf("CSV: %s\n", s))
-	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", fields[0]))
-	sb.WriteString(fmt.Sprintf("ObservedTimestamp: %s\n", fields[1]))
-	sb.WriteString(fmt.Sprintf("TraceId: %s\n", fields[2]))
-	sb.WriteString(fmt.Sprintf("SpanId: %s\n", fields[3]))
-	sb.WriteString(fmt.Sprintf("SeverityText: %s\n", fields[4]))
-	sb.WriteString(fmt.Sprintf("SeverityNumber: %s\n", fields[5]))
+	fmt.Fprintf(&sb, "CSV: %s\n", s)
+	fmt.Fprintf(&sb, "Timestamp: %s\n", fields[0])
+	fmt.Fprintf(&sb, "ObservedTimestamp: %s\n", fields[1])
+	fmt.Fprintf(&sb, "TraceId: %s\n", fields[2])
+	fmt.Fprintf(&sb, "SpanId: %s\n", fields[3])
+	fmt.Fprintf(&sb, "SeverityText: %s\n", fields[4])
+	fmt.Fprintf(&sb, "SeverityNumber: %s\n", fields[5])
 
 	body := prettyPrintJSON(fields[6])
 	if body == "" {
 		body = fields[6]
 	}
-	sb.WriteString(fmt.Sprintf("Body: %s\n", body))
+	fmt.Fprintf(&sb, "Body: %s\n", body)
 
 	resource := prettyPrintJSON(fields[7])
-	sb.WriteString(fmt.Sprintf("Resource: %s\n", resource))
+	fmt.Fprintf(&sb, "Resource: %s\n", resource)
 
 	attributes := prettyPrintJSON(fields[8])
-	sb.WriteString(fmt.Sprintf("Attributes: %s\n", attributes))
+	fmt.Fprintf(&sb, "Attributes: %s\n", attributes)
 
 	return sb.String()
 }

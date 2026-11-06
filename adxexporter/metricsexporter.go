@@ -3,6 +3,7 @@ package adxexporter
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -108,13 +109,9 @@ func (r *MetricsExporterReconciler) initOtlpExporter() error {
 	// ClusterLabels provide a base set of resource attributes for identification.
 	// AddResourceAttributes allows explicit overrides or additional attributes.
 	resourceAttrs := make(map[string]string, len(r.ClusterLabels)+len(r.AddResourceAttributes))
-	for k, v := range r.ClusterLabels {
-		resourceAttrs[k] = v
-	}
+	maps.Copy(resourceAttrs, r.ClusterLabels)
 	// Explicit attributes take precedence over cluster labels
-	for k, v := range r.AddResourceAttributes {
-		resourceAttrs[k] = v
-	}
+	maps.Copy(resourceAttrs, r.AddResourceAttributes)
 
 	// Create a pass-through transformer (no filtering - KQL already selected the data)
 	transformer := &transform.RequestTransformer{

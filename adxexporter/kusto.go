@@ -76,7 +76,7 @@ func (k *KustoClient) Mgmt(ctx context.Context, query azkustodata.Statement, opt
 
 // QueryResult represents the result of a KQL query execution
 type QueryResult struct {
-	Rows     []map[string]interface{}
+	Rows     []map[string]any
 	Error    error
 	Duration time.Duration
 }
@@ -147,8 +147,8 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 }
 
 // iterativeDatasetToRows converts a streamed Kusto query dataset to a slice of row maps.
-func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]map[string]interface{}, error) {
-	var rows []map[string]interface{}
+func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]map[string]any, error) {
+	var rows []map[string]any
 
 	for tableResult := range ds.Tables() {
 		if err := tableResult.Err(); err != nil {
@@ -171,7 +171,7 @@ func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]
 			row := rowResult.Row()
 			columns := row.Columns()
 			values := row.Values()
-			rowMap := make(map[string]interface{}, len(columns))
+			rowMap := make(map[string]any, len(columns))
 			for i, col := range columns {
 				if i < len(values) {
 					rowMap[col.Name()] = materializeKustoValue(values[i])
@@ -187,7 +187,7 @@ func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]
 }
 
 // materializeKustoValue converts azkustodata value wrappers to plain Go scalars.
-func materializeKustoValue(kustoValue azvalue.Kusto) interface{} {
+func materializeKustoValue(kustoValue azvalue.Kusto) any {
 	if isNilValue(kustoValue) {
 		return nil
 	}
@@ -198,21 +198,21 @@ func materializeKustoValue(kustoValue azvalue.Kusto) interface{} {
 	}
 
 	value := reflect.ValueOf(rawValue)
-	if value.Kind() == reflect.Ptr {
+	if value.Kind() == reflect.Pointer {
 		return value.Elem().Interface()
 	}
 
 	return rawValue
 }
 
-func isNilValue(value interface{}) bool {
+func isNilValue(value any) bool {
 	if value == nil {
 		return true
 	}
 
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return reflected.IsNil()
 	default:
 		return false

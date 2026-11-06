@@ -9,7 +9,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -74,7 +73,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":         "pod1",
 						"namespace":   "namespace1",
 						"container":   "container1",
@@ -94,7 +93,7 @@ func TestGetFileTargets(t *testing.T) {
 				Table:    "table1",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":         "pod1",
 					"namespace":   "namespace1",
 					"container":   "container1",
@@ -114,7 +113,7 @@ func TestGetFileTargets(t *testing.T) {
 				Table:    "table1",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":         "pod1",
 					"namespace":   "namespace1",
 					"container":   "container1",
@@ -146,7 +145,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":         "pod1",
 						"namespace":   "namespace1",
 						"container":   "container1",
@@ -158,14 +157,12 @@ func TestGetFileTargets(t *testing.T) {
 		{
 			name: "Pod is static with label selector",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pod1",
-					Namespace: "namespace1",
-					Labels: map[string]string{
-						"app": "myapp2",
-					},
-					UID: uid,
+				Name:      "pod1",
+				Namespace: "namespace1",
+				Labels: map[string]string{
+					"app": "myapp2",
 				},
+				UID: uid,
 				Spec: v1.PodSpec{
 					NodeName:   ourNode,
 					Containers: []v1.Container{{Name: "container1", Image: "image-container1"}},
@@ -201,7 +198,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table2",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":         "pod1",
 						"namespace":   "namespace1",
 						"container":   "container1",
@@ -225,7 +222,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json", "json"},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":         "pod1",
 						"namespace":   "namespace1",
 						"container":   "container1",
@@ -260,7 +257,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
@@ -275,7 +272,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container2",
@@ -289,22 +286,20 @@ func TestGetFileTargets(t *testing.T) {
 		{
 			name: "Pod has log destination and parser and multiple types of containers",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "pod1",
-					Namespace: "namespace1",
-					Annotations: map[string]string{
-						"adx-mon/scrape":              "true",
-						"adx-mon/log-destination":     "db1:table1",
-						"adx-mon/log-parsers":         "json",
-						"cni.projectcalico.org/podIP": "10.10.10.10",
-					},
-					UID: uid,
+				Name:      "pod1",
+				Namespace: "namespace1",
+				Annotations: map[string]string{
+					"adx-mon/scrape":              "true",
+					"adx-mon/log-destination":     "db1:table1",
+					"adx-mon/log-parsers":         "json",
+					"cni.projectcalico.org/podIP": "10.10.10.10",
 				},
+				UID: uid,
 				Spec: v1.PodSpec{
 					NodeName:            ourNode,
 					Containers:          []v1.Container{{Name: "container1", Image: "image-container1"}},
 					InitContainers:      []v1.Container{{Name: "init-container1", Image: "image-container2"}},
-					EphemeralContainers: []v1.EphemeralContainer{{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "ephemeral-container1", Image: "image-container3"}}},
+					EphemeralContainers: []v1.EphemeralContainer{{Name: "ephemeral-container1", Image: "image-container3"}},
 				},
 				Status: v1.PodStatus{
 					ContainerStatuses: []v1.ContainerStatus{
@@ -346,7 +341,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
@@ -360,7 +355,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "init-container1",
@@ -374,7 +369,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
-					Resources: map[string]interface{}{
+					Resources: map[string]any{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "ephemeral-container1",
@@ -411,7 +406,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -423,7 +418,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -547,7 +542,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -559,7 +554,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod2",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -575,7 +570,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -587,7 +582,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -604,7 +599,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -616,7 +611,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
-				Resources: map[string]interface{}{
+				Resources: map[string]any{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 				},
@@ -644,11 +639,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Exact match with name and namespace",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					UID:       uid,
-				},
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name:      "test-pod",
@@ -659,11 +652,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Match with only namespace",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "any-pod",
-					Namespace: "test-namespace",
-					UID:       uid,
-				},
+				Name:      "any-pod",
+				Namespace: "test-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Namespace: "test-namespace",
@@ -673,11 +664,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Match with only name",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "any-namespace",
-					UID:       uid,
-				},
+				Name:      "test-pod",
+				Namespace: "any-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name: "test-pod",
@@ -687,14 +676,12 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Match with single label",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"app": "myapp",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app": "myapp",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -706,16 +693,14 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Match with multiple labels",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"app":     "myapp",
-						"version": "v1.0",
-						"env":     "prod",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app":     "myapp",
+					"version": "v1.0",
+					"env":     "prod",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -728,14 +713,12 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Match with name, namespace, and labels",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"app": "myapp",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app": "myapp",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name:      "test-pod",
@@ -749,11 +732,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "No criteria - matches any pod",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "any-pod",
-					Namespace: "any-namespace",
-					UID:       uid,
-				},
+				Name:      "any-pod",
+				Namespace: "any-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{},
 			expected:  true,
@@ -761,11 +742,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Namespace mismatch",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "wrong-namespace",
-					UID:       uid,
-				},
+				Name:      "test-pod",
+				Namespace: "wrong-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Namespace: "test-namespace",
@@ -775,11 +754,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Name mismatch",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "wrong-pod",
-					Namespace: "test-namespace",
-					UID:       uid,
-				},
+				Name:      "wrong-pod",
+				Namespace: "test-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name: "test-pod",
@@ -789,14 +766,12 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Label mismatch - wrong value",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"app": "wrong-app",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app": "wrong-app",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -808,14 +783,12 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Label mismatch - missing label",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"version": "v1.0",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"version": "v1.0",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -827,11 +800,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Label mismatch - pod has no labels",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					UID:       uid,
-				},
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -843,15 +814,13 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Partial label match fails - all labels must match",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"app":     "myapp",
-						"version": "wrong-version",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app":     "myapp",
+					"version": "wrong-version",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -864,11 +833,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Name matches but namespace mismatches",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "wrong-namespace",
-					UID:       uid,
-				},
+				Name:      "test-pod",
+				Namespace: "wrong-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name:      "test-pod",
@@ -879,11 +846,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Namespace matches but name mismatches",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "wrong-pod",
-					Namespace: "test-namespace",
-					UID:       uid,
-				},
+				Name:      "wrong-pod",
+				Namespace: "test-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name:      "test-pod",
@@ -894,14 +859,12 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Labels match but namespace mismatches",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "wrong-namespace",
-					Labels: map[string]string{
-						"app": "myapp",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "wrong-namespace",
+				Labels: map[string]string{
+					"app": "myapp",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Namespace: "test-namespace",
@@ -914,11 +877,9 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Empty string fields treated as unspecified",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					UID:       uid,
-				},
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				UID:       uid,
 			},
 			staticPod: &StaticPodTargets{
 				Name:      "",
@@ -929,17 +890,15 @@ func TestCheckStaticPodMatch(t *testing.T) {
 		{
 			name: "Pod has extra labels - still matches if required labels match",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						"app":        "myapp",
-						"version":    "v1.0",
-						"extra":      "value",
-						"kubernetes": "label",
-					},
-					UID: uid,
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app":        "myapp",
+					"version":    "v1.0",
+					"extra":      "value",
+					"kubernetes": "label",
 				},
+				UID: uid,
 			},
 			staticPod: &StaticPodTargets{
 				Labels: map[string]string{
@@ -979,12 +938,10 @@ func genPod(name, namespace, nodeName string, containerNames []string, annotatio
 		})
 	}
 	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   namespace,
-			Annotations: annotations,
-			UID:         uid,
-		},
+		Name:        name,
+		Namespace:   namespace,
+		Annotations: annotations,
+		UID:         uid,
 		Spec: v1.PodSpec{
 			NodeName:   nodeName,
 			Containers: containers,
@@ -1015,13 +972,11 @@ func genPodWithLabels(name, namespace, nodeName string, containerNames []string,
 		})
 	}
 	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   namespace,
-			Annotations: annotations,
-			Labels:      labels,
-			UID:         uid,
-		},
+		Name:        name,
+		Namespace:   namespace,
+		Annotations: annotations,
+		Labels:      labels,
+		UID:         uid,
 		Spec: v1.PodSpec{
 			NodeName:   nodeName,
 			Containers: containers,

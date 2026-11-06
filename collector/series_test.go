@@ -13,8 +13,8 @@ func TestSeriesCreator(t *testing.T) {
 	m := &io_prometheus_client.Metric{
 		Label: []*io_prometheus_client.LabelPair{
 			{
-				Name:  strPtr("label1"),
-				Value: strPtr("value1"),
+				Name:  new("label1"),
+				Value: new("value1"),
 			},
 		},
 	}
@@ -32,8 +32,8 @@ func TestSeriesCreator_MixedCase(t *testing.T) {
 	m := &io_prometheus_client.Metric{
 		Label: []*io_prometheus_client.LabelPair{
 			{
-				Name:  strPtr("Capital"),
-				Value: strPtr("value1"),
+				Name:  new("Capital"),
+				Value: new("value1"),
 			},
 		},
 	}
@@ -71,8 +71,8 @@ func TestSeriesCreator_AddLabels(t *testing.T) {
 	m := &io_prometheus_client.Metric{
 		Label: []*io_prometheus_client.LabelPair{
 			{
-				Name:  strPtr("foo"),
-				Value: strPtr("bar"),
+				Name:  new("foo"),
+				Value: new("bar"),
 			},
 		},
 	}
@@ -98,6 +98,7 @@ func TestSeriesCreator_AddLabels(t *testing.T) {
 	require.Equal(t, "bar", string(series.Labels[4].Value))
 }
 
+//go:fix inline
 func strPtr(s string) *string {
-	return &s
+	return new(s)
 }

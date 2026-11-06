@@ -58,10 +58,8 @@ func TestCRDs(t *testing.T) {
 
 	// Create a SummaryRule object
 	sr := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      typeNamespacedName.Name,
-			Namespace: typeNamespacedName.Namespace,
-		},
+		Name:      typeNamespacedName.Name,
+		Namespace: typeNamespacedName.Namespace,
 		Spec: adxmonv1.SummaryRuleSpec{
 			Interval: metav1.Duration{Duration: time.Minute},
 			// Minimal valid spec to satisfy CRD validation; other fields optional for this test

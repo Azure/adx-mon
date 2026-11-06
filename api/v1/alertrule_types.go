@@ -71,7 +71,7 @@ type AlertRuleSpec struct {
 // Criteria field.  The older version was a map[string]string.  This function will convert the older version to the
 // new version.
 func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
-	rule := make(map[string]interface{})
+	rule := make(map[string]any)
 	if err := json.Unmarshal(data, &rule); err != nil {
 		return err
 	}
@@ -104,13 +104,13 @@ func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
 	// The type for Criteria has changed to map[string][]string.  This handles backwards compatibility where
 	// some existing alerts may have a string value instead of a list of strings.
 	criteria := rule["criteria"]
-	if s, ok := criteria.(map[string]interface{}); ok && s != nil {
+	if s, ok := criteria.(map[string]any); ok && s != nil {
 		a.Criteria = make(map[string][]string)
 		for k, raw := range s {
 			switch val := raw.(type) {
 			case string:
 				a.Criteria[k] = []string{val}
-			case []interface{}:
+			case []any:
 				for _, v := range val {
 					if str, ok := v.(string); ok {
 						a.Criteria[k] = append(a.Criteria[k], str)

@@ -37,11 +37,11 @@ type LogToFluentExporter struct {
 func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter, error) {
 	var destination string
 	var destinationNetwork string
-	if strings.HasPrefix(opts.Destination, "unix://") {
-		destination = strings.TrimPrefix(opts.Destination, "unix://")
+	if after, ok := strings.CutPrefix(opts.Destination, "unix://"); ok {
+		destination = after
 		destinationNetwork = "unix"
-	} else if strings.HasPrefix(opts.Destination, "tcp://") {
-		destination = strings.TrimPrefix(opts.Destination, "tcp://")
+	} else if after, ok := strings.CutPrefix(opts.Destination, "tcp://"); ok {
+		destination = after
 		destinationNetwork = "tcp"
 	} else {
 		return nil, fmt.Errorf("invalid destination %s: must be in the form tcp://<host>:<port> or unix:///path/to/socket", opts.Destination)
@@ -55,7 +55,7 @@ func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter,
 		destinationNetwork: destinationNetwork,
 		destination:        destination,
 		encoderPool: &sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				return newFluentEncoder(opts.TagAttribute)
 			},
 		},

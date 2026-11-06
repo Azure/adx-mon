@@ -113,7 +113,7 @@ func targetForContainer(pod *v1.Pod, containerStatuses []v1.ContainerStatus, par
 		logger.Debugf("Found target: file:%s database:%s table:%s parsers:%v", logFile, podDB, podTable, parserList)
 	}
 
-	resourceValues := map[string]interface{}{
+	resourceValues := map[string]any{
 		"pod":         pod.Name,
 		"namespace":   pod.Namespace,
 		"container":   containerName,

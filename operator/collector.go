@@ -17,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -178,10 +177,8 @@ func (r *CollectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 			// Enqueue reconcile request for this Collector since it may need to update its endpoint
 			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      collector.Name,
-					Namespace: collector.Namespace,
-				},
+				Name:      collector.Name,
+				Namespace: collector.Namespace,
 			})
 			logger.Infof("Enqueuing reconcile request for Collector %s/%s due to change in Ingestor %s/%s", collector.Namespace, collector.Name, ingestor.Namespace, ingestor.Name)
 

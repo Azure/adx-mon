@@ -113,11 +113,11 @@ func TestClient_Write_Gzip_ConcurrentReuse(t *testing.T) {
 	const workers, perWorker = 16, 25
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(w int) {
 			defer wg.Done()
-			payload := bytes.Repeat([]byte(fmt.Sprintf("worker-%02d-data ", w)), 2048) // ~32 KiB each, distinct per worker
-			for i := 0; i < perWorker; i++ {
+			payload := bytes.Repeat(fmt.Appendf(nil, "worker-%02d-data ", w), 2048) // ~32 KiB each, distinct per worker
+			for range perWorker {
 				err := client.Write(context.Background(), server.URL, "testfile", bytes.NewReader(payload))
 				require.NoError(t, err)
 			}
@@ -150,8 +150,7 @@ func BenchmarkClientWrite_GzipReuse(b *testing.B) {
 	payload := bytes.Repeat([]byte("metric,value,timestamp\n"), 4096)
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if err := client.Write(context.Background(), server.URL, "testfile", bytes.NewReader(payload)); err != nil {
 			b.Fatal(err)
 		}
@@ -276,7 +275,7 @@ func TestClient_Write_GzipGoroutineExitsWhenRequestFails(t *testing.T) {
 
 	defer goleak.VerifyNone(t)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err = client.Write(context.Background(), endpoint, "testfile", strings.NewReader("testdata"))
 		require.Error(t, err)
 	}

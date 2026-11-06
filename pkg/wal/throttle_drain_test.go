@@ -63,7 +63,7 @@ func TestThrottledReleasePreservesWrittenData(t *testing.T) {
 
 	payload := make([]byte, 64)
 	accepted := 0
-	for n := 0; n < 100; n++ {
+	for range 100 {
 		if err := w.Write(context.Background(), payload); err != nil {
 			break
 		}

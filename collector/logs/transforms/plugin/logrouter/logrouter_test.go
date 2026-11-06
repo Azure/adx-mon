@@ -10,7 +10,7 @@ import (
 )
 
 func TestFromConfigMap(t *testing.T) {
-	transformer, err := FromConfigMap(map[string]interface{}{})
+	transformer, err := FromConfigMap(map[string]any{})
 	require.NoError(t, err)
 	require.NotNil(t, transformer)
 	assert.Equal(t, "LogRouterTransform", transformer.Name())
@@ -26,7 +26,7 @@ func TestTransform_LogSources(t *testing.T) {
 		{
 			name: "no annotations - unchanged",
 			log: types.LogLiteral{
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -38,10 +38,10 @@ func TestTransform_LogSources(t *testing.T) {
 		{
 			name: "single source match",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "mySource:DestDB:DestTable",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -53,10 +53,10 @@ func TestTransform_LogSources(t *testing.T) {
 		{
 			name: "multiple sources - second matches",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "srcA:DBA:TableA,srcB:DBB:TableB",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -68,10 +68,10 @@ func TestTransform_LogSources(t *testing.T) {
 		{
 			name: "source no match - unchanged",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "srcA:DBA:TableA",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -83,10 +83,10 @@ func TestTransform_LogSources(t *testing.T) {
 		{
 			name: "malformed source entry - skipped",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "srcA:DBA",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -98,10 +98,10 @@ func TestTransform_LogSources(t *testing.T) {
 		{
 			name: "empty source body field",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "srcA:DBA:TableA",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -143,10 +143,10 @@ func TestTransform_LogKeys(t *testing.T) {
 		{
 			name: "single key match",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "myKey:myVal:DestDB:DestTable",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -158,10 +158,10 @@ func TestTransform_LogKeys(t *testing.T) {
 		{
 			name: "multiple keys - second matches",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "k1:v1:DB1:T1,k2:v2:DB2:T2",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -173,10 +173,10 @@ func TestTransform_LogKeys(t *testing.T) {
 		{
 			name: "key present but wrong value - unchanged",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "myKey:expected:DestDB:DestTable",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -188,10 +188,10 @@ func TestTransform_LogKeys(t *testing.T) {
 		{
 			name: "malformed key entry - skipped",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "k1:v1",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -233,10 +233,10 @@ func TestTransform_NonStringBodyValues(t *testing.T) {
 		{
 			name: "log-sources with bool source value",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "true:Logs:BoolTable",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -248,10 +248,10 @@ func TestTransform_NonStringBodyValues(t *testing.T) {
 		{
 			name: "log-keys with integer body value",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "code:500:Logs:Errors",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -263,10 +263,10 @@ func TestTransform_NonStringBodyValues(t *testing.T) {
 		{
 			name: "log-keys with float body value",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "score:3.14:Logs:Scores",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -278,10 +278,10 @@ func TestTransform_NonStringBodyValues(t *testing.T) {
 		{
 			name: "log-keys with nil body value - no match",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "missing:val:Logs:Table",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -313,11 +313,11 @@ func TestTransform_NonStringBodyValues(t *testing.T) {
 func TestTransform_LogSourcesTakesPrecedence(t *testing.T) {
 	// When both log-sources and log-keys match, log-sources wins.
 	log := types.LogLiteral{
-		Resource: map[string]interface{}{
+		Resource: map[string]any{
 			ResourceLogSources: "src:SourceDB:SourceTable",
 			ResourceLogKeys:    "myKey:myVal:KeyDB:KeyTable",
 		},
-		Attributes: map[string]interface{}{
+		Attributes: map[string]any{
 			types.AttributeDatabaseName: "defaultDB",
 			types.AttributeTableName:    "defaultTable",
 		},
@@ -341,11 +341,11 @@ func TestTransform_LogSourcesTakesPrecedence(t *testing.T) {
 func TestTransform_FallsThroughToLogKeys(t *testing.T) {
 	// When log-sources doesn't match, log-keys is evaluated.
 	log := types.LogLiteral{
-		Resource: map[string]interface{}{
+		Resource: map[string]any{
 			ResourceLogSources: "noMatch:SourceDB:SourceTable",
 			ResourceLogKeys:    "myKey:myVal:KeyDB:KeyTable",
 		},
-		Attributes: map[string]interface{}{
+		Attributes: map[string]any{
 			types.AttributeDatabaseName: "defaultDB",
 			types.AttributeTableName:    "defaultTable",
 		},
@@ -376,10 +376,10 @@ func TestTransform_LogSourcesWhitespaceTrimming(t *testing.T) {
 		{
 			name: "spaces after commas",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: "srcA:DBA:TableA, srcB:DBB:TableB",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -391,10 +391,10 @@ func TestTransform_LogSourcesWhitespaceTrimming(t *testing.T) {
 		{
 			name: "spaces around colons",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogSources: " srcA : DBA : TableA ",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -433,10 +433,10 @@ func TestTransform_LogKeysWhitespaceTrimming(t *testing.T) {
 		{
 			name: "spaces after commas",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: "k1:v1:DB1:T1, k2:v2:DB2:T2",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},
@@ -448,10 +448,10 @@ func TestTransform_LogKeysWhitespaceTrimming(t *testing.T) {
 		{
 			name: "spaces around colons",
 			log: types.LogLiteral{
-				Resource: map[string]interface{}{
+				Resource: map[string]any{
 					ResourceLogKeys: " myKey : myVal : DestDB : DestTable ",
 				},
-				Attributes: map[string]interface{}{
+				Attributes: map[string]any{
 					types.AttributeDatabaseName: "defaultDB",
 					types.AttributeTableName:    "defaultTable",
 				},

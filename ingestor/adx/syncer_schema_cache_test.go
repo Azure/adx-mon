@@ -58,7 +58,7 @@ func (m *showTablesMgmt) Mgmt(ctx context.Context, _ string, query azkustodata.S
 	var rows []kustov1.RawRow
 	if strings.HasPrefix(query.String(), ".show tables") {
 		for _, name := range m.tables {
-			rows = append(rows, kustov1.RawRow{Row: []interface{}{name}})
+			rows = append(rows, kustov1.RawRow{Row: []any{name}})
 		}
 	}
 	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{{

@@ -32,7 +32,7 @@ func setReadyTransition(p *v1.Pod, at time.Time) {
 
 func owners(c *coordinator, n int) map[string]string {
 	result := make(map[string]string, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		key := fmt.Sprintf("DB_Table%d", i)
 		owner, _ := c.Owner([]byte(key))
 		result[key] = owner

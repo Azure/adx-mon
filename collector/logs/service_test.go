@@ -20,7 +20,7 @@ import (
 const sourceName = "ConstSource"
 
 func BenchmarkPipeline(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sink := sinks.NewCountingSink(10000)
 		source := sources.NewConstSource("test-val", 1*time.Second, 1000, engine.WorkerCreator(nil, []types.Sink{sink}))
 
@@ -127,11 +127,9 @@ func (s *sourceSendOnClose) Open(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	worker := s.workerGenerator(sourceName, s.outputQueue)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		worker.Run()
-	}()
+	})
 	return nil
 }
 
@@ -149,7 +147,7 @@ func (s *sourceSendOnClose) Close() error {
 	batch.Ack = func() {}
 	batch.AddLiterals([]*types.LogLiteral{
 		{
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"message": "test message",
 			},
 		},

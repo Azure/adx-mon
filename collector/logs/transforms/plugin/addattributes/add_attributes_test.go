@@ -61,12 +61,12 @@ func TestAddAttributesTransform_New(t *testing.T) {
 func TestAddAttributesTransform_FromConfigMap(t *testing.T) {
 	tests := []struct {
 		name        string
-		configMap   map[string]interface{}
+		configMap   map[string]any
 		expectError bool
 	}{
 		{
 			name: "valid config",
-			configMap: map[string]interface{}{
+			configMap: map[string]any{
 				"ResourceValues": map[string]string{
 					"environment": "test",
 					"service":     "adx-mon",
@@ -76,14 +76,14 @@ func TestAddAttributesTransform_FromConfigMap(t *testing.T) {
 		},
 		{
 			name: "missing resource_values",
-			configMap: map[string]interface{}{
+			configMap: map[string]any{
 				"wrong_key": "value",
 			},
 			expectError: true,
 		},
 		{
 			name: "resource_values not a map",
-			configMap: map[string]interface{}{
+			configMap: map[string]any{
 				"ResourceValues": "not a map",
 			},
 			expectError: true,
@@ -110,8 +110,8 @@ func TestAddAttributesTransform_Transform(t *testing.T) {
 	tests := []struct {
 		name              string
 		resourceValues    map[string]string
-		inputResources    map[string]interface{}
-		expectedResources map[string]interface{}
+		inputResources    map[string]any
+		expectedResources map[string]any
 	}{
 		{
 			name: "add new attributes",
@@ -119,10 +119,10 @@ func TestAddAttributesTransform_Transform(t *testing.T) {
 				"environment": "test",
 				"service":     "adx-mon",
 			},
-			inputResources: map[string]interface{}{
+			inputResources: map[string]any{
 				"existing": "value",
 			},
-			expectedResources: map[string]interface{}{
+			expectedResources: map[string]any{
 				"existing":    "value",
 				"environment": "test",
 				"service":     "adx-mon",
@@ -133,20 +133,20 @@ func TestAddAttributesTransform_Transform(t *testing.T) {
 			resourceValues: map[string]string{
 				"existing": "new-value",
 			},
-			inputResources: map[string]interface{}{
+			inputResources: map[string]any{
 				"existing": "old-value",
 			},
-			expectedResources: map[string]interface{}{
+			expectedResources: map[string]any{
 				"existing": "new-value",
 			},
 		},
 		{
 			name:           "no attributes to add",
 			resourceValues: map[string]string{},
-			inputResources: map[string]interface{}{
+			inputResources: map[string]any{
 				"existing": "value",
 			},
-			expectedResources: map[string]interface{}{
+			expectedResources: map[string]any{
 				"existing": "value",
 			},
 		},

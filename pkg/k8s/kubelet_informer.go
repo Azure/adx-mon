@@ -203,11 +203,9 @@ func (k *KubeletPodInformer) Open(ctx context.Context) error {
 	k.runCtx, k.cancelRun = context.WithCancel(ctx)
 
 	initialSync := make(chan struct{})
-	k.wg.Add(1)
-	go func() {
-		defer k.wg.Done()
+	k.wg.Go(func() {
 		k.run(k.runCtx, initialSync)
-	}()
+	})
 	<-initialSync
 
 	return nil
@@ -550,11 +548,9 @@ func newKubeletClient(opts kubeletClientOptions) (*kubeletClient, error) {
 			return nil, fmt.Errorf("kubeletClient: read initial token: %w", err)
 		}
 
-		c.refreshWG.Add(1)
-		go func() {
-			defer c.refreshWG.Done()
+		c.refreshWG.Go(func() {
 			c.refreshToken()
-		}()
+		})
 	}
 
 	return c, nil

@@ -3,7 +3,6 @@ package otlp
 import (
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	"bytes"
-	"context"
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -18,8 +17,7 @@ import (
 )
 
 func TestOTLPLogAdmissionBeforeResponse(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	a := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Default: wal.Usage{Bytes: 10000, Segments: 10}, Overrides: []wal.TableLimit{{Database: "ADatabase", Table: "ATable", MaxBytes: 8, MaxSegments: 1}}})
 	store := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: a})
 	require.NoError(t, store.Open(ctx))

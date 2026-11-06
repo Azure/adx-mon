@@ -314,14 +314,12 @@ func create() (*fakeNow, *fakeTailSource, *PodDiscovery) {
 
 func scrapedPod(name string) *v1.Pod {
 	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "default",
-			UID:       types.UID(uuid.New().String()),
-			Annotations: map[string]string{
-				"adx-mon/scrape":          "true",
-				"adx-mon/log-destination": "db:table",
-			},
+		Name:      name,
+		Namespace: "default",
+		UID:       types.UID(uuid.New().String()),
+		Annotations: map[string]string{
+			"adx-mon/scrape":          "true",
+			"adx-mon/log-destination": "db:table",
 		},
 		Spec: v1.PodSpec{
 			NodeName: "node1",
@@ -347,12 +345,10 @@ func scrapedPod(name string) *v1.Pod {
 
 func notScrapedPod(name string) *v1.Pod {
 	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   "default",
-			UID:         types.UID(uuid.New().String()),
-			Annotations: map[string]string{},
-		},
+		Name:        name,
+		Namespace:   "default",
+		UID:         types.UID(uuid.New().String()),
+		Annotations: map[string]string{},
 		Spec: v1.PodSpec{
 			NodeName: "node1",
 			Containers: []v1.Container{

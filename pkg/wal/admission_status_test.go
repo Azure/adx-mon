@@ -47,7 +47,7 @@ func TestOldestAgeTracksFileLifecycle(t *testing.T) {
 func TestStatusReusesCachedOldest(t *testing.T) {
 	a := NewAdmission(AdmissionOpts{})
 	d := Destination{Database: "DB", Table: "A"}
-	for n := 0; n < 100; n++ {
+	for n := range 100 {
 		a.Restore(fmt.Sprintf("p%d", n), d, 8)
 	}
 

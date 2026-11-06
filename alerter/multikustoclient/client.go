@@ -173,9 +173,8 @@ func (c multiKustoClient) AvailableDatabases() []string {
 // FindCaseInsensitiveMatch returns a database name that matches the given db name
 // case-insensitively, or an empty string if no match is found.
 func (c multiKustoClient) FindCaseInsensitiveMatch(db string) string {
-	lowerDB := strings.ToLower(db)
 	for name := range c.clients {
-		if strings.ToLower(name) == lowerDB {
+		if strings.EqualFold(name, db) {
 			return name
 		}
 	}

@@ -172,7 +172,7 @@ func (s *Syncer) loadTableSchemas(ctx context.Context) error {
 		}
 		columns := make(map[string]string)
 		// The schema is formatted as name:type pairs separated by commas, with names quoted as ['name'] when needed.
-		for _, col := range strings.Split(v.Schema, ",") {
+		for col := range strings.SplitSeq(v.Schema, ",") {
 			col = strings.TrimSpace(col)
 			i := strings.LastIndex(col, ":")
 			if i <= 0 {
@@ -254,11 +254,11 @@ func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.S
 
 	var sb strings.Builder
 	sb.WriteString(".create-merge table ")
-	sb.WriteString(fmt.Sprintf("['%s'] ", table))
+	fmt.Fprintf(&sb, "['%s'] ", table)
 
 	sb.WriteString("(")
 	for i, c := range mapping {
-		sb.WriteString(fmt.Sprintf("['%s']:%s", c.Column, c.DataType))
+		fmt.Fprintf(&sb, "['%s']:%s", c.Column, c.DataType)
 		if i < len(mapping)-1 {
 			sb.WriteString(", ")
 		}
@@ -380,8 +380,8 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 
 	var sb strings.Builder
 	sb.WriteString(".create-or-alter table ")
-	sb.WriteString(fmt.Sprintf("['%s'] ", table))
-	sb.WriteString(fmt.Sprintf("ingestion csv mapping \"%s\" '", name))
+	fmt.Fprintf(&sb, "['%s'] ", table)
+	fmt.Fprintf(&sb, "ingestion csv mapping \"%s\" '", name)
 
 	jsonb, err := json.Marshal(mapping)
 	if err != nil {
@@ -550,7 +550,7 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 				}
 
 				for k := range s.mappings {
-					tableName := strings.Split(k, "_")[0]
+					tableName, _, _ := strings.Cut(k, "_")
 
 					if _, ok := mappingTableExists[tableName]; !ok {
 						logger.Debugf("Removing cached ingestion mapping %s from %s", k, s.database)

@@ -117,15 +117,14 @@ func TestTransferDeadlineExcludesConnectionWait(t *testing.T) {
 		DisableGzip:            true,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 
 	// Ten transfers share the default five connections per peer, so the second five wait about 800ms for one.
 	dir := t.TempDir()
 	var batches []*Batch
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seg, err := wal.NewSegment(dir, "DB_Table"+string(rune('A'+i)))
 		require.NoError(t, err)
 		_, err = seg.Write(ctx, []byte("payload"))

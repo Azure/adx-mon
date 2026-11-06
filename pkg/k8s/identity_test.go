@@ -11,14 +11,14 @@ import (
 
 func TestLoad(t *testing.T) {
 	tok := jwt.Token{
-		Header: map[string]interface{}{
+		Header: map[string]any{
 			"alg": "none",
 			"kid": "zhcH9aFnMwehjYUJAqXz5vth_tyR6schfuh5fix3CG8",
 		},
 		Method: jwt.SigningMethodNone,
 		Claims: jwt.MapClaims{
-			"kubernetes.io": map[string]interface{}{
-				"pod": map[string]interface{}{
+			"kubernetes.io": map[string]any{
+				"pod": map[string]any{
 					"name": "collector-2jhz9",
 				},
 				"namespace": "adx-mon",

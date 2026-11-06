@@ -143,7 +143,7 @@ func TestUploaderProcessesMetricBatch(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.Write(header)
-	buf.WriteString(fmt.Sprintf("%s,0,\"{}\",42.5\n", timestamp.Format(time.RFC3339Nano)))
+	fmt.Fprintf(&buf, "%s,0,\"{}\",42.5\n", timestamp.Format(time.RFC3339Nano))
 	buf.WriteString(strings.TrimSpace(string(header)))
 	buf.WriteByte('\n')
 

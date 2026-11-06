@@ -30,7 +30,7 @@ func TestWriteTimeSeriesWritesSeriesThatFitWhenBlockIsTooLarge(t *testing.T) {
 	s, a := newSmallTableBudgetStore(t)
 	rng := rand.New(rand.NewSource(1))
 	req := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		req.Timeseries = append(req.Timeseries, newTimeSeries("cpu", map[string]string{"id": fmt.Sprintf("%016x", rng.Uint64())}, 1, rng.Float64()))
 	}
 
@@ -50,7 +50,7 @@ func TestWriteNativeLogsWritesLogsThatFitWhenBlockIsTooLarge(t *testing.T) {
 	s, _ := newSmallTableBudgetStore(t)
 	rng := rand.New(rand.NewSource(1))
 	batch := &types.LogBatch{}
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		log := types.NewLog()
 		log.SetAttributeValue(types.AttributeDatabaseName, "DB")
 		log.SetAttributeValue(types.AttributeTableName, "Logs")
@@ -84,7 +84,7 @@ func TestWriteTimeSeriesWritesSeriesThatFitInNearlyFullTable(t *testing.T) {
 	fillTable(t, a, d, 996)
 	rng := rand.New(rand.NewSource(1))
 	req := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		req.Timeseries = append(req.Timeseries, newTimeSeries("cpu", map[string]string{"id": fmt.Sprintf("%016x%016x", rng.Uint64(), rng.Uint64())}, 1, rng.Float64()))
 	}
 
@@ -102,7 +102,7 @@ func TestWriteNativeLogsWritesLogsThatFitInNearlyFullTable(t *testing.T) {
 	fillTable(t, a, d, 996)
 	rng := rand.New(rand.NewSource(1))
 	batch := &types.LogBatch{}
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		log := types.NewLog()
 		log.SetAttributeValue(types.AttributeDatabaseName, "DB")
 		log.SetAttributeValue(types.AttributeTableName, "Logs")

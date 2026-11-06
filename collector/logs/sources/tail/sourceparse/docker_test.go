@@ -87,7 +87,7 @@ func BenchmarkDockerParser(b *testing.B) {
 	parser := NewDockerParser()
 	log := types.NewLog()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		parser.Parse(`{"log":"log1\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 	}
 }

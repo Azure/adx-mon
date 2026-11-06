@@ -20,12 +20,12 @@ func NewCriParser() *CriParser {
 
 // Not safe for concurrent use.
 func (p *CriParser) Parse(line string, log *types.Log) (message string, isPartial bool, err error) {
-	timestampEndIdx := strings.IndexByte(line, ' ')
-	if timestampEndIdx == -1 {
+	before, after, ok := strings.Cut(line, " ")
+	if !ok {
 		return "", false, fmt.Errorf("parseCriLog: invalid log format - timestamp not found")
 	}
-	timestamp := line[:timestampEndIdx]
-	rest := line[timestampEndIdx+1:]
+	timestamp := before
+	rest := after
 
 	streamEndIdx := strings.IndexByte(rest, ' ')
 	if streamEndIdx == -1 {

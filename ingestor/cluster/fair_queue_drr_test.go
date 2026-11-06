@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -18,8 +17,7 @@ func TestSchedulerSharesThroughputByBytes(t *testing.T) {
 		small   = 64 * 1024
 		quantum = 64 * 1024
 	)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	input := make(chan *Batch, 256)
 	out := FairQueue(ctx, input, FairQueueOpts{Workers: 4, Quantum: quantum, QueueDepth: 64})
@@ -41,7 +39,7 @@ func TestSchedulerSharesThroughputByBytes(t *testing.T) {
 	}()
 
 	bytesByTable := map[string]int64{}
-	for n := 0; n < 120; n++ {
+	for n := range 120 {
 		select {
 		case b := <-out:
 			bytesByTable[b.Table] += batchBytes(b)
@@ -61,8 +59,7 @@ func TestSchedulerSharesThroughputByBytes(t *testing.T) {
 // Credit must not accumulate while a destination is idle, otherwise it bursts
 // ahead of others when it returns.
 func TestIdleDestinationDoesNotHoardCredit(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	input := make(chan *Batch, 16)
 	out := FairQueue(ctx, input, FairQueueOpts{Workers: 2, Quantum: 1024})
@@ -87,16 +84,15 @@ func TestIdleDestinationDoesNotHoardCredit(t *testing.T) {
 // Scheduling cost must not grow with the number of known destinations: idle
 // ones are retired rather than scanned forever.
 func TestSchedulerRetiresIdleDestinations(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	input := make(chan *Batch, 2048)
 	out := FairQueue(ctx, input, FairQueueOpts{Workers: 2, Pipeline: "retire-test"})
 
-	for n := 0; n < 500; n++ {
+	for n := range 500 {
 		input <- fairBatch(fmt.Sprintf("T%d", n), "s", 16)
 	}
-	for n := 0; n < 500; n++ {
+	for range 500 {
 		b := <-out
 		b.Release()
 	}
@@ -115,17 +111,16 @@ func TestSchedulerRetiresIdleDestinations(t *testing.T) {
 // The reserved worker guarantees a newcomer starts without waiting for an
 // in-flight batch.
 func TestReservedWorkerAdmitsNewDestination(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	input := make(chan *Batch, 32)
 	out := FairQueue(ctx, input, FairQueueOpts{Workers: 3, ReservedWorkers: 1})
 
 	var busy []*Batch
-	for n := 0; n < 5; n++ {
+	for range 5 {
 		input <- fairBatch("Busy", "s", 16)
 	}
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		busy = append(busy, <-out)
 	}
 

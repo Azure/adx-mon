@@ -36,13 +36,13 @@ func TestThrottledDestinationCreatesNoWALs(t *testing.T) {
 	req.Timeseries = []*prompb.TimeSeries{newTimeSeries("bad", nil, 1, 1)}
 
 	// Fill the budget so the destination becomes throttled.
-	for n := 0; n < 10; n++ {
+	for range 10 {
 		_ = s.WriteTimeSeries(context.Background(), req)
 	}
 	walsAfterThrottle := s.WALCount()
 
 	// Further writes, including new schema variants, must not create WALs.
-	for n := 0; n < 20; n++ {
+	for range 20 {
 		err := s.WriteTimeSeries(context.Background(), req)
 		var outcome *storage.WriteOutcome
 		require.ErrorAs(t, err, &outcome)
@@ -60,7 +60,7 @@ func TestHealthyDestinationStillWritesAfterGate(t *testing.T) {
 
 	req := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
 	req.Timeseries = []*prompb.TimeSeries{newTimeSeries("bad", nil, 1, 1)}
-	for n := 0; n < 10; n++ {
+	for range 10 {
 		_ = s.WriteTimeSeries(context.Background(), req)
 	}
 
@@ -79,7 +79,7 @@ func TestThrottledNativeLogsRejectedEarly(t *testing.T) {
 	defer s.Close()
 
 	batch := &types.LogBatch{}
-	for n := 0; n < 20; n++ {
+	for range 20 {
 		log := types.NewLog()
 		log.SetAttributeValue(types.AttributeDatabaseName, "DB")
 		log.SetAttributeValue(types.AttributeTableName, "Bad")

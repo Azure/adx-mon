@@ -9,7 +9,7 @@ import (
 
 func benchAdmission(tables int) *Admission {
 	overrides := make([]TableLimit, 0, tables)
-	for n := 0; n < tables; n++ {
+	for n := range tables {
 		overrides = append(overrides, TableLimit{Database: "DB", Table: fmt.Sprintf("T%d", n)})
 	}
 	return NewAdmission(AdmissionOpts{Overrides: overrides})
@@ -76,7 +76,7 @@ func BenchmarkSegmentWriteParallel(b *testing.B) {
 // concurrent writers.
 func BenchmarkAdmissionStatusDuringWrites(b *testing.B) {
 	a := benchAdmission(64)
-	for n := 0; n < 4096; n++ {
+	for n := range 4096 {
 		a.Restore(fmt.Sprintf("/w/%d.wal", n), Destination{Database: "DB", Table: fmt.Sprintf("T%d", n%64)}, 1024)
 	}
 	stop := make(chan struct{})
@@ -96,8 +96,7 @@ func BenchmarkAdmissionStatusDuringWrites(b *testing.B) {
 		}
 	}()
 	b.ReportAllocs()
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		if len(a.Status()) == 0 {
 			b.Fatal("empty status")
 		}

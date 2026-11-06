@@ -30,7 +30,7 @@ func newBatch() *types.LogBatch {
 
 func newBatchOf(count int) *types.LogBatch {
 	batch := types.LogBatchPool.Get()
-	for n := 0; n < count; n++ {
+	for range count {
 		log := types.LogPool.Get()
 		log.SetBodyValue("message", "value")
 		batch.Logs = append(batch.Logs, log)
@@ -41,7 +41,7 @@ func newBatchOf(count int) *types.LogBatch {
 // A failing optional exporter must not make the producer resend records the
 // durable sink already stored.
 func TestOptionalExporterFailureDoesNotFailTheBatch(t *testing.T) {
-	store := &durableSink{mockSink: mockSink{name: "store"}}
+	store := &durableSink{name: "store"}
 	exporter := &mockSink{name: "exporter", sendErr: errors.New("exporter unavailable")}
 	w := &worker{SourceName: "test", Sinks: []types.Sink{store, exporter}, BatchTimeout: time.Second}
 
@@ -54,7 +54,7 @@ func TestOptionalExporterFailureDoesNotFailTheBatch(t *testing.T) {
 
 // A failing durable sink must still fail the batch so the producer retries.
 func TestDurableSinkFailureFailsTheBatch(t *testing.T) {
-	store := &durableSink{mockSink: mockSink{name: "store"}, err: errors.New("disk failure")}
+	store := &durableSink{name: "store", err: errors.New("disk failure")}
 	exporter := &mockSink{name: "exporter"}
 	w := &worker{SourceName: "test", Sinks: []types.Sink{store, exporter}, BatchTimeout: time.Second}
 
@@ -66,7 +66,7 @@ func TestDurableSinkFailureFailsTheBatch(t *testing.T) {
 // Shedding reported by the durable sink is surfaced without being treated as a
 // failure.
 func TestDurableSinkSheddingIsReported(t *testing.T) {
-	store := &durableSink{mockSink: mockSink{name: "store"}, err: &storage.WriteOutcome{Accepted: 1, Rejected: 3}}
+	store := &durableSink{name: "store", err: &storage.WriteOutcome{Accepted: 1, Rejected: 3}}
 	w := &worker{SourceName: "test", Sinks: []types.Sink{store}, BatchTimeout: time.Second}
 
 	rejected, err := w.ProcessBatch(context.Background(), newBatchOf(4))
@@ -106,12 +106,12 @@ func (s *ackingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 // After a batch fails at shutdown, the batches queued behind it are not acknowledged, so the source's cursor does not
 // move past the failed logs and they are read again on restart.
 func TestWorkerDoesNotAcknowledgePastFailureAtShutdown(t *testing.T) {
-	sink := &ackingSink{mockSink: mockSink{name: "store"}}
+	sink := &ackingSink{name: "store"}
 	input := make(chan *types.LogBatch, 3)
 	w := &worker{SourceName: "test", Input: input, Sinks: []types.Sink{sink}, BatchTimeout: time.Second}
 
 	var acked []int
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		batch := newBatch()
 		batch.Ack = func() { acked = append(acked, i) }
 		input <- batch
@@ -128,7 +128,7 @@ func TestWorkerDoesNotAcknowledgePastFailureAtShutdown(t *testing.T) {
 
 // Before shutdown a failed batch does not hold up the batches behind it.
 func TestWorkerKeepsSendingAfterFailureBeforeShutdown(t *testing.T) {
-	sink := &ackingSink{mockSink: mockSink{name: "store"}}
+	sink := &ackingSink{name: "store"}
 	input := make(chan *types.LogBatch, 2)
 	w := &worker{SourceName: "test", Input: input, Sinks: []types.Sink{sink}, BatchTimeout: time.Second}
 	input <- newBatch()

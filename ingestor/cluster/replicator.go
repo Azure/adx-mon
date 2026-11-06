@@ -227,8 +227,7 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 		err = transferError(transferCtx, size, r.cli.Write(transferCtx, addr, filename, mr))
 		cancelTransfer()
 		if err != nil {
-			var quota *wal.TableOverloadedError
-			if errors.As(err, &quota) {
+			if quota, ok := errors.AsType[*wal.TableOverloadedError](err); ok {
 				// The authoritative backoff is per peer and destination. The
 				// scheduler can only defer by destination, and a destination's
 				// schema prefixes may be owned by different peers, so the
@@ -238,8 +237,7 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 				batch.RetryAfter(min(quota.RetryAfter, maxSchedulerRetry))
 				return nil
 			}
-			var oversized *wal.SegmentTooLargeError
-			if errors.As(err, &oversized) {
+			if oversized, ok := errors.AsType[*wal.SegmentTooLargeError](err); ok {
 				return r.splitOversized(ctx, batch, segments, depth, oversized, owner, addr)
 			}
 			if errors.Is(err, &ErrBadRequest{}) {
@@ -263,8 +261,7 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 			} else if errors.Is(err, ErrPeerOverloaded) {
 				// Ingestor is overloaded, mark the peer as unhealthy and retry no sooner than it asked.
 				var retryAfter time.Duration
-				var overloaded *PeerOverloadedError
-				if errors.As(err, &overloaded) {
+				if overloaded, ok := errors.AsType[*PeerOverloadedError](err); ok {
 					retryAfter = overloaded.RetryAfter
 				}
 				r.Health.SetPeerUnhealthyFor(owner, retryAfter)

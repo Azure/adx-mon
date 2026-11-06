@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"time"
 
@@ -101,9 +102,7 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 			statusMu.Lock()
 			defer statusMu.Unlock()
 			result := make(map[wal.Destination]metrics.TableWork, len(status))
-			for d, s := range status {
-				result[d] = s
-			}
+			maps.Copy(result, status)
 			return result
 		})()
 	}
@@ -157,10 +156,7 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 
 	// A worker is held back for destinations that are not already running, so a
 	// newcomer can always start without waiting for an in-flight batch.
-	limit := opts.Workers - opts.ReservedWorkers
-	if limit < 1 {
-		limit = 1
-	}
+	limit := max(opts.Workers-opts.ReservedWorkers, 1)
 
 	for {
 		candidate, destination := selectCandidate(tables, order, &cursor, &round, limit, opts.Quantum)

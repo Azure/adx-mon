@@ -325,8 +325,8 @@ func TestStreamBatch_TooLargeRequestUsesQueuedIngestion(t *testing.T) {
 	env.u.realtime.MaxRequestBytes = 64
 
 	var data []byte
-	for i := 0; i < 10; i++ {
-		data = append(data, []byte(fmt.Sprintf("2024-01-01T00:00:0%dZ,%d,{},1.5\n", i, i))...)
+	for i := range 10 {
+		data = fmt.Appendf(data, "2024-01-01T00:00:0%dZ,%d,{},1.5\n", i, i)
 	}
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, data, time.Time{})
 
@@ -362,8 +362,8 @@ func TestStreamBatch_MultipleSegments(t *testing.T) {
 	env := newStreamingTestEnv(t)
 	var paths []string
 	var want bytes.Buffer
-	for i := 0; i < 3; i++ {
-		line := []byte(fmt.Sprintf("2024-01-01T00:00:0%dZ,%d,{},1.5\n", i, i))
+	for i := range 3 {
+		line := fmt.Appendf(nil, "2024-01-01T00:00:0%dZ,%d,{},1.5\n", i, i)
 		want.Write(line)
 		paths = append(paths, env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, line, time.Time{}))
 	}

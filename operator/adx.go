@@ -363,7 +363,7 @@ func ensureResourceGroup(ctx context.Context, cluster *adxmonv1.ADXCluster, cred
 		_, err = rgClient.CreateOrUpdate(ctx,
 			cluster.Spec.Provision.ResourceGroup,
 			armresources.ResourceGroup{
-				Location: to.Ptr(cluster.Spec.Provision.Location),
+				Location: new(cluster.Spec.Provision.Location),
 			},
 			nil)
 		if err != nil {
@@ -383,7 +383,7 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 		ctx,
 		cluster.Spec.Provision.Location,
 		armkusto.ClusterCheckNameRequest{
-			Name: to.Ptr(cluster.Spec.ClusterName),
+			Name: new(cluster.Spec.ClusterName),
 		},
 		nil,
 	)
@@ -412,10 +412,10 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 		var autoScale *armkusto.OptimizedAutoscale
 		if cluster.Spec.Provision.AutoScale {
 			autoScale = &armkusto.OptimizedAutoscale{
-				IsEnabled: to.Ptr(cluster.Spec.Provision.AutoScale),
-				Maximum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMax)),
-				Minimum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMin)),
-				Version:   to.Ptr(int32(1)),
+				IsEnabled: new(cluster.Spec.Provision.AutoScale),
+				Maximum:   new(int32(cluster.Spec.Provision.AutoScaleMax)),
+				Minimum:   new(int32(cluster.Spec.Provision.AutoScaleMin)),
+				Version:   new(int32(1)),
 			}
 		}
 		_, err := clustersClient.BeginCreateOrUpdate(
@@ -423,14 +423,14 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 			cluster.Spec.Provision.ResourceGroup,
 			cluster.Spec.ClusterName,
 			armkusto.Cluster{
-				Location: to.Ptr(cluster.Spec.Provision.Location),
+				Location: new(cluster.Spec.Provision.Location),
 				SKU: &armkusto.AzureSKU{
 					Name: toSku(cluster.Spec.Provision.SkuName),
 					Tier: toTier(cluster.Spec.Provision.Tier),
 				},
 				Identity: identity,
 				Properties: &armkusto.ClusterProperties{
-					EnableAutoStop:     to.Ptr(false),
+					EnableAutoStop:     new(false),
 					EngineType:         to.Ptr(armkusto.EngineTypeV3),
 					OptimizedAutoscale: autoScale,
 				},
@@ -489,7 +489,7 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 			cluster.Spec.Provision.ResourceGroup,
 			cluster.Spec.ClusterName,
 			armkusto.CheckNameRequest{
-				Name: to.Ptr(db.DatabaseName),
+				Name: new(db.DatabaseName),
 				Type: to.Ptr(armkusto.TypeMicrosoftKustoClustersDatabases),
 			},
 			nil,
@@ -1565,10 +1565,10 @@ func toTier(tier string) *armkusto.AzureSKUTier {
 func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.Database {
 	return &armkusto.Database{
 		Kind:     to.Ptr(armkusto.KindReadWrite),
-		Location: to.Ptr(location),
-		ID:       to.Ptr(fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Kusto/Clusters/%s/databases/%s", subId, rgName, clusterName, dbName)),
-		Name:     to.Ptr(dbName),
-		Type:     to.Ptr("Microsoft.Kusto/Clusters/Databases"),
+		Location: new(location),
+		ID:       new(fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Kusto/Clusters/%s/databases/%s", subId, rgName, clusterName, dbName)),
+		Name:     new(dbName),
+		Type:     new("Microsoft.Kusto/Clusters/Databases"),
 	}
 }
 

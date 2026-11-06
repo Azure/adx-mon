@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,8 +28,7 @@ func TestReplicatorRecordsTransferLatency(t *testing.T) {
 		TransferLatency: latency,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 

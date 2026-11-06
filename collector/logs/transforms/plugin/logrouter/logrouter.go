@@ -39,7 +39,7 @@ func NewTransform() *Transform {
 	return &Transform{}
 }
 
-func FromConfigMap(config map[string]interface{}) (types.Transformer, error) {
+func FromConfigMap(config map[string]any) (types.Transformer, error) {
 	return &Transform{}, nil
 }
 

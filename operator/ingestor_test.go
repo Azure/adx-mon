@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -39,14 +38,10 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 	require.NoError(t, appsv1.AddToScheme(scheme))
 
 	ingestor := &adxmonv1.Ingestor{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Ingestor",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Ingestor",
+		Name:       "test-ingestor",
+		Namespace:  "default",
 		Spec: adxmonv1.IngestorSpec{
 			Replicas:           2,
 			ADXClusterSelector: &metav1.LabelSelector{},
@@ -54,12 +49,10 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 	}
 
 	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		Name:      "test-ingestor",
+		Namespace: "default",
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: to.Ptr(int32(2)),
+			Replicas: new(int32(2)),
 		},
 		Status: appsv1.StatefulSetStatus{
 			ReadyReplicas: 2,
@@ -80,7 +73,7 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 	require.True(t, result.IsZero())
 
 	// Not ready case
-	sts.Spec.Replicas = to.Ptr(int32(3))
+	sts.Spec.Replicas = new(int32(3))
 	require.NoError(t, client.Update(context.Background(), sts))
 
 	result, err = r.IsReady(context.Background(), ingestor)
@@ -94,14 +87,10 @@ func TestIngestorReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, appsv1.AddToScheme(scheme))
 
 	ingestor := &adxmonv1.Ingestor{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Ingestor",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Ingestor",
+		Name:       "test-ingestor",
+		Namespace:  "default",
 		Spec: adxmonv1.IngestorSpec{
 			Replicas:           2,
 			Image:              "test-image:v1",
@@ -111,12 +100,10 @@ func TestIngestorReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, ingestor.Spec.StoreAppliedProvisioningState())
 
 	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		Name:      "test-ingestor",
+		Namespace: "default",
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: to.Ptr(int32(2)),
+			Replicas: new(int32(2)),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
@@ -143,10 +130,8 @@ func TestIngestorReconciler_ReconcileComponent(t *testing.T) {
 
 	// No update needed
 	result, err := r.ReconcileComponent(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		Name:      "test-ingestor",
+		Namespace: "default",
 	})
 	require.NoError(t, err)
 	require.True(t, result.IsZero())
@@ -156,10 +141,8 @@ func TestIngestorReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, client.Update(context.Background(), sts))
 
 	result, err = r.ReconcileComponent(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		Name:      "test-ingestor",
+		Namespace: "default",
 	})
 	require.NoError(t, err)
 	require.False(t, result.IsZero())
@@ -171,16 +154,12 @@ func TestIngestorReconciler_CreateIngestor(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	cluster := &adxmonv1.ADXCluster{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "ADXCluster",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-			Labels: map[string]string{
-				"app": "test-cluster",
-			},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "ADXCluster",
+		Name:       "test-cluster",
+		Namespace:  "default",
+		Labels: map[string]string{
+			"app": "test-cluster",
 		},
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: "test-cluster",
@@ -212,14 +191,10 @@ func TestIngestorReconciler_CreateIngestor(t *testing.T) {
 
 	// Minimal Ingestor CRD
 	ingestor := &adxmonv1.Ingestor{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Ingestor",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Ingestor",
+		Name:       "test-ingestor",
+		Namespace:  "default",
 		Spec: adxmonv1.IngestorSpec{
 			ADXClusterSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
@@ -275,23 +250,19 @@ func TestIngestorReconciler_handleADXClusterSelectorChange(t *testing.T) {
 		},
 	}
 	ingestor := &adxmonv1.Ingestor{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
-		Spec: initialSpec,
+		Name:      "test-ingestor",
+		Namespace: "default",
+		Spec:      initialSpec,
 	}
 	// Store the initial spec in the annotation
 	require.NoError(t, ingestor.Spec.StoreAppliedProvisioningState())
 
 	// Initial StatefulSet
 	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		Name:      "test-ingestor",
+		Namespace: "default",
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: to.Ptr(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
@@ -402,22 +373,18 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	ingestor := &adxmonv1.Ingestor{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "default",
-		},
+		Name:      "test-ingestor",
+		Namespace: "default",
 		Spec: adxmonv1.IngestorSpec{
 			Image: "test-image:v1",
 		},
 	}
 
 	cluster := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-			Labels: map[string]string{
-				"app": "adx-mon",
-			},
+		Name:      "test-cluster",
+		Namespace: "default",
+		Labels: map[string]string{
+			"app": "adx-mon",
 		},
 		Spec: adxmonv1.ADXClusterSpec{
 			Endpoint: "https://test.kusto.windows.net",
@@ -526,7 +493,7 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 
 	const namespace = "existing-namespace"
 	ingestor := &adxmonv1.Ingestor{
-		ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace},
+		Name: "ingestor", Namespace: namespace,
 		Spec: adxmonv1.IngestorSpec{
 			Image:              "custom-image:v1",
 			Replicas:           3,
@@ -542,14 +509,12 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 	}
 
 	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "ingestor",
-			Namespace:   namespace,
-			Labels:      map[string]string{"preserve": "label"},
-			Annotations: map[string]string{"preserve": "annotation"},
-		},
+		Name:        "ingestor",
+		Namespace:   namespace,
+		Labels:      map[string]string{"preserve": "label"},
+		Annotations: map[string]string{"preserve": "annotation"},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: to.Ptr(int32(3)),
+			Replicas: new(int32(3)),
 			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 				NodeSelector: map[string]string{"preserve": "selector"},
 				Containers: []corev1.Container{{
@@ -558,13 +523,13 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 					Args:         []string{"--preserve=argument"},
 					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
 				}},
-				Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
+				Volumes: []corev1.Volume{{Name: "data", EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			}},
 		},
 	}
 
 	clusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"},
+		Name: namespace + ":ingestor",
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
 			Resources: []string{"namespaces", "pods"},
@@ -572,9 +537,9 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 		}},
 	}
 	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: namespace + ":ingestor"},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
+		Name:     namespace + ":ingestor",
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: namespace + ":ingestor"},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
 	}
 
 	client := fake.NewClientBuilder().
@@ -583,7 +548,7 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 		WithObjects(ingestor, sts, clusterRole, clusterRoleBinding).
 		Build()
 	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: "WaitForReady"}
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: namespace}}
+	req := ctrl.Request{Name: "ingestor", Namespace: namespace}
 
 	result, err := reconciler.Reconcile(context.Background(), req)
 	require.NoError(t, err)
@@ -619,7 +584,7 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 	require.Equal(t, map[string]string{"preserve": "selector"}, updatedSTS.Spec.Template.Spec.NodeSelector)
 	require.Equal(t, "custom-image:v1", updatedSTS.Spec.Template.Spec.Containers[0].Image)
 	require.Equal(t, []string{"--preserve=argument"}, updatedSTS.Spec.Template.Spec.Containers[0].Args)
-	require.Contains(t, updatedSTS.Spec.Template.Spec.Volumes, corev1.Volume{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	require.Contains(t, updatedSTS.Spec.Template.Spec.Volumes, corev1.Volume{Name: "data", EmptyDir: &corev1.EmptyDirVolumeSource{}})
 	require.Contains(t, updatedSTS.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "data", MountPath: "/data"})
 
 	resourceVersion := updatedSTS.ResourceVersion
@@ -635,11 +600,11 @@ func TestIngestorReconciler_RecreatesRoleBindingWhenRoleRefDiffers(t *testing.T)
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	const namespace = "binding-conflict"
-	ingestor := &adxmonv1.Ingestor{ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace}}
-	clusterRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"}}
+	ingestor := &adxmonv1.Ingestor{Name: "ingestor", Namespace: namespace}
+	clusterRole := &rbacv1.ClusterRole{Name: namespace + ":ingestor"}
 	conflicting := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: ingestorPodRoleName, Namespace: namespace},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "wrong-role"},
+		Name: ingestorPodRoleName, Namespace: namespace,
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "wrong-role"},
 	}
 	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor, clusterRole, conflicting).Build()
 	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
@@ -659,7 +624,7 @@ func TestIngestorReconciler_CleansUpManagedClusterRBAC(t *testing.T) {
 
 	const namespace = "cleanup"
 	name := namespace + ":ingestor"
-	ingestor := &adxmonv1.Ingestor{ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace, Finalizers: []string{ingestorSecurityFinalizer}}}
+	ingestor := &adxmonv1.Ingestor{Name: "ingestor", Namespace: namespace, Finalizers: []string{ingestorSecurityFinalizer}}
 	role := desiredIngestorClusterRole(namespace)
 	binding := desiredIngestorClusterRoleBinding(namespace)
 	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor, role, binding).Build()
@@ -679,7 +644,7 @@ func TestIngestorReconciler_DoesNotProvisionSecurityResourcesWhenCriteriaIsFalse
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	ingestor := &adxmonv1.Ingestor{
-		ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: "excluded"},
+		Name: "ingestor", Namespace: "excluded",
 		Spec: adxmonv1.IngestorSpec{
 			ADXClusterSelector: &metav1.LabelSelector{},
 			CriteriaExpression: "false",
@@ -692,7 +657,7 @@ func TestIngestorReconciler_DoesNotProvisionSecurityResourcesWhenCriteriaIsFalse
 		Build()
 	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
 
-	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: "excluded"}})
+	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{Name: "ingestor", Namespace: "excluded"})
 	require.NoError(t, err)
 
 	require.True(t, apierrors.IsNotFound(client.Get(context.Background(), types.NamespacedName{Name: "excluded:ingestor"}, &rbacv1.ClusterRole{})))
@@ -705,10 +670,10 @@ func TestIngestorReconciler_RevokesClusterRoleBeforeAdditiveFailure(t *testing.T
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	const namespace = "fail-closed"
-	ingestor := &adxmonv1.Ingestor{ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace}}
+	ingestor := &adxmonv1.Ingestor{Name: "ingestor", Namespace: namespace}
 	vulnerableRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"},
-		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"namespaces", "pods"}, Verbs: []string{"update"}}},
+		Name:  namespace + ":ingestor",
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"namespaces", "pods"}, Verbs: []string{"update"}}},
 	}
 	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor, vulnerableRole).Build()
 	reconciler := &IngestorReconciler{Client: &failRoleCreateClient{Client: baseClient}, Scheme: scheme}
@@ -739,7 +704,7 @@ func TestIngestorReconciler_SecurityConditionPreservesLifecycleState(t *testing.
 
 			const namespace = "condition-test"
 			ingestor := &adxmonv1.Ingestor{
-				ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace, Generation: 8},
+				Name: "ingestor", Namespace: namespace, Generation: 8,
 				Spec: adxmonv1.IngestorSpec{
 					ADXClusterSelector: &metav1.LabelSelector{},
 					CriteriaExpression: "false",
@@ -751,13 +716,13 @@ func TestIngestorReconciler_SecurityConditionPreservesLifecycleState(t *testing.
 					ObservedGeneration: 7,
 				}}},
 			}
-			vulnerableRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"}}
+			vulnerableRole := &rbacv1.ClusterRole{Name: namespace + ":ingestor"}
 			baseClient := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithStatusSubresource(&adxmonv1.Ingestor{}).
 				WithObjects(ingestor, vulnerableRole).
 				Build()
-			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: namespace}}
+			req := ctrl.Request{Name: "ingestor", Namespace: namespace}
 
 			failing := &IngestorReconciler{Client: &failRoleCreateClient{Client: baseClient}, Scheme: scheme, waitForReadyReason: "WaitForReady"}
 			_, err := failing.Reconcile(context.Background(), req)

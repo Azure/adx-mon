@@ -2,7 +2,6 @@ package storage_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"io"
 	"testing"
@@ -18,8 +17,7 @@ import (
 func TestImportRejectsOversizedPayload(t *testing.T) {
 	budget := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Default: wal.Usage{Bytes: 100, Segments: 10}})
 	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: budget})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 
@@ -47,8 +45,7 @@ func TestImportDoesNotEnforceTableBudgetInObserveOnlyMode(t *testing.T) {
 		Default: wal.Usage{Bytes: 100, Segments: 10},
 	})
 	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: budget})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 

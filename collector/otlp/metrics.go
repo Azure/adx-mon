@@ -305,7 +305,7 @@ func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name stri
 		// Add bucket series
 		numBuckets := len(point.BucketCounts)
 		var upperBound string
-		for i := 0; i < numBuckets; i++ {
+		for i := range numBuckets {
 			// if len(BucketCounts) > 0, then len(ExplicitBounds) + 1 == len(BucketCounts)
 			// the last bucket has an upper bound of +Inf
 			if i == numBuckets-1 {

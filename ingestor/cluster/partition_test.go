@@ -26,9 +26,9 @@ func TestOwner_Empty(t *testing.T) {
 	require.NoError(t, err)
 
 	errgroup, _ := errgroup.WithContext(context.Background())
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		errgroup.Go(func() error {
-			for i := 0; i < 100000; i++ {
+			for range 100000 {
 				if owner, _ := p.Owner([]byte("cpu")); owner == "" {
 					return fmt.Errorf("owner is empty")
 				}

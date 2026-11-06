@@ -266,9 +266,7 @@ func (s *Scraper) scrape(ctx context.Context) {
 						continue
 					}
 					inflight[target] = true
-					s.wg.Add(1)
-					go func() {
-						defer s.wg.Done()
+					s.wg.Go(func() {
 						select {
 						case slots <- struct{}{}:
 						case <-ctx.Done():
@@ -280,7 +278,7 @@ func (s *Scraper) scrape(ctx context.Context) {
 						case done <- target:
 						case <-ctx.Done():
 						}
-					}()
+					})
 				}
 			}
 			schedule.advance(now, now)
@@ -455,7 +453,7 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 	return err
 }
 
-func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
+func (s *Scraper) OnAdd(obj any, isInitialList bool) {
 	p, ok := obj.(*v1.Pod)
 	if !ok || p == nil {
 		return
@@ -512,7 +510,7 @@ func (s *Scraper) OnUpdate(oldObj, newObj any) {
 	s.OnAdd(p, false)
 }
 
-func (s *Scraper) OnDelete(obj interface{}) {
+func (s *Scraper) OnDelete(obj any) {
 	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 		obj = tombstone.Obj
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"sync"
 	"time"
 
@@ -37,7 +38,7 @@ type Tailer struct {
 	table          string
 	logTypeParser  sourceparse.LogTypeParser
 	logLineParsers []parser.Parser
-	resources      map[string]interface{}
+	resources      map[string]any
 }
 
 func StartTailing(config TailerConfig) (*Tailer, error) {
@@ -68,10 +69,8 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 
 	parsers := parser.NewParsers(config.Target.Parsers, fmt.Sprintf("tailfile %q", config.Target.FilePath))
 
-	attributes := make(map[string]interface{})
-	for k, v := range config.Target.Resources {
-		attributes[k] = v
-	}
+	attributes := make(map[string]any)
+	maps.Copy(attributes, config.Target.Resources)
 
 	tailer := &Tailer{
 		tail:           tailFile,
@@ -83,11 +82,9 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 		resources:      attributes,
 	}
 
-	tailer.wg.Add(1)
-	go func() {
-		defer tailer.wg.Done()
+	tailer.wg.Go(func() {
 		readLines(ctx, tailer, config.UpdateChan, batchQueue)
-	}()
+	})
 
 	batchConfig := engine.BatchConfig{
 		MaxBatchSize: 1000,
@@ -104,18 +101,14 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 		batchConfig.RealtimeWait = realtimeBatchWait(config.RealtimePolicy, wait)
 	}
 
-	tailer.wg.Add(1)
-	go func() {
-		defer tailer.wg.Done()
+	tailer.wg.Go(func() {
 		engine.BatchLogs(ctx, batchConfig)
-	}()
+	})
 
 	worker := config.WorkerCreator(config.WorkerName, outputQueue)
-	tailer.wg.Add(1)
-	go func() {
-		defer tailer.wg.Done()
+	tailer.wg.Go(func() {
 		worker.RunWaitingForStorage(ctx)
-	}()
+	})
 
 	return tailer, nil
 }
@@ -160,10 +153,8 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 				tailer.logLineParsers = newParsers
 				tailer.database = newTarget.Database
 				tailer.table = newTarget.Table
-				tailer.resources = make(map[string]interface{})
-				for k, v := range newTarget.Resources {
-					tailer.resources[k] = v
-				}
+				tailer.resources = make(map[string]any)
+				maps.Copy(tailer.resources, newTarget.Resources)
 			}
 		case line, ok := <-tailer.tail.Lines:
 			if !ok {

@@ -138,7 +138,7 @@ func TestStreamingSlots_ThrottleHalvesLimitAndSuccessRestores(t *testing.T) {
 	release(true)
 	require.Equal(t, 1, s.Stats().Limit)
 
-	for i := 0; i < 3*8; i++ {
+	for range 3 * 8 {
 		release(false)
 	}
 	// The limit never exceeds the share.
@@ -148,7 +148,7 @@ func TestStreamingSlots_ThrottleHalvesLimitAndSuccessRestores(t *testing.T) {
 func TestStreamingSlots_SetPeersShrinksWithoutCancellingInFlight(t *testing.T) {
 	s := NewStreamingSlots(10, 1, 0, cluster.PeerInfo{Count: 1})
 	var releases []func(bool)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		r, ok := s.TryAcquire()
 		require.True(t, ok)
 		releases = append(releases, r)
@@ -161,7 +161,7 @@ func TestStreamingSlots_SetPeersShrinksWithoutCancellingInFlight(t *testing.T) {
 	require.Equal(t, 10, stats.InUse)
 
 	// No slots are granted until usage drops below the new limit.
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		_, ok := s.TryAcquire()
 		require.False(t, ok)
 		releases[i](false)
@@ -234,11 +234,9 @@ func TestStreamingSlots_ConcurrentNeverExceedsLimit(t *testing.T) {
 	var inUse, maxSeen atomic.Int64
 
 	var wg sync.WaitGroup
-	for g := 0; g < 32; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for range 32 {
+		wg.Go(func() {
+			for range 200 {
 				r, err := s.Acquire(context.Background())
 				require.NoError(t, err)
 				n := inUse.Add(1)
@@ -251,7 +249,7 @@ func TestStreamingSlots_ConcurrentNeverExceedsLimit(t *testing.T) {
 				inUse.Add(-1)
 				r(false)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	require.LessOrEqual(t, maxSeen.Load(), int64(4))

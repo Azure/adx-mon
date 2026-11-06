@@ -215,7 +215,6 @@ func TestSegmentIterator_Next_ShortReadCases(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			reader := tt.reader
 			if reader == nil {

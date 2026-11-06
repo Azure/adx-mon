@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"os/signal"
@@ -113,8 +114,7 @@ func realMain(ctx *cli.Context) error {
 
 	var fileConfig config.Config
 	if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
-		var derr *toml.DecodeError
-		if errors.As(err, &derr) {
+		if derr, ok := errors.AsType[*toml.DecodeError](err); ok {
 			fmt.Println(derr.String())
 			row, col := derr.Position()
 			fmt.Println("error occurred at row", row, "column", col)
@@ -945,9 +945,7 @@ func unionSlice(a []string, b []string) []string {
 func mergeMaps(labels ...map[string]string) map[string]string {
 	m := make(map[string]string)
 	for _, l := range labels {
-		for k, v := range l {
-			m[k] = v
-		}
+		maps.Copy(m, l)
 	}
 	return m
 }

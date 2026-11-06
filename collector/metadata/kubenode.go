@@ -91,12 +91,12 @@ func (k *KubeNode) ensureOpen(ctx context.Context) error {
 	informer := nodeInformer.Informer()
 
 	handler := cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			if node := k.decodeNode(obj); node != nil {
 				k.captureMetadata(node)
 			}
 		},
-		UpdateFunc: func(_, newObj interface{}) {
+		UpdateFunc: func(_, newObj any) {
 			if node := k.decodeNode(newObj); node != nil {
 				k.captureMetadata(node)
 			}
@@ -224,7 +224,7 @@ func (k *KubeNode) WalkAnnotations(fn func(key, value string)) {
 	}
 }
 
-func (k *KubeNode) decodeNode(obj interface{}) *corev1.Node {
+func (k *KubeNode) decodeNode(obj any) *corev1.Node {
 	switch v := obj.(type) {
 	case *corev1.Node:
 		if v != nil && v.Name == k.nodeName {
@@ -238,7 +238,7 @@ func (k *KubeNode) decodeNode(obj interface{}) *corev1.Node {
 	return nil
 }
 
-func (k *KubeNode) handleDelete(obj interface{}) {
+func (k *KubeNode) handleDelete(obj any) {
 	// Intentionally no-op: if our node is deleted we keep the last
 	// observed metadata because the collector is still running on it.
 }

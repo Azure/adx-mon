@@ -78,7 +78,7 @@ func getSharedK3sContainer(t *testing.T) *k3s.K3sContainer {
 	return sharedK3s
 }
 
-func newMgmtDataset(ctx context.Context, tableName string, columns []kustov1.RawColumn, rows [][]interface{}) (kustov1.Dataset, error) {
+func newMgmtDataset(ctx context.Context, tableName string, columns []kustov1.RawColumn, rows [][]any) (kustov1.Dataset, error) {
 	rawRows := make([]kustov1.RawRow, 0, len(rows))
 	for _, r := range rows {
 		rawRows = append(rawRows, kustov1.RawRow{Row: r})
@@ -95,7 +95,7 @@ func newMgmtDataset(ctx context.Context, tableName string, columns []kustov1.Raw
 }
 
 func newAsyncOperationDataset(ctx context.Context, operationTime time.Time, operationId, state string, shouldRetry float64, status string, statusValid bool) (kustov1.Dataset, error) {
-	statusVal := interface{}(nil)
+	statusVal := any(nil)
 	if statusValid {
 		statusVal = status
 	}
@@ -105,10 +105,10 @@ func newAsyncOperationDataset(ctx context.Context, operationTime time.Time, oper
 		{ColumnName: "State", DataType: "String", ColumnType: "string"},
 		{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
 		{ColumnName: "Status", DataType: "String", ColumnType: "string"},
-	}, [][]interface{}{{operationTime.UTC().Format(time.RFC3339Nano), operationId, state, shouldRetry, statusVal}})
+	}, [][]any{{operationTime.UTC().Format(time.RFC3339Nano), operationId, state, shouldRetry, statusVal}})
 }
 
-func mustMgmtDataset(t *testing.T, ctx context.Context, tableName string, columns []kustov1.RawColumn, rows [][]interface{}) kustov1.Dataset {
+func mustMgmtDataset(t *testing.T, ctx context.Context, tableName string, columns []kustov1.RawColumn, rows [][]any) kustov1.Dataset {
 	t.Helper()
 	ds, err := newMgmtDataset(ctx, tableName, columns, rows)
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, stmt azkustodata.State
 		return t.mockDataset, nil
 	}
 
-	return newMgmtDataset(ctx, "Table_0", []kustov1.RawColumn{{ColumnName: "Result", DataType: "String", ColumnType: "string"}}, [][]interface{}{{"ok"}})
+	return newMgmtDataset(ctx, "Table_0", []kustov1.RawColumn{{ColumnName: "Result", DataType: "String", ColumnType: "string"}}, [][]any{{"ok"}})
 }
 
 type TestFunctionStore struct {
@@ -512,7 +512,7 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database: "Prod",
 						Body:     ".create-or-alter function fn() { print 1 }",
@@ -540,7 +540,7 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database: "Metrics",
 						Body:     ".create-or-alter function fn() { print 1 }",
@@ -573,7 +573,7 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database: v1.AllDatabases,
 						Body:     ".create-or-alter function fn() { print 1 }",
@@ -602,7 +602,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database:           "db",
 						Body:               ".create-or-alter function fn() { print 1 }",
@@ -634,7 +634,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 			filterObserved: true,
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database:           v1.AllDatabases,
 						Body:               ".create-or-alter function fn() { print 1 }",
@@ -674,7 +674,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 			filterObserved: true,
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database:           "db",
 						Body:               ".create-or-alter function fn() { print 1 }",
@@ -712,7 +712,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database: "db",
 						Body:     ".create-or-alter function fn() { print 1 }",
@@ -753,7 +753,7 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 
 	newFunction := func() *v1.Function {
 		return &v1.Function{
-			ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+			Name: "fn", Namespace: "default", Generation: 1,
 			Spec: v1.FunctionSpec{
 				Database: "db",
 				Body:     ".create-or-alter function fn() { print 1 }",
@@ -887,7 +887,7 @@ func TestSyncFunctionsTaskHTTPFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			fn := &v1.Function{
-				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+				Name: "fn", Namespace: "default", Generation: 1,
 				Spec: v1.FunctionSpec{
 					Database: "db",
 					Body:     ".create-or-alter function fn() { print 1 }",
@@ -958,8 +958,8 @@ func TestSyncFunctionsTaskRecoversLegacyThrottling(t *testing.T) {
 			scheme := runtime.NewScheme()
 			require.NoError(t, v1.AddToScheme(scheme))
 			fn := &v1.Function{
-				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
-				Spec:       v1.FunctionSpec{Database: "db", Body: ".create-or-alter function fn() { print 1 }"},
+				Name: "fn", Namespace: "default", Generation: 1,
+				Spec: v1.FunctionSpec{Database: "db", Body: ".create-or-alter function fn() { print 1 }"},
 				Status: v1.FunctionStatus{
 					Status:             v1.PermanentFailure,
 					ObservedGeneration: 1,
@@ -1003,7 +1003,7 @@ func TestSyncFunctionsTaskRecoversLegacyThrottling(t *testing.T) {
 
 func TestSyncFunctionsTaskRetriesOnlyThrottledTarget(t *testing.T) {
 	store := &TestFunctionStore{funcs: []*v1.Function{{
-		ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+		Name: "fn", Namespace: "default", Generation: 1,
 		Spec: v1.FunctionSpec{
 			AllDatabases: true,
 			Body:         ".create-or-alter function fn() { print 1 }",
@@ -1029,12 +1029,10 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 	store := &TestFunctionStore{
 		funcs: []*v1.Function{
 			{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:              "fn",
-					Namespace:         "default",
-					Generation:        1,
-					DeletionTimestamp: &metav1.Time{Time: time.Now()},
-				},
+				Name:              "fn",
+				Namespace:         "default",
+				Generation:        1,
+				DeletionTimestamp: &metav1.Time{Time: time.Now()},
 				Spec: v1.FunctionSpec{
 					Database: "db",
 					Body:     ".create-or-alter function fn() { print 1 }",
@@ -1059,8 +1057,7 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 }
 
 func TestReconcileFunctionTargetsBoundsConcurrency(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	tracker, targets := newBlockingFunctionTargets(maxConcurrentFunctionTargets + 1)
 
 	done := make(chan functionReconcileResult, 1)
@@ -1086,7 +1083,7 @@ func TestReconcileFunctionTargetsBoundsConcurrency(t *testing.T) {
 }
 
 func TestAggregateFunctionTargetResultsPreservesRepresentativeError(t *testing.T) {
-	function := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"}}
+	function := &v1.Function{Name: "fn", Namespace: "default"}
 	results := []functionTargetResult{
 		{endpoint: "https://a", database: "metrics", err: errors.New("permanent first")},
 		{endpoint: "https://b", database: "logs", err: errors.New("retryable first"), retryable: true},
@@ -1118,7 +1115,7 @@ func TestSyncFunctionsTaskCancellationStopsTargetsWithoutStatusUpdate(t *testing
 	store := &TestFunctionStore{
 		funcs: []*v1.Function{
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+				Name: "fn", Namespace: "default", Generation: 1,
 				Spec: v1.FunctionSpec{
 					AllDatabases: true,
 					Body:         ".create-or-alter function fn() { print 1 }",
@@ -1150,7 +1147,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						AllDatabases: true,
 						Body:         ".create-or-alter function fn() { print 1 }",
@@ -1180,7 +1177,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						AllDatabases: true,
 						Body:         ".create-or-alter function fn() { print 1 }",
@@ -1216,7 +1213,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						AllDatabases: true,
 						Body:         ".create-or-alter function fn() { print 1 }",
@@ -1240,7 +1237,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database:     "mydb",
 						AllDatabases: true,
@@ -1267,7 +1264,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						Database:     "prod",
 						AllDatabases: false,
@@ -1286,7 +1283,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Name: "fn", Namespace: "default", Generation: 1,
 					Spec: v1.FunctionSpec{
 						// Neither Database nor AllDatabases is set
 						Body: ".create-or-alter function fn() { print 1 }",
@@ -1316,7 +1313,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:     ".clear database cache query_results",
 						Database: "mydb",
@@ -1336,7 +1333,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:  ".create table MyTable (col:string)",
 						Scope: v1.ScopeAllDatabases,
@@ -1355,7 +1352,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:  `.alter cluster policy request_classification '{"IsEnabled":true}'`,
 						Scope: v1.ScopeCluster,
@@ -1374,7 +1371,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:  ".clear database cache query_results",
 						Scope: v1.ScopeDatabase,
@@ -1398,7 +1395,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:     ".clear database cache query_results",
 						Database: "mydb",
@@ -1419,7 +1416,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body: `.alter cluster policy request_classification '{"IsEnabled":true}'`,
 						// No database, no scope - legacy cluster-scoped behavior
@@ -1438,7 +1435,7 @@ func TestManagementCommandTaskScope(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:     ".clear database cache query_results",
 						Database: "otherdb",
@@ -1475,7 +1472,7 @@ func TestFunctions(t *testing.T) {
 
 	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{Name: testNamespace}))
 
 	cb := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := azkustodata.New(cb)
@@ -1498,10 +1495,8 @@ func TestFunctions(t *testing.T) {
 
 	t.Run("Creates functions", func(t *testing.T) {
 		fn := &adxmonv1.Function{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      typeNamespacedName.Name,
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.FunctionSpec{
 				Body:     ".create-or-alter function testtest() { print 'Hello World' }",
 				Database: executor.Database(),
@@ -1519,10 +1514,8 @@ func TestFunctions(t *testing.T) {
 	t.Run("Creates functions for all databases", func(t *testing.T) {
 		resourceName := "testalldb"
 		fn := &adxmonv1.Function{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      resourceName,
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      resourceName,
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.FunctionSpec{
 				Body:     fmt.Sprintf(".create-or-alter function %s() { print 'Hello World' }", resourceName),
 				Database: v1.AllDatabases,
@@ -1568,10 +1561,8 @@ func TestFunctions(t *testing.T) {
 
 	t.Run("Creates more than one function", func(t *testing.T) {
 		fn := &adxmonv1.Function{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "a-and-b",
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      "a-and-b",
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.FunctionSpec{
 				Body:     severalFunctions,
 				Database: executor.Database(),
@@ -1599,10 +1590,8 @@ func TestFunctions(t *testing.T) {
 			Namespace: testNamespace,
 		}
 		fn := &adxmonv1.Function{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      typeNamespacedName.Name,
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.FunctionSpec{
 				Body:     ".create-or-alter function() { MissingTable | count }",
 				Database: executor.Database(),
@@ -1641,7 +1630,7 @@ func TestManagementCommands(t *testing.T) {
 
 	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{Name: testNamespace}))
 
 	cb := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := azkustodata.New(cb)
@@ -1664,10 +1653,8 @@ func TestManagementCommands(t *testing.T) {
 		}
 
 		fn := &adxmonv1.ManagementCommand{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      typeNamespacedName.Name,
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.ManagementCommandSpec{
 				Body:     ".clear database cache query_results",
 				Database: executor.Database(),
@@ -1699,10 +1686,8 @@ func TestManagementCommands(t *testing.T) {
 		}
 
 		fn := &adxmonv1.ManagementCommand{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      typeNamespacedName.Name,
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.ManagementCommandSpec{
 				Body: `.alter cluster policy request_classification '{"IsEnabled":true}' <|
     iff(request_properties.current_application == "Kusto.Explorer" and request_properties.request_type == "Query",
@@ -1736,7 +1721,7 @@ func TestManagementCommandCriteriaExpression(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:               ".clear database cache query_results",
 						Database:           "db",
@@ -1756,7 +1741,7 @@ func TestManagementCommandCriteriaExpression(t *testing.T) {
 		handler := &mockCRDHandler{
 			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Name: "cmd", Namespace: "default",
 					Spec: v1.ManagementCommandSpec{
 						Body:               ".clear database cache query_results",
 						Database:           "db",
@@ -1805,9 +1790,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 	// Create a summary rule
 	ruleName := "test-rule"
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ruleName,
-		},
+		Name: ruleName,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -1869,10 +1852,10 @@ func TestSummaryRule_IngestorOwnerGating(t *testing.T) {
 	clk := klock.NewFakeClock(time.Now())
 
 	// Create four rules with different owner annotations
-	ruleIngestor := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-ingestor", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: v1.SummaryRuleOwnerIngestor}}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
-	ruleExporter := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-exporter", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: v1.SummaryRuleOwnerADXExporter}}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
-	ruleMissing := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-missing"}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
-	ruleUnknown := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-unknown", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: "who"}}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleIngestor := &v1.SummaryRule{Namespace: "default", Name: "sr-owner-ingestor", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: v1.SummaryRuleOwnerIngestor}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleExporter := &v1.SummaryRule{Namespace: "default", Name: "sr-owner-exporter", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: v1.SummaryRuleOwnerADXExporter}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleMissing := &v1.SummaryRule{Namespace: "default", Name: "sr-owner-missing", Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleUnknown := &v1.SummaryRule{Namespace: "default", Name: "sr-owner-unknown", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: "who"}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 
 	list := &v1.SummaryRuleList{Items: []v1.SummaryRule{*ruleIngestor, *ruleExporter, *ruleMissing, *ruleUnknown}}
 	mockStore := &mockCRDHandler{listResponse: list}
@@ -1914,9 +1897,7 @@ func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 	// Create a summary rule
 	ruleName := "test-rule"
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ruleName,
-		},
+		Name: ruleName,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -1994,9 +1975,7 @@ func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 	ruleName := "test-rule"
 	recentOperationId := "recent-op-123"
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ruleName,
-		},
+		Name: ruleName,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -2064,10 +2043,8 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		}
 
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-rule",
-				Namespace: "default",
-			},
+			Name:      "test-rule",
+			Namespace: "default",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "testtable",
@@ -2102,10 +2079,8 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		}
 
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-rule",
-				Namespace: "default",
-			},
+			Name:      "test-rule",
+			Namespace: "default",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "testtable",
@@ -2146,10 +2121,8 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		}
 
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-rule",
-				Namespace: "default",
-			},
+			Name:      "test-rule",
+			Namespace: "default",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "testtable",
@@ -2192,7 +2165,7 @@ func TestSummaryRules(t *testing.T) {
 
 	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{Name: testNamespace}))
 
 	cb := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := azkustodata.New(cb)
@@ -2207,7 +2180,7 @@ func TestSummaryRules(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ingest some rows
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		stmt = kql.New(".ingest inline into table Source <| ").AddUnsafe(fmt.Sprintf("%s,a,%d", time.Now().Add(-time.Duration(i)*time.Minute).Format(time.RFC3339), i))
 		_, err = kustoClient.Mgmt(ctx, databaseName, stmt)
 		require.NoError(t, err)
@@ -2229,10 +2202,8 @@ func TestSummaryRules(t *testing.T) {
 
 	// Create a SummaryRule
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      typeNamespacedName.Name,
-			Namespace: typeNamespacedName.Namespace,
-		},
+		Name:      typeNamespacedName.Name,
+		Namespace: typeNamespacedName.Namespace,
 		Spec: adxmonv1.SummaryRuleSpec{
 			Database: databaseName,
 			Table:    "Destination",
@@ -2342,9 +2313,7 @@ func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
 	// Create a summary rule with a long interval to ensure no time-based retries
 	ruleName := "test-rule"
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ruleName,
-		},
+		Name: ruleName,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -2569,9 +2538,7 @@ func TestHandleCompletedOperationDetailedErrorMessages(t *testing.T) {
 		ruleName := "test-rule"
 		operationId := "op-failed-123"
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ruleName,
-			},
+			Name: ruleName,
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -2622,9 +2589,7 @@ func TestHandleCompletedOperationDetailedErrorMessages(t *testing.T) {
 		ruleName := "test-rule"
 		operationId := "op-failed-456"
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ruleName,
-			},
+			Name: ruleName,
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -2673,9 +2638,7 @@ func TestHandleCompletedOperationDetailedErrorMessages(t *testing.T) {
 		ruleName := "test-rule"
 		operationId := "op-failed-789"
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ruleName,
-			},
+			Name: ruleName,
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -2737,9 +2700,7 @@ func TestHandleCompletedOperationDetailedErrorMessages(t *testing.T) {
 		operationId1 := "op-completed-1"
 		operationId2 := "op-pending-2"
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ruleName,
-			},
+			Name: ruleName,
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -2793,10 +2754,8 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	// Test that submitting a rule doesn't cause double execution across multiple execution cycles
 	// The fix ensures that completed operations (with ShouldRetry=0) are not processed for retry
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-rule",
-			Generation: 1,
-		},
+		Name:       "test-rule",
+		Generation: 1,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -2926,10 +2885,8 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	// Create a summary rule that already has multiple async operations
 	ruleName := "test-rule"
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       ruleName,
-			Generation: 1,
-		},
+		Name:       ruleName,
+		Generation: 1,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -3078,7 +3035,7 @@ func TestSummaryRuleRetrySubmissionFailurePreservesWindow(t *testing.T) {
 
 	now := time.Date(2025, 6, 23, 14, 0, 0, 0, time.UTC)
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-rule", Generation: 1},
+		Name: "test-rule", Generation: 1,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -3208,8 +3165,8 @@ func TestSummaryRuleRetryFailurePreservesOtherOperations(t *testing.T) {
 			}
 
 			rule := &v1.SummaryRule{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-rule"},
-				Spec:       v1.SummaryRuleSpec{Database: "testdb"},
+				Name: "test-rule",
+				Spec: v1.SummaryRuleSpec{Database: "testdb"},
 			}
 			rule.SetAsyncOperation(operation)
 			if tt.existingRetryWindow {
@@ -3252,8 +3209,8 @@ func TestSummaryRuleTrackAsyncOperationStates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
 			rule := &v1.SummaryRule{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-rule"},
-				Spec:       v1.SummaryRuleSpec{Database: "testdb"},
+				Name: "test-rule",
+				Spec: v1.SummaryRuleSpec{Database: "testdb"},
 			}
 			operation := v1.AsyncOperation{
 				OperationId: "original-op",
@@ -3310,7 +3267,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 			{ColumnName: "State", DataType: "String", ColumnType: "string"},
 			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
 			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
-		}, [][]interface{}{{operationTime.UTC().Format(time.RFC3339Nano), "test-operation-123", "Completed", 0.0, "Success"}})
+		}, [][]any{{operationTime.UTC().Format(time.RFC3339Nano), "test-operation-123", "Completed", 0.0, "Success"}})
 
 		// Create a mock executor that returns the mock data
 		mockExecutor := &TestStatementExecutor{
@@ -3406,7 +3363,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 			{ColumnName: "State", DataType: "String", ColumnType: "string"},
 			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
 			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
-		}, [][]interface{}{{operationTime.UTC().Format(time.RFC3339Nano), "test-operation-456", nil, 0.0, nil}})
+		}, [][]any{{operationTime.UTC().Format(time.RFC3339Nano), "test-operation-456", nil, 0.0, nil}})
 
 		mockExecutor := &TestStatementExecutor{
 			database: "testdb",
@@ -3440,7 +3397,7 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 
 	// Create a mock response for the submission operation ID
 	operationID := "backlog-op-success-12345"
-	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{{ColumnName: "OperationId", DataType: "String", ColumnType: "string"}}, [][]interface{}{{operationID}})
+	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{{ColumnName: "OperationId", DataType: "String", ColumnType: "string"}}, [][]any{{operationID}})
 
 	// Create storage interface
 	store := &mockCRDHandler{}
@@ -3451,10 +3408,8 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 	// Create a test SummaryRule with an old timestamp (simulating production case)
 	oldTimestamp := time.Date(2024, 8, 1, 18, 0, 0, 0, time.UTC) // Stuck timestamp
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-stuck-rule",
-			Namespace: "default",
-		},
+		Name:      "test-stuck-rule",
+		Namespace: "default",
 		Spec: adxmonv1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestDestination",
@@ -3510,7 +3465,7 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 
 	// Create mock rows for operation ID response
 	operationID := "old-backlog-op-67890"
-	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{{ColumnName: "OperationId", DataType: "String", ColumnType: "string"}}, [][]interface{}{{operationID}})
+	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{{ColumnName: "OperationId", DataType: "String", ColumnType: "string"}}, [][]any{{operationID}})
 
 	store := &mockCRDHandler{}
 	task := NewSummaryRuleTask(store, mockExecutor, nil)
@@ -3518,10 +3473,8 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 	// Create rule with current timestamp NEWER than the backlog operation
 	currentTimestamp := time.Date(2024, 8, 1, 18, 0, 0, 0, time.UTC)
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-forward-progress-rule",
-			Namespace: "default",
-		},
+		Name:      "test-forward-progress-rule",
+		Namespace: "default",
 		Spec: adxmonv1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestDestination",

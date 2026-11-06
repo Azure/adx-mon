@@ -26,11 +26,9 @@ func baseTime() time.Time {
 
 func newRule(start, end time.Time, interval time.Duration) *v1.SummaryRule {
 	return &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-rule",
-			Namespace:  "default",
-			Generation: 1,
-		},
+		Name:       "test-rule",
+		Namespace:  "default",
+		Generation: 1,
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -132,8 +130,8 @@ func statusByID(m map[string]operationStatus) GetOperationStatusFunc {
 
 func TestProcess_NoBackfillSpec(t *testing.T) {
 	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns", Generation: 1},
-		Spec:       v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "T"},
+		Name: "r", Namespace: "ns", Generation: 1,
+		Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "T"},
 	}
 	clk := fakeClockAt(baseTime())
 	submit, _ := succeedSubmit()
@@ -633,7 +631,7 @@ func TestProcess_LargeRange_BatchesOverCycles(t *testing.T) {
 	clk := fakeClockAt(start.Add(48 * time.Hour))
 	submit, _ := succeedSubmit()
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		Process(context.Background(), rule, clk, submit, completedStatus())
 		if rule.Status.Backfill.Phase == v1.BackfillPhaseCompleted {
 			break
@@ -723,7 +721,7 @@ func TestProcess_ContiguousWindows_NoGaps_NoOverlaps(t *testing.T) {
 	}
 
 	// Run to completion.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		Process(context.Background(), rule, clk, submit, completedStatus())
 		if rule.Status.Backfill.Phase == v1.BackfillPhaseCompleted {
 			break
@@ -818,7 +816,7 @@ func TestProcess_NoOverlap_WithMaxInFlight(t *testing.T) {
 	}
 
 	// Run multiple cycles to completion.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		Process(context.Background(), rule, clk, submit, completedStatus())
 		if rule.Status.Backfill.Phase == v1.BackfillPhaseCompleted {
 			break

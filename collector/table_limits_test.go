@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"context"
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -13,8 +12,7 @@ import (
 func TestCollectorWiresTableLimitsWithoutGlobalBackpressure(t *testing.T) {
 	svc, err := NewService(&ServiceOpts{StorageDir: t.TempDir(), MaxDiskUsage: 10000, MaxSegmentCount: 100, EnforceTableLimits: true, TableLimits: []wal.TableLimit{{Database: "DB", Table: "Bad", MaxBytes: 8}}})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, svc.store.Open(ctx))
 	defer svc.store.Close()
 	req := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}

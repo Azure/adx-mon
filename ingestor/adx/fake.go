@@ -28,7 +28,7 @@ func (f *fakeUploader) Mgmt(ctx context.Context, query azkustodata.Statement, op
 			Columns: []kustov1.RawColumn{
 				{ColumnName: "Name", DataType: "String", ColumnType: "string"},
 			},
-			Rows: []kustov1.RawRow{{Row: []interface{}{"ok"}}},
+			Rows: []kustov1.RawRow{{Row: []any{"ok"}}},
 		},
 	}})
 }
@@ -100,7 +100,7 @@ func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query azkustodata.S
 			Columns: []kustov1.RawColumn{
 				{ColumnName: "Name", DataType: "String", ColumnType: "string"},
 			},
-			Rows: []kustov1.RawRow{{Row: []interface{}{"ok"}}},
+			Rows: []kustov1.RawRow{{Row: []any{"ok"}}},
 		},
 	}})
 }

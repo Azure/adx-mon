@@ -13,14 +13,14 @@ const ParserTypeKeyValue ParserType = "keyvalue"
 type KeyValueParserConfig struct{}
 
 type KeyValueParser struct {
-	parsed       map[string]interface{}
+	parsed       map[string]any
 	tokens       []string
 	currentToken strings.Builder
 }
 
 func NewKeyValueParser(config KeyValueParserConfig) (*KeyValueParser, error) {
 	return &KeyValueParser{
-		parsed:       make(map[string]interface{}),
+		parsed:       make(map[string]any),
 		tokens:       make([]string, 0),
 		currentToken: strings.Builder{},
 	}, nil
@@ -104,7 +104,7 @@ func unquote(s string) string {
 
 // reflectValue attempts to convert a string to an appropriate Go type
 // Optimized to reduce allocations and improve performance
-func reflectValue(value string) interface{} {
+func reflectValue(value string) any {
 	if len(value) == 0 {
 		return ""
 	}

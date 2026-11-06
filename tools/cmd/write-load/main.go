@@ -77,11 +77,9 @@ func main() {
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(context.Background())
 	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			writer(ctx, target, stats, batches)
-		}()
+		})
 	}
 
 	go reportStats(ctx, stats, batches)
@@ -178,11 +176,11 @@ type continuousDataGenerator struct {
 	startTime    time.Time
 	batchSize    int
 	totalSamples int64
-	sent         int64
+	sent         atomic.Int64
 }
 
 func (c *continuousDataGenerator) Read() (*prompb.WriteRequest, error) {
-	if c.totalSamples > 0 && atomic.LoadInt64(&c.sent) >= c.totalSamples {
+	if c.totalSamples > 0 && c.sent.Load() >= c.totalSamples {
 		return nil, io.EOF
 	}
 	wr := &prompb.WriteRequest{}
@@ -191,13 +189,13 @@ func (c *continuousDataGenerator) Read() (*prompb.WriteRequest, error) {
 		wr.Timeseries = append(wr.Timeseries, ts)
 	}
 	c.startTime = c.startTime.Add(time.Second)
-	atomic.AddInt64(&c.sent, int64(c.batchSize))
+	c.sent.Add(int64(c.batchSize))
 	return wr, nil
 }
 
 type stats struct {
-	totalSeries int64
-	totalSent   int64
+	totalSeries atomic.Int64
+	totalSent   atomic.Int64
 
 	metrics map[string]struct{}
 
@@ -211,11 +209,11 @@ func newStats() *stats {
 }
 
 func (s *stats) IncTotalSeries(n int) {
-	atomic.AddInt64(&s.totalSeries, int64(n))
+	s.totalSeries.Add(int64(n))
 }
 
 func (s *stats) TotalSeries() int64 {
-	return atomic.LoadInt64(&s.totalSeries)
+	return s.totalSeries.Load()
 }
 
 func (s *stats) RecordMetric(name string) {
@@ -243,9 +241,9 @@ func (s *stats) TimerDuration() time.Duration {
 }
 
 func (s *stats) IncTotalSent(n int) {
-	atomic.AddInt64(&s.totalSent, int64(n))
+	s.totalSent.Add(int64(n))
 }
 
 func (s *stats) TotalSent() int64 {
-	return atomic.LoadInt64(&s.totalSent)
+	return s.totalSent.Load()
 }

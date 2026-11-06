@@ -71,7 +71,7 @@ func isTransientFailedRequest(err error) bool {
 
 func isTransientClusterAuthenticationMetadataError(kerr *kerrors.HttpError) bool {
 	restError := kerr.UnmarshalREST()
-	errorDetails, ok := restError["error"].(map[string]interface{})
+	errorDetails, ok := restError["error"].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -103,7 +103,7 @@ func isTransientRemoteSchemaCalloutBlockedError(kerr *kerrors.HttpError) bool {
 	const transientMessage = "host failed loopback link local check: 'uri.idnhost cannot be resolved into an ip address: no such host is known'"
 
 	restError := kerr.UnmarshalREST()
-	errorDetails, ok := restError["error"].(map[string]interface{})
+	errorDetails, ok := restError["error"].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -141,20 +141,17 @@ func isUserError(err error) bool {
 	}
 
 	// User specified a database in their CRD that adx-mon does not have configured.
-	var unknownDB *UnknownDBError
-	if errors.As(err, &unknownDB) {
+	if _, ok := errors.AsType[*UnknownDBError](err); ok {
 		return true
 	}
 
 	// User's query results are missing a required column, or they are the wrong type.
-	var validationErr *NotificationValidationError
-	if errors.As(err, &validationErr) {
+	if _, ok := errors.AsType[*NotificationValidationError](err); ok {
 		return true
 	}
 
 	// Look to see if a kusto query error is specific to how the query was defined and not due to problems with adx-mon itself.
-	var kerr *kerrors.HttpError
-	if errors.As(err, &kerr) {
+	if kerr, ok := errors.AsType[*kerrors.HttpError](err); ok {
 		if kerr.Kind == kerrors.KClientArgs {
 			return true
 		}

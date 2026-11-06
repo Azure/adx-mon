@@ -36,7 +36,7 @@ func TestClickHouseWorkersIsolateSlowTable(t *testing.T) {
 	defer cancel()
 	u.ctx = ctx
 	u.jobs = cluster.FairQueue(ctx, u.queue, cluster.FairQueueOpts{Workers: 2})
-	for n := 0; n < 2; n++ {
+	for n := range 2 {
 		u.wg.Add(1)
 		go u.worker(n)
 	}

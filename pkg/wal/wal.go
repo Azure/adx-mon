@@ -29,7 +29,7 @@ var (
 
 	idgen *flake.Flake
 
-	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
+	bwPool = pool.NewGeneric(10000, func(sz int) any {
 		return bufio.NewWriterSize(nil, 8*1024)
 	})
 )
@@ -70,15 +70,15 @@ type WAL struct {
 
 	// inflightWriteBytes is the sum of bytes from goroutines with active writes in progress but not written
 	// to the active segment.
-	inflightWriteBytes int64
+	inflightWriteBytes atomic.Int64
 
 	// rotationJitter is how much earlier than its max age the current segment rotates.  WALs whose segments are
 	// created together, such as at startup or by one rotation sweep, would otherwise keep rotating at the same moment.
-	rotationJitter int64
+	rotationJitter atomic.Int64
 
 	// segmentSize tracks the size of the current segment.  This is tracked separately from Segment.Size() because
 	// the latter requires taking an RLock on the segments which creates lock contention.
-	segmentSize int64
+	segmentSize atomic.Int64
 
 	// segmentCreatedAt is when the current segment became active, in Unix nanoseconds on the monotonic clock (see
 	// monoNow), or 0 when there is no segment.  Rotation ages use it rather than the segment's wall clock creation
@@ -209,8 +209,8 @@ func (w *WAL) Close() error {
 const maxSegmentClosedRetries = 16
 
 func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
-	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
-	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
+	w.inflightWriteBytes.Add(int64(len(buf)))
+	defer w.inflightWriteBytes.Add(-int64(len(buf)))
 
 	return w.writeWithRetry(ctx, func() (int, error) {
 		return w.tryWrite(ctx, buf, opts...)
@@ -229,7 +229,7 @@ func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) err
 	rotations := 0
 	for closedRetries := 0; ; {
 		n, err := write()
-		atomic.AddInt64(&w.segmentSize, int64(n))
+		w.segmentSize.Add(int64(n))
 
 		switch {
 		case errors.Is(err, ErrMaxSegmentSizeExceeded) && rotations < maxSegmentClosedRetries:
@@ -238,8 +238,7 @@ func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) err
 		case errors.Is(err, ErrSegmentClosed) && closedRetries < maxSegmentClosedRetries:
 			closedRetries++
 		default:
-			var quota *TableOverloadedError
-			if errors.As(err, &quota) {
+			if _, ok := errors.AsType[*TableOverloadedError](err); ok {
 				w.closeActiveSegment()
 			}
 			return err
@@ -315,12 +314,12 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (i
 
 func (w *WAL) validateLimits() error {
 	if w.opts.Admission != nil {
-		if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) > 8 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+		if w.opts.SegmentMaxSize > 0 && w.segmentSize.Load() > 8 && w.segmentSize.Load()+w.inflightWriteBytes.Load() >= w.opts.SegmentMaxSize {
 			return ErrMaxSegmentSizeExceeded
 		}
 		return nil
 	}
-	totalSize := w.index.TotalSize() + atomic.LoadInt64(&w.inflightWriteBytes)
+	totalSize := w.index.TotalSize() + w.inflightWriteBytes.Load()
 	w.mu.RLock()
 	if w.segment != nil {
 		totalSize += w.segment.Size()
@@ -335,7 +334,7 @@ func (w *WAL) validateLimits() error {
 		return ErrMaxSegmentsExceeded
 	}
 
-	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) > 8 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+	if w.opts.SegmentMaxSize > 0 && w.segmentSize.Load() > 8 && w.segmentSize.Load()+w.inflightWriteBytes.Load() >= w.opts.SegmentMaxSize {
 		return ErrMaxSegmentSizeExceeded
 	}
 
@@ -363,7 +362,7 @@ func (w *WAL) Segment() Segment {
 }
 
 func (w *WAL) requiresRotation() bool {
-	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+	if w.opts.SegmentMaxSize > 0 && w.segmentSize.Load()+w.inflightWriteBytes.Load() >= w.opts.SegmentMaxSize {
 		return true
 	}
 
@@ -391,7 +390,7 @@ const rotationJitterFraction = 10
 
 // segmentMaxAge returns the age at which the current segment rotates: its max age less its jitter.
 func (w *WAL) segmentMaxAge() time.Duration {
-	return w.opts.SegmentMaxAge - time.Duration(atomic.LoadInt64(&w.rotationJitter))
+	return w.opts.SegmentMaxAge - time.Duration(w.rotationJitter.Load())
 }
 
 // testHookSegmentCreated, if set, is called each time a WAL creates a segment.
@@ -413,20 +412,20 @@ func (w *WAL) newSegment() (Segment, error) {
 func (w *WAL) setSegment(seg Segment) {
 	w.segment = seg
 	if seg == nil {
-		atomic.StoreInt64(&w.segmentSize, 0)
+		w.segmentSize.Store(0)
 		atomic.StoreInt64(&w.segmentCreatedAt, 0)
 		if w.scheduler != nil {
 			w.scheduler.unschedule(w)
 		}
 		return
 	}
-	atomic.StoreInt64(&w.segmentSize, seg.Size())
+	w.segmentSize.Store(seg.Size())
 	atomic.StoreInt64(&w.segmentCreatedAt, monoNow())
 	var jitter time.Duration
 	if window := w.opts.SegmentMaxAge / rotationJitterFraction; window > 0 {
 		jitter = rand.N(window)
 	}
-	atomic.StoreInt64(&w.rotationJitter, int64(jitter))
+	w.rotationJitter.Store(int64(jitter))
 	w.scheduleRotationLocked()
 }
 
@@ -515,7 +514,7 @@ func (w *WAL) rotateSegmentIfNecessary() {
 // isIdle returns true if seg is empty and no writes are in flight, meaning the WAL received no writes for a full
 // rotation period.
 func (w *WAL) isIdle(seg Segment) bool {
-	return seg != nil && seg.Size() <= 8 && atomic.LoadInt64(&w.inflightWriteBytes) == 0
+	return seg != nil && seg.Size() <= 8 && w.inflightWriteBytes.Load() == 0
 }
 
 // createNextSegment creates the next segment, logging and returning nil on failure so the next write creates it.
@@ -570,8 +569,8 @@ func (w *WAL) Remove(path string) error {
 }
 
 func (w *WAL) Append(ctx context.Context, buf []byte) error {
-	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
-	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
+	w.inflightWriteBytes.Add(int64(len(buf)))
+	defer w.inflightWriteBytes.Add(-int64(len(buf)))
 
 	return w.writeWithRetry(ctx, func() (int, error) {
 		return w.tryAppend(ctx, buf)

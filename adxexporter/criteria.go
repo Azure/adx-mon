@@ -70,9 +70,8 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 		return true
 	}
 	for k, values := range criteria {
-		lk := strings.ToLower(k)
 		for ck, cv := range clusterLabels {
-			if strings.ToLower(ck) == lk {
+			if strings.EqualFold(ck, k) {
 				for _, want := range values {
 					if strings.EqualFold(cv, want) {
 						return true

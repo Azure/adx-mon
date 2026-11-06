@@ -128,8 +128,7 @@ func (s *MetricsService) writeMessage(ctx context.Context, msg *v1.ExportMetrics
 		}
 
 		// Rejected metrics are not an error - return OK with the count of rejected metrics and the error.
-		var rejectedMetricsErr *ErrRejectedMetric
-		if errors.As(err, &rejectedMetricsErr) {
+		if rejectedMetricsErr, ok := errors.AsType[*ErrRejectedMetric](err); ok {
 			s.logger.Warn("Rejecting some metrics", "Error", err)
 			resp := &v1.ExportMetricsServiceResponse{
 				PartialSuccess: &v1.ExportMetricsPartialSuccess{
@@ -140,8 +139,7 @@ func (s *MetricsService) writeMessage(ctx context.Context, msg *v1.ExportMetrics
 			return resp, nil, http.StatusOK
 		}
 
-		var writeErr *ErrWriteError
-		if errors.As(err, &writeErr) {
+		if _, ok := errors.AsType[*ErrWriteError](err); ok {
 			s.logger.Error("Failed to write metrics", "Error", err)
 			status := newErrorStatus("Failed to write metrics. Please try again.")
 			return nil, status, http.StatusInternalServerError

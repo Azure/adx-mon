@@ -1,7 +1,6 @@
 package storage_test
 
 import (
-	"context"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -15,8 +14,7 @@ func TestMixedMetricShedding(t *testing.T) {
 		t.Run(order[0]+order[1], func(t *testing.T) {
 			a := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Default: wal.Usage{Bytes: 10000, Segments: 10}, Overrides: []wal.TableLimit{{Database: "DB", Table: "Bad", MaxBytes: 8, MaxSegments: 1}}})
 			s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: a})
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			require.NoError(t, s.Open(ctx))
 			defer s.Close()
 			r := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
@@ -38,8 +36,7 @@ func TestMixedMetricShedding(t *testing.T) {
 func TestMixedNativeLogShedding(t *testing.T) {
 	a := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Default: wal.Usage{Bytes: 10000, Segments: 10}, Overrides: []wal.TableLimit{{Database: "DB", Table: "Bad", MaxBytes: 8, MaxSegments: 1}}})
 	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: a})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 	batch := &types.LogBatch{}
@@ -59,12 +56,11 @@ func TestMixedNativeLogShedding(t *testing.T) {
 func TestMixedMetricSegmentQuotaShedding(t *testing.T) {
 	budget := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Global: wal.Usage{Bytes: 100000, Segments: 100}, Default: wal.Usage{Bytes: 10000, Segments: 2}})
 	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), SegmentMaxSize: 1, Admission: budget})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 	bad := newTimeSeries("bad", map[string]string{"adxmon_database": "DB"}, 1, 1)
-	for n := 0; n < 2; n++ {
+	for range 2 {
 		require.NoError(t, s.WriteTimeSeries(ctx, &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{bad}}))
 	}
 	good := newTimeSeries("good", map[string]string{"adxmon_database": "DB"}, 1, 1)

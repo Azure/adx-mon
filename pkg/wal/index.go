@@ -22,7 +22,7 @@ type Index struct {
 	mu       sync.RWMutex
 	segments map[string][]SegmentInfo
 
-	totalSize int64
+	totalSize atomic.Int64
 
 	// sizeByPriority is the total size of segments for each ingestion priority.
 	sizeByPriority [ingestpolicy.NumPriorities]int64
@@ -56,7 +56,7 @@ func NewIndex() *Index {
 // Add adds a closed segment to the index and notifies subscribers.
 func (i *Index) Add(s SegmentInfo) {
 	i.mu.Lock()
-	atomic.AddInt64(&i.totalSize, s.Size)
+	i.totalSize.Add(s.Size)
 	atomic.AddInt64(i.prioritySize(s.Priority), s.Size)
 	i.segments[s.Prefix] = append(i.segments[s.Prefix], s)
 	e := &ageEntry{createdAt: s.CreatedAt, next: i.agesByPath[s.Path]}
@@ -127,7 +127,7 @@ func (i *Index) Remove(s SegmentInfo) {
 			// Copied, not referenced: the backing array is mutated below and by
 			// concurrent callers once the lock is released.
 			removed, found = seg, true
-			atomic.AddInt64(&i.totalSize, -seg.Size)
+			i.totalSize.Add(-seg.Size)
 			// Use the indexed priority since callers may not set it.
 			atomic.AddInt64(i.prioritySize(seg.Priority), -seg.Size)
 			i.removeAge(seg.Path, seg.CreatedAt)
@@ -344,7 +344,7 @@ func (i *Index) PrefixesByCount() []string {
 
 // TotalSize returns the total size of all segments in the index.
 func (i *Index) TotalSize() int64 {
-	return atomic.LoadInt64(&i.totalSize)
+	return i.totalSize.Load()
 }
 
 // TotalSizeByPriority returns the total size of segments in the index with the given ingestion priority.
@@ -463,7 +463,7 @@ func (i *Index) WriteDebug(w io.Writer) error {
 		for _, seg := range segments {
 			size += seg.Size
 		}
-		tw.Write([]byte(fmt.Sprintf("%s\t%d\t%d\t%s\n", prefix, len(segments), size, segments[0].CreatedAt.Format(time.RFC3339))))
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n", prefix, len(segments), size, segments[0].CreatedAt.Format(time.RFC3339))
 	}
 	i.mu.RUnlock()
 	tw.Flush()

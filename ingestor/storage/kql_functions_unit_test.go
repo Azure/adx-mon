@@ -24,8 +24,8 @@ func TestFunctionsUpdateStatusRetriesConflict(t *testing.T) {
 
 	newFunction := func() *adxmonv1.Function {
 		return &adxmonv1.Function{
-			ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 2},
-			Spec:       adxmonv1.FunctionSpec{Database: "db", Body: "print 1"},
+			Name: "fn", Namespace: "default", Generation: 2,
+			Spec: adxmonv1.FunctionSpec{Database: "db", Body: "print 1"},
 		}
 	}
 
@@ -90,7 +90,7 @@ func TestFunctionsListIncludesCriteriaMismatchesWhenRequested(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	criteriaMismatch := &adxmonv1.Function{
-		ObjectMeta: metav1.ObjectMeta{Name: "criteria-mismatch", Namespace: "default", Generation: 1},
+		Name: "criteria-mismatch", Namespace: "default", Generation: 1,
 		Status: adxmonv1.FunctionStatus{
 			ObservedGeneration: 1,
 			Conditions: []metav1.Condition{{
@@ -100,8 +100,8 @@ func TestFunctionsListIncludesCriteriaMismatchesWhenRequested(t *testing.T) {
 		},
 	}
 	upToDate := &adxmonv1.Function{
-		ObjectMeta: metav1.ObjectMeta{Name: "up-to-date", Namespace: "default", Generation: 1},
-		Status:     adxmonv1.FunctionStatus{ObservedGeneration: 1},
+		Name: "up-to-date", Namespace: "default", Generation: 1,
+		Status: adxmonv1.FunctionStatus{ObservedGeneration: 1},
 	}
 	store := NewFunctions(fake.NewClientBuilder().WithScheme(scheme).WithObjects(criteriaMismatch, upToDate).Build(), nil)
 
@@ -140,8 +140,8 @@ func TestFunctionsListRetriesThrottledFailures(t *testing.T) {
 			scheme := runtime.NewScheme()
 			require.NoError(t, adxmonv1.AddToScheme(scheme))
 			fn := &adxmonv1.Function{
-				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
-				Spec:       adxmonv1.FunctionSpec{Suspend: new(tt.suspended)},
+				Name: "fn", Namespace: "default", Generation: 1,
+				Spec: adxmonv1.FunctionSpec{Suspend: new(tt.suspended)},
 				Status: adxmonv1.FunctionStatus{
 					Status:             tt.status,
 					Error:              tt.message,
@@ -178,14 +178,12 @@ func TestFunctionsUpdateStatusRetriesFinalizerConflict(t *testing.T) {
 
 	deletionTime := metav1.NewTime(time.Now())
 	fn := &adxmonv1.Function{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "fn",
-			Namespace:         "default",
-			Generation:        2,
-			DeletionTimestamp: &deletionTime,
-			Finalizers:        []string{FinalizerName},
-		},
-		Spec: adxmonv1.FunctionSpec{Database: "db", Body: "print 1"},
+		Name:              "fn",
+		Namespace:         "default",
+		Generation:        2,
+		DeletionTimestamp: &deletionTime,
+		Finalizers:        []string{FinalizerName},
+		Spec:              adxmonv1.FunctionSpec{Database: "db", Body: "print 1"},
 	}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&adxmonv1.Function{}).WithObjects(fn).Build()
 	wrapped := &finalizerConflictClient{Client: base}

@@ -20,7 +20,7 @@ func (discardClient) Write(context.Context, *prompb.WriteRequest) error { return
 
 func benchRequest(points int) *v1.ExportMetricsServiceRequest {
 	dataPoints := make([]*metricsv1.NumberDataPoint, 0, points)
-	for n := 0; n < points; n++ {
+	for n := range points {
 		dataPoints = append(dataPoints, &metricsv1.NumberDataPoint{
 			TimeUnixNano: uint64(n) * 1e6,
 			Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: float64(n)},
@@ -55,8 +55,7 @@ func BenchmarkOltpMetricWriterWrite(b *testing.B) {
 	req := benchRequest(2000)
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		if err := w.Write(context.Background(), req); err != nil {
 			b.Fatal(err)
 		}

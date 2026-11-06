@@ -109,14 +109,11 @@ func (u *uploader) Open(ctx context.Context) error {
 		return err
 	}
 
-	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(runtime.NumCPU(), 1)
 	u.workers = workers
 	u.jobs = cluster.FairQueue(ctx, u.queue, cluster.FairQueueOpts{Workers: workers, Pipeline: "clickhouse:" + u.cfg.Database})
 
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		u.wg.Add(1)
 		go u.worker(i)
 	}
@@ -625,20 +622,17 @@ func isRetryable(err error) bool {
 		return false
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if netErr, ok := errors.AsType[net.Error](err); ok {
 		if netErr.Timeout() || netErr.Temporary() {
 			return true
 		}
 	}
 
-	var opErr *clickhouse.OpError
-	if errors.As(err, &opErr) {
+	if _, ok := errors.AsType[*clickhouse.OpError](err); ok {
 		return false
 	}
 
-	var chErr *clickhouse.Exception
-	if errors.As(err, &chErr) {
+	if chErr, ok := errors.AsType[*clickhouse.Exception](err); ok {
 		if _, ok := fatalClickHouseCodes[chErr.Code]; ok {
 			return false
 		}

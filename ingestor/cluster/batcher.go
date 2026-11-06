@@ -199,9 +199,9 @@ type batcher struct {
 	store storage.Store
 
 	// pendingUploads is the number of batches ready for upload but not in the upload queue.
-	pendingUploads uint64
+	pendingUploads atomic.Uint64
 	// pendingTransfers is the number of batches ready for transfer but not in the transfer queue.
-	pendingTransfer uint64
+	pendingTransfer atomic.Uint64
 
 	// transferDisabled is set to true when transfers are disabled.
 	transferDisabled bool
@@ -334,11 +334,11 @@ func (b *batcher) Close() error {
 }
 
 func (b *batcher) TransferQueueSize() int {
-	return len(b.transferQueue) + separateQueueLen(b.realtimeTransferQueue, b.transferQueue) + int(atomic.LoadUint64(&b.pendingTransfer))
+	return len(b.transferQueue) + separateQueueLen(b.realtimeTransferQueue, b.transferQueue) + int(b.pendingTransfer.Load())
 }
 
 func (b *batcher) UploadQueueSize() int {
-	return len(b.uploadQueue) + separateQueueLen(b.realtimeUploadQueue, b.uploadQueue) + int(atomic.LoadUint64(&b.pendingUploads))
+	return len(b.uploadQueue) + separateQueueLen(b.realtimeUploadQueue, b.uploadQueue) + int(b.pendingUploads.Load())
 }
 
 // separateQueueLen returns the length of q if it is set and distinct from fallback so it is not counted twice.
@@ -430,8 +430,8 @@ func (b *batcher) BatchSegments() error {
 	}
 	owned = boundedBatches(owned, b.maxTableBatches)
 	notOwned = boundedBatches(notOwned, b.maxTableBatches)
-	atomic.StoreUint64(&b.pendingUploads, uint64(len(owned)))
-	atomic.StoreUint64(&b.pendingTransfer, uint64(len(notOwned)))
+	b.pendingUploads.Store(uint64(len(owned)))
+	b.pendingTransfer.Store(uint64(len(notOwned)))
 
 	b.updateQueueMetrics(len(owned), len(notOwned))
 
@@ -448,8 +448,8 @@ func (b *batcher) BatchSegments() error {
 			}
 		}
 	}
-	atomic.StoreUint64(&b.pendingUploads, 0)
-	atomic.StoreUint64(&b.pendingTransfer, 0)
+	b.pendingUploads.Store(0)
+	b.pendingTransfer.Store(0)
 
 	return nil
 }

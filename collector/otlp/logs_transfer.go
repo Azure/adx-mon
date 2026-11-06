@@ -64,11 +64,9 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 
 func (s *LogsService) Open(ctx context.Context) error {
 	worker := s.workerCreator("otlp-logs", s.outputQueue)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		worker.Run()
-	}()
+	})
 	return nil
 }
 

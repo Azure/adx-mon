@@ -12,26 +12,26 @@ func TestSpaceParse(t *testing.T) {
 	type testcase struct {
 		name         string
 		input        string
-		expectedBody map[string]interface{}
+		expectedBody map[string]any
 	}
 
 	tests := []testcase{
 		{
 			name:         "empty",
 			input:        "",
-			expectedBody: map[string]interface{}{},
+			expectedBody: map[string]any{},
 		},
 		{
 			name:  "single word",
 			input: "hello",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "hello",
 			},
 		},
 		{
 			name:  "multiple words",
 			input: "hello world how are you",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "hello",
 				"field1": "world",
 				"field2": "how",
@@ -42,7 +42,7 @@ func TestSpaceParse(t *testing.T) {
 		{
 			name:  "extra spaces",
 			input: "  hello   world  ",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "hello",
 				"field1": "world",
 			},
@@ -50,7 +50,7 @@ func TestSpaceParse(t *testing.T) {
 		{
 			name:  "tabs",
 			input: "hello\tworld",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "hello",
 				"field1": "world",
 			},
@@ -58,7 +58,7 @@ func TestSpaceParse(t *testing.T) {
 		{
 			name:  "multiple tabs and spaces",
 			input: "hello\t\tworld  foo  bar",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "hello",
 				"field1": "world",
 				"field2": "foo",
@@ -68,7 +68,7 @@ func TestSpaceParse(t *testing.T) {
 		{
 			name:  "ints",
 			input: "123 456 789",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "123",
 				"field1": "456",
 				"field2": "789",
@@ -77,7 +77,7 @@ func TestSpaceParse(t *testing.T) {
 		{
 			name:  "floats",
 			input: "123.456 789.123",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "123.456",
 				"field1": "789.123",
 			},
@@ -85,7 +85,7 @@ func TestSpaceParse(t *testing.T) {
 		{
 			name:  "scientific notation",
 			input: "3.590e-06 1.23e+10",
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"field0": "3.590e-06",
 				"field1": "1.23e+10",
 			},
@@ -107,9 +107,8 @@ func BenchmarkSpaceParse(b *testing.B) {
 	parser, _ := NewSpaceParser(SpaceParserConfig{})
 	msg := "hello world how are you today"
 	log := types.NewLog()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		parser.Parse(log, msg)
 	}
 }

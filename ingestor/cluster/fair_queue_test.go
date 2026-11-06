@@ -14,11 +14,10 @@ func fairBatch(table, prefix string, size int64) *Batch {
 }
 
 func TestFairQueueReservesWorkersAcrossSchemas(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	input := make(chan *Batch, 20)
 	out := FairQueue(ctx, input, FairQueueOpts{Workers: 4})
-	for n := 0; n < 10; n++ {
+	for range 10 {
 		input <- fairBatch("A", "schema", 100)
 	}
 	first := <-out
@@ -61,8 +60,7 @@ func TestFairQueueRetryAndCancellation(t *testing.T) {
 }
 
 func TestFairQueueByteCreditAndIdleCleanup(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	input := make(chan *Batch, 2)
 	out := FairQueue(ctx, input, FairQueueOpts{Workers: 2})
 	input <- fairBatch("A", "one", 100*1024*1024)

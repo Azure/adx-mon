@@ -10,7 +10,7 @@ func TestNewTransform(t *testing.T) {
 	type testcase struct {
 		name          string
 		transformType string
-		config        map[string]interface{}
+		config        map[string]any
 		expectErr     bool
 	}
 
@@ -18,7 +18,7 @@ func TestNewTransform(t *testing.T) {
 		{
 			name:          "plugin_valid_config",
 			transformType: "plugin",
-			config: map[string]interface{}{
+			config: map[string]any{
 				"GoPath":     "plugin/test-plugin",
 				"ImportName": "github.com/Azure/testplugin/pkg/transforms",
 			},
@@ -27,7 +27,7 @@ func TestNewTransform(t *testing.T) {
 		{
 			name:          "plugin_bad_config",
 			transformType: "plugin",
-			config: map[string]interface{}{
+			config: map[string]any{
 				"GoPath":     "plugin/foo/bar",
 				"ImportName": "github.com/Azure/testplugin/pkg/transforms",
 			},
@@ -36,7 +36,7 @@ func TestNewTransform(t *testing.T) {
 		{
 			name:          "unknown plugin",
 			transformType: "fakeplugin",
-			config:        map[string]interface{}{},
+			config:        map[string]any{},
 			expectErr:     true,
 		},
 	}

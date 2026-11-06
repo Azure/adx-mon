@@ -124,13 +124,13 @@ func TestNormalizeAdxIdentifier(t *testing.T) {
 
 func BenchmarkNormalizeAdxIdentifier(b *testing.B) {
 	b.Run("No changes", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			schema.NormalizeAdxIdentifier("Redis")
 		}
 	})
 
 	b.Run("Normalize characters out", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			schema.NormalizeAdxIdentifier("Redis_Metrics")
 		}
 	})
@@ -175,9 +175,9 @@ func TestNormalizeMetricName(t *testing.T) {
 	// max length
 	require.Equal(t, fmt.Sprintf("A%s", strings.Repeat("a", 1023)), string(schema.NormalizeMetricName([]byte(strings.Repeat("a", 1025)))))
 	// preserve first portion
-	require.Equal(t, fmt.Sprintf("B%s", strings.Repeat("a", 1023)), string(schema.NormalizeMetricName([]byte(fmt.Sprintf("b%s", strings.Repeat("a", 1025))))))
+	require.Equal(t, fmt.Sprintf("B%s", strings.Repeat("a", 1023)), string(schema.NormalizeMetricName(fmt.Appendf(nil, "b%s", strings.Repeat("a", 1025)))))
 	// Remove invalid characters in middle, still truncate
-	require.Equal(t, fmt.Sprintf("AaaaA%s", strings.Repeat("a", 1019)), string(schema.NormalizeMetricName([]byte(fmt.Sprintf("aaaa_%s", strings.Repeat("a", 1025))))))
+	require.Equal(t, fmt.Sprintf("AaaaA%s", strings.Repeat("a", 1019)), string(schema.NormalizeMetricName(fmt.Appendf(nil, "aaaa_%s", strings.Repeat("a", 1025)))))
 }
 
 func TestAppendCSVHeaderWithValidMapping(t *testing.T) {

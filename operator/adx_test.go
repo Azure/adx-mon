@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	meta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -254,10 +253,8 @@ func TestAdxClusterCreate(t *testing.T) {
 
 	// Create a test CRD
 	cluster := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-operator",
-			Namespace: "default",
-		},
+		Name:      "test-operator",
+		Namespace: "default",
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: fmt.Sprintf("adxmon-%d", time.Now().Unix()),
 			Provision: &adxmonv1.ADXClusterProvisionSpec{
@@ -293,10 +290,8 @@ func TestAdxClusterCreate(t *testing.T) {
 		}
 
 		result, err := r.Reconcile(context.Background(), reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      cluster.GetName(),
-				Namespace: cluster.GetNamespace(),
-			},
+			Name:      cluster.GetName(),
+			Namespace: cluster.GetNamespace(),
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -321,10 +316,10 @@ func TestDiffSkus(t *testing.T) {
 			resp: armkusto.ClustersClientGetResponse{
 				Cluster: armkusto.Cluster{
 					SKU: &armkusto.AzureSKU{
-						Name: (*armkusto.AzureSKUName)(to.Ptr("Standard_L8as_v3")),
-						Tier: (*armkusto.AzureSKUTier)(to.Ptr("Standard")),
+						Name: (*armkusto.AzureSKUName)(new("Standard_L8as_v3")),
+						Tier: (*armkusto.AzureSKUTier)(new("Standard")),
 					},
-					Name: to.Ptr("adxmon-test"),
+					Name: new("adxmon-test"),
 				},
 			},
 			appliedProvisionState: &adxmonv1.AppliedProvisionState{
@@ -347,10 +342,10 @@ func TestDiffSkus(t *testing.T) {
 			resp: armkusto.ClustersClientGetResponse{
 				Cluster: armkusto.Cluster{
 					SKU: &armkusto.AzureSKU{
-						Name: (*armkusto.AzureSKUName)(to.Ptr("Standard_L8as_v3")),
-						Tier: (*armkusto.AzureSKUTier)(to.Ptr("Standard")),
+						Name: (*armkusto.AzureSKUName)(new("Standard_L8as_v3")),
+						Tier: (*armkusto.AzureSKUTier)(new("Standard")),
 					},
-					Name: to.Ptr("adxmon-test"),
+					Name: new("adxmon-test"),
 				},
 			},
 			appliedProvisionState: &adxmonv1.AppliedProvisionState{
@@ -375,10 +370,10 @@ func TestDiffSkus(t *testing.T) {
 			resp: armkusto.ClustersClientGetResponse{
 				Cluster: armkusto.Cluster{
 					SKU: &armkusto.AzureSKU{
-						Name: (*armkusto.AzureSKUName)(to.Ptr("Standard_L16as_v3")),
-						Tier: (*armkusto.AzureSKUTier)(to.Ptr("Standard")),
+						Name: (*armkusto.AzureSKUName)(new("Standard_L16as_v3")),
+						Tier: (*armkusto.AzureSKUTier)(new("Standard")),
 					},
-					Name: to.Ptr("adxmon-test"),
+					Name: new("adxmon-test"),
 				},
 			},
 			appliedProvisionState: &adxmonv1.AppliedProvisionState{
@@ -669,17 +664,15 @@ func TestEnsureHeartbeatTable(t *testing.T) {
 		tblName = "Heartbeat"
 	)
 	crd := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-operator",
-			Namespace: "default",
-		},
+		Name:      "test-operator",
+		Namespace: "default",
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: "adxmon-test",
 			Endpoint:    kustoContainer.ConnectionUrl(),
 			Role:        to.Ptr(adxmonv1.ClusterRoleFederated),
 			Federation: &adxmonv1.ADXClusterFederationSpec{
-				HeartbeatDatabase: to.Ptr(dbName),
-				HeartbeatTable:    to.Ptr(tblName),
+				HeartbeatDatabase: new(dbName),
+				HeartbeatTable:    new(tblName),
 			},
 		},
 	}
@@ -710,17 +703,15 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 		tblName = "Heartbeat"
 	)
 	crd := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-operator",
-			Namespace: "default",
-		},
+		Name:      "test-operator",
+		Namespace: "default",
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: "adxmon-federated-test",
 			Endpoint:    kustainerFederatedCluster.ConnectionUrl(),
 			Role:        to.Ptr(adxmonv1.ClusterRoleFederated),
 			Federation: &adxmonv1.ADXClusterFederationSpec{
-				HeartbeatDatabase: to.Ptr(dbName),
-				HeartbeatTable:    to.Ptr(tblName),
+				HeartbeatDatabase: new(dbName),
+				HeartbeatTable:    new(tblName),
 			},
 		},
 	}
@@ -742,10 +733,8 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 
 	// Heartbeat the partitioned cluster
 	heartbeat := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-operator",
-			Namespace: "default",
-		},
+		Name:      "test-operator",
+		Namespace: "default",
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: "adxmon-partitioned-test",
 			Endpoint:    kustainerPartitionedCluster.ConnectionUrl(),
@@ -1011,7 +1000,7 @@ func TestGenerateEntityGroupDefinitions_DeterministicOrdering(t *testing.T) {
 
 	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
 	var previousResult map[string][]string
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
 		if previousResult != nil {
 			require.Equal(t, previousResult, result, "results should be deterministic across runs")

@@ -23,14 +23,10 @@ func TestCollectorReconciler_IsReady(t *testing.T) {
 	require.NoError(t, appsv1.AddToScheme(scheme))
 
 	collector := &adxmonv1.Collector{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Collector",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Collector",
+		Name:       "test-collector",
+		Namespace:  "default",
 	}
 
 	// Test case 1: DaemonSet not found
@@ -46,10 +42,8 @@ func TestCollectorReconciler_IsReady(t *testing.T) {
 
 	// Test case 2: DaemonSet exists but not ready
 	ds := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "default",
-		},
+		Name:      "test-collector",
+		Namespace: "default",
 		Status: appsv1.DaemonSetStatus{
 			DesiredNumberScheduled: 3,
 			NumberReady:            1,
@@ -85,14 +79,10 @@ func TestCollectorReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, appsv1.AddToScheme(scheme))
 
 	collector := &adxmonv1.Collector{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Collector",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Collector",
+		Name:       "test-collector",
+		Namespace:  "default",
 		Spec: adxmonv1.CollectorSpec{
 			Image: "test-image:v1",
 		},
@@ -100,10 +90,8 @@ func TestCollectorReconciler_ReconcileComponent(t *testing.T) {
 
 	// Create a DaemonSet with old image
 	ds := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "default",
-		},
+		Name:      "test-collector",
+		Namespace: "default",
 		Spec: appsv1.DaemonSetSpec{
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
@@ -125,10 +113,8 @@ func TestCollectorReconciler_ReconcileComponent(t *testing.T) {
 	}
 
 	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-collector",
-			Namespace: "default",
-		},
+		Name:      "test-collector",
+		Namespace: "default",
 	}
 
 	result, err := r.ReconcileComponent(context.Background(), req)
@@ -149,14 +135,10 @@ func TestCollectorReconciler_CreateCollector(t *testing.T) {
 
 	// Minimal Collector CRD
 	collector := &adxmonv1.Collector{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Collector",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Collector",
+		Name:       "test-collector",
+		Namespace:  "default",
 		Spec: adxmonv1.CollectorSpec{
 			Image:            "test-image:v1",
 			IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
@@ -195,11 +177,9 @@ func TestCollectorReconciler_ApplyDefaults(t *testing.T) {
 
 	// Test auto-configuration of defaults
 	collector := &adxmonv1.Collector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "test-namespace",
-		},
-		Spec: adxmonv1.CollectorSpec{
+		Name:      "test-collector",
+		Namespace: "test-namespace",
+		Spec:      adxmonv1.CollectorSpec{
 			// Leave image and endpoint empty to test defaults
 		},
 	}
@@ -225,10 +205,8 @@ func TestCollectorReconciler_ApplyDefaults_WithIngestor(t *testing.T) {
 
 	// Create an Ingestor in the same namespace
 	ingestor := &adxmonv1.Ingestor{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingestor",
-			Namespace: "test-namespace",
-		},
+		Name:      "test-ingestor",
+		Namespace: "test-namespace",
 		Spec: adxmonv1.IngestorSpec{
 			Endpoint: "https://test-ingestor.example.com",
 		},
@@ -242,11 +220,9 @@ func TestCollectorReconciler_ApplyDefaults_WithIngestor(t *testing.T) {
 
 	// Test that collector uses Ingestor endpoint
 	collector := &adxmonv1.Collector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-collector",
-			Namespace: "test-namespace",
-		},
-		Spec: adxmonv1.CollectorSpec{
+		Name:      "test-collector",
+		Namespace: "test-namespace",
+		Spec:      adxmonv1.CollectorSpec{
 			// Leave endpoint empty to test auto-discovery
 		},
 	}
@@ -272,10 +248,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)
@@ -296,10 +270,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)
@@ -310,14 +282,10 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 	// Test case 3: First time reconciliation (no condition)
 	t.Run("FirstTimeReconciliation", func(t *testing.T) {
 		collector := &adxmonv1.Collector{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "adx-mon.azure.com/v1",
-				Kind:       "Collector",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Collector",
+			Name:       "test-collector",
+			Namespace:  "default",
 			Spec: adxmonv1.CollectorSpec{
 				Image:            "test-image:v1",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
@@ -332,10 +300,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)
@@ -354,14 +320,10 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 	// Test case 4: Waiting for ready state
 	t.Run("WaitingForReady", func(t *testing.T) {
 		collector := &adxmonv1.Collector{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "adx-mon.azure.com/v1",
-				Kind:       "Collector",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Collector",
+			Name:       "test-collector",
+			Namespace:  "default",
 			Status: adxmonv1.CollectorStatus{
 				Conditions: []metav1.Condition{
 					{
@@ -378,10 +340,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 
 		// Create a DaemonSet that's not yet ready
 		ds := &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 			Status: appsv1.DaemonSetStatus{
 				DesiredNumberScheduled: 3,
 				NumberReady:            1,
@@ -396,10 +356,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)
@@ -410,14 +368,10 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 	// Test case 5: Retry installation (condition status unknown)
 	t.Run("RetryInstallation", func(t *testing.T) {
 		collector := &adxmonv1.Collector{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "adx-mon.azure.com/v1",
-				Kind:       "Collector",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Collector",
+			Name:       "test-collector",
+			Namespace:  "default",
 			Spec: adxmonv1.CollectorSpec{
 				Image:            "test-image:v1",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
@@ -444,10 +398,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)
@@ -458,10 +410,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 	// Test case 6: CRD updated (generation changed)
 	t.Run("CRDUpdated", func(t *testing.T) {
 		collector := &adxmonv1.Collector{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "adx-mon.azure.com/v1",
-				Kind:       "Collector",
-			},
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Collector",
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "test-collector",
 				Namespace:  "default",
@@ -493,10 +443,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)
@@ -507,15 +455,11 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 	// Test case 7: Collector is ready and up-to-date (no action needed)
 	t.Run("CollectorReadyUpToDate", func(t *testing.T) {
 		collector := &adxmonv1.Collector{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "adx-mon.azure.com/v1",
-				Kind:       "Collector",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:       "test-collector",
-				Namespace:  "default",
-				Generation: 1,
-			},
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Collector",
+			Name:       "test-collector",
+			Namespace:  "default",
+			Generation: 1,
 			Spec: adxmonv1.CollectorSpec{
 				Image:            "test-image:v1",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
@@ -542,10 +486,8 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 		}
 
 		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      "test-collector",
-				Namespace: "default",
-			},
+			Name:      "test-collector",
+			Namespace: "default",
 		}
 
 		result, err := r.Reconcile(context.Background(), req)

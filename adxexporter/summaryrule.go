@@ -675,7 +675,7 @@ func (r *SummaryRuleReconciler) emitHealthLog(rule *adxmonv1.SummaryRule) {
 
 	l := logger.Logger()
 	// Construct structured fields; keep keys stable
-	kv := []interface{}{
+	kv := []any{
 		"event", "summaryrule_health",
 		"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
 		"database", rule.Spec.Database,

@@ -306,9 +306,8 @@ func BenchmarkTailSource(b *testing.B) {
 	testDir := b.TempDir()
 	testFile := filepath.Join(testDir, "test.log")
 	generateLogs(b, testFile, numLogs, time.Now(), time.Millisecond*10)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sink := sinks.NewCountingSink(int64(numLogs))
 		allSinks := []types.Sink{sink}
 		tailSource, err := NewTailSource(TailSourceConfig{
@@ -345,9 +344,8 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 	generateLogs(b, testFileOne, numLogs, time.Now(), time.Millisecond*10)
 	testFileTwo := filepath.Join(testDir, "test2.log")
 	generateLogs(b, testFileTwo, numLogs, time.Now(), time.Millisecond*10)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		// Expect 2x numLogs, for both files
 		sink := sinks.NewCountingSink(int64(numLogs * 2))
 		allSinks := []types.Sink{sink}
@@ -438,7 +436,7 @@ func generateLogs(t testing.TB, fileName string, count int, startTime time.Time,
 func writeLogs(t testing.TB, file *os.File, count int, startTime time.Time, interval time.Duration) {
 	t.Helper()
 	currentTime := startTime.UTC()
-	for i := 0; i < count; i++ {
+	for i := range count {
 		writeLogLine(t, file, currentTime, fmt.Sprintf(`li %d\n`, i))
 		currentTime = currentTime.Add(interval)
 	}
@@ -450,7 +448,7 @@ func writeLogs(t testing.TB, file *os.File, count int, startTime time.Time, inte
 func writeLogLine(t testing.TB, file *os.File, currentTime time.Time, log string) {
 	t.Helper()
 	timestamp := currentTime.Format(time.RFC3339Nano)
-	_, err := file.WriteString(fmt.Sprintf(`{"time": "%s", "stream": "stdout", "log": "%s"}`, timestamp, log))
+	_, err := fmt.Fprintf(file, `{"time": "%s", "stream": "stdout", "log": "%s"}`, timestamp, log)
 	require.NoError(t, err)
 	_, err = file.WriteString("\n")
 	require.NoError(t, err)

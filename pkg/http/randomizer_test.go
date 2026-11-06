@@ -2,7 +2,6 @@ package http
 
 import (
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,10 +9,10 @@ import (
 
 func TestMaybeCloseConnection(t *testing.T) {
 	// Reset the counter before each test
-	atomic.StoreUint64(&counter, 0)
+	counter.Store(0)
 
 	t.Run("does not close connection before threshold", func(t *testing.T) {
-		for i := 0; i < closeEvery-1; i++ {
+		for range closeEvery - 1 {
 			req := httptest.NewRequest("GET", "/", nil)
 			resp := httptest.NewRecorder()
 
@@ -29,7 +28,7 @@ func TestMaybeCloseConnection(t *testing.T) {
 		resp := httptest.NewRecorder()
 
 		// Simulate reaching the threshold
-		atomic.StoreUint64(&counter, closeEvery-1)
+		counter.Store(closeEvery - 1)
 		MaybeCloseConnection(resp, req)
 
 		require.True(t, req.Close)

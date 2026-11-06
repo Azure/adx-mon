@@ -19,7 +19,7 @@ func TestEventBatcher_BatchesOldestFirst(t *testing.T) {
 
 	now := time.Now()
 	var want []string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		want = append(want, fmt.Sprintf("db_T%02d", i))
 	}
 	for _, i := range rand.Perm(len(want)) {

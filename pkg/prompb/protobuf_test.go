@@ -200,8 +200,7 @@ func BenchmarkWriteRequestMarshalTo(b *testing.B) {
 	}
 
 	buf := make([]byte, 0, 32*1024)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var err error
 		buf, err = wr.MarshalTo(buf[:0])
 		if err != nil {
@@ -235,7 +234,7 @@ func BenchmarkWriteRequestUnmarshal(b *testing.B) {
 	b.ResetTimer()
 
 	wr = &WriteRequest{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		wr.Timeseries = nil
 		require.NoError(b, wr.Unmarshal(buf))
 	}
@@ -289,9 +288,8 @@ func benchmarkWriteRequestMarshalTo(b *testing.B, request *WriteRequest) {
 	b.Helper()
 	b.ReportAllocs()
 	buf := make([]byte, 0, 32*1024)
-	b.ResetTimer()
 
-	for range b.N {
+	for b.Loop() {
 		var err error
 		buf, err = request.MarshalTo(buf[:0])
 		if err != nil {

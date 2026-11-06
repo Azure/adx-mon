@@ -35,10 +35,9 @@ func TestKubeletPodInformerEmitsEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := newFakeHandler()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1", UID: types.UID("pod-1")}}
+	pod := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
 	fakeClient.UpsertPod(pod)
 
 	require.NoError(t, informer.Open(ctx))
@@ -72,7 +71,7 @@ func TestKubeletPodInformerEmitsEvents(t *testing.T) {
 	handler.assertNoMoreEvents(t)
 
 	// Add a new pod after initial sync
-	newPod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2", UID: types.UID("pod-2")}}
+	newPod := corev1.Pod{Name: "pod-2", UID: types.UID("pod-2")}
 	fakeClient.UpsertPod(newPod)
 	clk.Step(time.Minute)
 
@@ -96,12 +95,11 @@ func TestKubeletPodInformerMultipleAddsUpdatesDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := newFakeHandler()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Start with two pods
-	pod1 := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1", UID: types.UID("pod-1")}}
-	pod2 := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2", UID: types.UID("pod-2")}}
+	pod1 := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
+	pod2 := corev1.Pod{Name: "pod-2", UID: types.UID("pod-2")}
 	fakeClient.UpsertPod(pod1)
 	fakeClient.UpsertPod(pod2)
 
@@ -123,7 +121,7 @@ func TestKubeletPodInformerMultipleAddsUpdatesDeletes(t *testing.T) {
 	handler.assertNoMoreEvents(t)
 
 	// Add a new pod
-	pod3 := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-3", UID: types.UID("pod-3")}}
+	pod3 := corev1.Pod{Name: "pod-3", UID: types.UID("pod-3")}
 	fakeClient.UpsertPod(pod3)
 	clk.Step(time.Minute)
 
@@ -152,7 +150,7 @@ func TestKubeletPodInformerMultipleAddsUpdatesDeletes(t *testing.T) {
 	handler.assertNoMoreEvents(t)
 
 	// Add pod-4 and delete pod-2 in the same poll
-	pod4 := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-4", UID: types.UID("pod-4")}}
+	pod4 := corev1.Pod{Name: "pod-4", UID: types.UID("pod-4")}
 	fakeClient.UpsertPod(pod4)
 	fakeClient.RemovePod(pod2.UID)
 	clk.Step(time.Minute)
@@ -208,30 +206,25 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1", UID: types.UID("pod-1")}}
+	pod := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
 	fakeClient.UpsertPod(pod)
 
 	require.NoError(t, informer.Open(ctx))
 
 	// Multiple closes not an error
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		require.NoError(t, informer.Close())
-	}()
+	})
 	wg.Wait()
 	require.NoError(t, informer.Close())
 
-	podTwo := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2", UID: types.UID("pod-2")}}
+	podTwo := corev1.Pod{Name: "pod-2", UID: types.UID("pod-2")}
 	fakeClient.UpsertPod(podTwo)
 	require.NoError(t, informer.Open(ctx))
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		handler := newFakeHandler()
 		reg, err := informer.Add(ctx, handler)
 		require.NoError(t, err)
@@ -242,7 +235,7 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 		add2 := handler.waitAdd(t)
 		require.True(t, add1.Initial)
 		require.True(t, add2.Initial)
-	}()
+	})
 	wg.Wait()
 
 	require.NoError(t, informer.Close())
@@ -311,13 +304,13 @@ func newFakeHandler() *fakeHandler {
 	}
 }
 
-func (f *fakeHandler) OnAdd(obj interface{}, isInitialList bool) {
+func (f *fakeHandler) OnAdd(obj any, isInitialList bool) {
 	if pod, ok := obj.(*corev1.Pod); ok {
 		f.adds <- addEvent{Pod: pod.DeepCopy(), Initial: isInitialList}
 	}
 }
 
-func (f *fakeHandler) OnUpdate(oldObj, newObj interface{}) {
+func (f *fakeHandler) OnUpdate(oldObj, newObj any) {
 	oldPod, okOld := oldObj.(*corev1.Pod)
 	newPod, okNew := newObj.(*corev1.Pod)
 	if okOld && okNew {
@@ -325,7 +318,7 @@ func (f *fakeHandler) OnUpdate(oldObj, newObj interface{}) {
 	}
 }
 
-func (f *fakeHandler) OnDelete(obj interface{}) {
+func (f *fakeHandler) OnDelete(obj any) {
 	if pod, ok := obj.(*corev1.Pod); ok {
 		f.deletes <- deleteEvent{Pod: pod.DeepCopy()}
 	}
@@ -380,18 +373,14 @@ func (f *fakeHandler) assertNoMoreEvents(t *testing.T) {
 
 func TestKubeletClientListPods(t *testing.T) {
 	pod1 := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pod-1",
-			Namespace: "default",
-			UID:       types.UID("uid-1"),
-		},
+		Name:      "pod-1",
+		Namespace: "default",
+		UID:       types.UID("uid-1"),
 	}
 	pod2 := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pod-2",
-			Namespace: "kube-system",
-			UID:       types.UID("uid-2"),
-		},
+		Name:      "pod-2",
+		Namespace: "kube-system",
+		UID:       types.UID("uid-2"),
 	}
 
 	podList := corev1.PodList{
@@ -632,7 +621,7 @@ func benchmarkApplyPodList(b *testing.B, podCount, handlerCount int, updateRatio
 
 	// Register handlers
 	handlers := make([]*benchHandler, handlerCount)
-	for i := 0; i < handlerCount; i++ {
+	for i := range handlerCount {
 		handler := &benchHandler{}
 		reg := &kubeletRegistration{
 			informer: informer,
@@ -644,7 +633,7 @@ func benchmarkApplyPodList(b *testing.B, podCount, handlerCount int, updateRatio
 
 	// Create initial pod set
 	initialPods := make([]corev1.Pod, podCount)
-	for i := 0; i < podCount; i++ {
+	for i := range podCount {
 		pod := createBenchPod(i, 0)
 		initialPods[i] = pod
 		informer.currentPods[pod.UID] = &initialPods[i]
@@ -658,7 +647,7 @@ func benchmarkApplyPodList(b *testing.B, podCount, handlerCount int, updateRatio
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		// Create new pod list with specified changes
 		newPods := make([]corev1.Pod, 0, podCount-deleteCount+addCount)
 
@@ -676,7 +665,7 @@ func benchmarkApplyPodList(b *testing.B, podCount, handlerCount int, updateRatio
 		}
 
 		// Add new pods
-		for j := 0; j < addCount; j++ {
+		for j := range addCount {
 			newPods = append(newPods, createBenchPod(podCount+i*addCount+j, i+1))
 		}
 
@@ -691,15 +680,15 @@ type benchHandler struct {
 	deleteCount int
 }
 
-func (h *benchHandler) OnAdd(obj interface{}, isInitialList bool) {
+func (h *benchHandler) OnAdd(obj any, isInitialList bool) {
 	h.addCount++
 }
 
-func (h *benchHandler) OnUpdate(oldObj, newObj interface{}) {
+func (h *benchHandler) OnUpdate(oldObj, newObj any) {
 	h.updateCount++
 }
 
-func (h *benchHandler) OnDelete(obj interface{}) {
+func (h *benchHandler) OnDelete(obj any) {
 	h.deleteCount++
 }
 
@@ -714,13 +703,11 @@ func createBenchPod(index, version int) corev1.Pod {
 	}
 
 	return corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "pod-" + string(rune('0'+index/1000)) + string(rune('0'+(index/100)%10)) + string(rune('0'+(index/10)%10)) + string(rune('0'+index%10)),
-			Namespace:       "default",
-			UID:             types.UID("pod-uid-" + string(rune('0'+index/1000)) + string(rune('0'+(index/100)%10)) + string(rune('0'+(index/10)%10)) + string(rune('0'+index%10))),
-			Labels:          labels,
-			ResourceVersion: fmt.Sprintf("%d", version),
-		},
+		Name:            "pod-" + string(rune('0'+index/1000)) + string(rune('0'+(index/100)%10)) + string(rune('0'+(index/10)%10)) + string(rune('0'+index%10)),
+		Namespace:       "default",
+		UID:             types.UID("pod-uid-" + string(rune('0'+index/1000)) + string(rune('0'+(index/100)%10)) + string(rune('0'+(index/10)%10)) + string(rune('0'+index%10))),
+		Labels:          labels,
+		ResourceVersion: fmt.Sprintf("%d", version),
 		Spec: corev1.PodSpec{
 			NodeName: "test-node",
 			Containers: []corev1.Container{
@@ -756,7 +743,7 @@ func BenchmarkPodChanged(b *testing.B) {
 
 	b.Run("NoChange", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = podChanged(&pod1, &pod2)
 		}
 	})
@@ -766,7 +753,7 @@ func BenchmarkPodChanged(b *testing.B) {
 
 	b.Run("ContainerRestart", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = podChanged(&pod3, &pod4)
 		}
 	})
@@ -777,7 +764,7 @@ func BenchmarkPodChanged(b *testing.B) {
 
 	b.Run("LabelChange", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = podChanged(&pod5, &pod6)
 		}
 	})
@@ -787,14 +774,12 @@ func BenchmarkPodChanged(b *testing.B) {
 func TestPodChanged(t *testing.T) {
 	basePod := func() corev1.Pod {
 		return corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-pod",
-				Namespace: "default",
-				UID:       types.UID("test-uid"),
-				Labels:    map[string]string{"app": "test"},
-				Annotations: map[string]string{
-					"adx-mon/scrape": "true",
-				},
+			Name:      "test-pod",
+			Namespace: "default",
+			UID:       types.UID("test-uid"),
+			Labels:    map[string]string{"app": "test"},
+			Annotations: map[string]string{
+				"adx-mon/scrape": "true",
 			},
 			Spec: corev1.PodSpec{
 				NodeName: "node-1",

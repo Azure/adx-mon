@@ -15,12 +15,12 @@ func TestGlobalLimitIsNeverExceededWithBatching(t *testing.T) {
 	a := NewAdmission(AdmissionOpts{Global: Usage{Bytes: limit}})
 
 	var wg sync.WaitGroup
-	for n := 0; n < 64; n++ {
+	for n := range 64 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
 			d := Destination{Database: "DB", Table: fmt.Sprintf("T%d", n)}
-			for i := 0; i < 128; i++ {
+			for range 128 {
 				r, err := a.Reserve(fmt.Sprintf("p%d", n), d, 512, 0)
 				if err != nil {
 					return
@@ -56,7 +56,7 @@ func TestPublishedTotalSettlesAfterDrain(t *testing.T) {
 	a := NewAdmission(AdmissionOpts{Global: Usage{Bytes: 1 << 20}})
 	d := Destination{Database: "DB", Table: "A"}
 
-	for n := 0; n < 50; n++ {
+	for n := range 50 {
 		path := fmt.Sprintf("p%d", n)
 		r, err := a.Reserve(path, d, 1024, 1)
 		require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestPublishedTotalSettlesAfterDrain(t *testing.T) {
 	}
 	require.Equal(t, Usage{Bytes: 50 * 1024, Segments: 50}, a.Usage())
 
-	for n := 0; n < 50; n++ {
+	for n := range 50 {
 		a.Forget(d, fmt.Sprintf("p%d", n))
 	}
 

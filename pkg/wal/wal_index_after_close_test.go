@@ -34,7 +34,7 @@ func TestWALIndexesSegmentOnlyAfterClose(t *testing.T) {
 
 			// Nothing is flushed in the background, so only closing the segment writes its data to disk.
 			w := newTestWAL(t, WALOpts{Index: idx, SegmentMaxSize: 1 << 20, WALFlushInterval: time.Hour})
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				require.NoError(t, w.Write(context.Background(), []byte("some sample data")))
 			}
 			release(w)

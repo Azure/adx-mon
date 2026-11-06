@@ -118,7 +118,7 @@ type SummaryJSON struct {
 }
 
 type NumberDataPointJSON struct {
-	Value        interface{}     `json:"value"`
+	Value        any             `json:"value"`
 	TimeUnixNano string          `json:"timeUnixNano"`
 	Attributes   []AttributeJSON `json:"attributes,omitempty"`
 }

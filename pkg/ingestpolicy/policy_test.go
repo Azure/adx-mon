@@ -114,15 +114,13 @@ func TestPolicyConcurrentReads(t *testing.T) {
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 1000; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 1000 {
 				require.Equal(t, PriorityRealtime, p.Priority("Metrics", "CpuUsage"))
 				require.Equal(t, PriorityQueued, p.Priority("Metrics", "Other"))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -142,7 +140,7 @@ func TestPriorityLookupsDoNotAllocate(t *testing.T) {
 
 func BenchmarkPriority(b *testing.B) {
 	tables := make([]Table, 0, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		tables = append(tables, Table{Database: "Metrics", Table: "Table" + string(rune('A'+i%26)) + string(rune('a'+i/26))})
 	}
 	p, err := New(tables)
@@ -150,27 +148,27 @@ func BenchmarkPriority(b *testing.B) {
 
 	b.Run("hit", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = p.Priority("Metrics", "TableAa")
 		}
 	})
 	b.Run("miss", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = p.Priority("Metrics", "NotRealtime")
 		}
 	})
 	b.Run("bytes", func(b *testing.B) {
 		db, table := []byte("Metrics"), []byte("TableAa")
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = p.PriorityBytes(db, table)
 		}
 	})
 	b.Run("empty", func(b *testing.B) {
 		var empty *Policy
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = empty.Priority("Metrics", "TableAa")
 		}
 	})

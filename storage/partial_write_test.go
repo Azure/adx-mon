@@ -47,7 +47,7 @@ func writtenTables(a *wal.Admission) int {
 func TestWriteTimeSeriesWritesNothingWhenFull(t *testing.T) {
 	s, a := newFullStore(t)
 	r := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries(fmt.Sprintf("metric%d", i), nil, 1, 1))
 	}
 
@@ -62,7 +62,7 @@ func TestWriteTimeSeriesWritesNothingWhenFull(t *testing.T) {
 func TestWriteNativeLogsReportsWhereItStopped(t *testing.T) {
 	s, a := newFullStore(t)
 	batch := &types.LogBatch{}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		log := types.NewLog()
 		log.SetAttributeValue(types.AttributeDatabaseName, "DB")
 		log.SetAttributeValue(types.AttributeTableName, fmt.Sprintf("Table%d", i))

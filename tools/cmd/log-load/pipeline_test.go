@@ -64,8 +64,7 @@ func TestPipelineWaitsForInflightWrite(t *testing.T) {
 			return writeResult{}, ctx.Err()
 		}
 	}}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := &stats{}
 	done := make(chan error, 1)
 	go func() { done <- runPipeline(ctx, testGenerator(2), []batchWriter{writer}, s, false) }()
@@ -95,8 +94,7 @@ func TestPipelineWriterFailureCancelsProducer(t *testing.T) {
 		},
 		closeErr: closeErr,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := &stats{}
 	done := make(chan error, 1)
 	go func() { done <- runPipeline(ctx, testGenerator(0), []batchWriter{writer}, s, false) }()

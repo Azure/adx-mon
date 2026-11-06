@@ -115,12 +115,10 @@ func TestCloseWaitsForAllConcurrentRequests(t *testing.T) {
 	})
 
 	var wg sync.WaitGroup
-	for n := 0; n < 4; n++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 4 {
+		wg.Go(func() {
 			s.Handler(httptest.NewRecorder(), rawlogRequest(t))
-		}()
+		})
 	}
 	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return active == 4 }, 2*time.Second, time.Millisecond)
 

@@ -124,8 +124,7 @@ func TestFileWriterWriteFailureCancelsPipeline(t *testing.T) {
 	writer := newFileWriter(output)
 	gen := testGenerator(0)
 	gen.batchSize = 2500 // Force an automatic buffer flush during JSON encoding.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- runPipeline(ctx, gen, []batchWriter{writer}, &stats{}, false) }()
 	if err := awaitResult(t, done); !errors.Is(err, writeErr) || !strings.Contains(err.Error(), "write JSON line") {

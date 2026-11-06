@@ -230,7 +230,6 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			database := "adxmetrics"
@@ -285,7 +284,6 @@ func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			b := make([]byte, 256)
 			database := "adxlogs"
@@ -354,7 +352,6 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			b := make([]byte, 256)
 			database := "adxlogs"
@@ -551,8 +548,7 @@ func BenchmarkSegmentKey(b *testing.B) {
 	buf := make([]byte, 256)
 	series := newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		segmentKey(buf[:0], series, 0)
 	}
 }
@@ -572,11 +568,11 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 	require.Equal(b, 0, s.WALCount())
 
 	batch := make([]*prompb.TimeSeries, 2500)
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	}
 	req := &prompb.WriteRequest{Timeseries: batch}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		require.NoError(b, s.WriteTimeSeries(context.Background(), req))
 	}
 }

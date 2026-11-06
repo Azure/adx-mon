@@ -60,14 +60,14 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 		return fmt.Errorf("fromStream failed to read file: %w", err)
 	}
 
-	chunks := bytes.Split(contents, []byte("---"))
-	for _, chunk := range chunks {
+	chunks := bytes.SplitSeq(contents, []byte("---"))
+	for chunk := range chunks {
 		whitespaceTrimmed := strings.TrimSpace(string(chunk))
 		if len(whitespaceTrimmed) == 0 {
 			continue
 		}
 
-		genericStructure := make(map[string]interface{})
+		genericStructure := make(map[string]any)
 		err = yaml.Unmarshal(chunk, &genericStructure)
 		if err != nil {
 			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)

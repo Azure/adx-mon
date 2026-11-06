@@ -38,7 +38,7 @@ func main() {
 	confEncoder.SetArraysMultiline(true)
 
 	funcMap := template.FuncMap{
-		"configToToml": func(config interface{}) (string, error) {
+		"configToToml": func(config any) (string, error) {
 			confBuffer.Reset()
 
 			if err := confEncoder.Encode(config); err != nil {
@@ -110,7 +110,7 @@ func getContents() Contents {
 					StorageDir:  "/var/lib/adx-mon",
 					EnablePprof: true,
 
-					DefaultDropMetrics: boolPtr(false),
+					DefaultDropMetrics: new(false),
 					AddLabels: map[string]string{
 						"collectedBy": "collector",
 					},
@@ -157,7 +157,7 @@ func getContents() Contents {
 							{
 								Name:               "to-otlp",
 								Destination:        "http://localhost:4318/v1/metrics",
-								DefaultDropMetrics: boolPtr(true),
+								DefaultDropMetrics: new(true),
 								AddLabels: map[string]string{
 									"forwarded_to": "otlp",
 								},
@@ -271,7 +271,7 @@ func getContents() Contents {
 						Transforms: []*config.LogTransform{
 							{
 								Name: "addattributes",
-								Config: map[string]interface{}{
+								Config: map[string]any{
 									"environment": "production",
 								},
 							},
@@ -337,7 +337,7 @@ func getContents() Contents {
 							Transforms: []*config.LogTransform{
 								{
 									Name: "addattributes",
-									Config: map[string]interface{}{
+									Config: map[string]any{
 										"environment": "production",
 									},
 								},
@@ -526,7 +526,7 @@ func getContents() Contents {
 							{
 								Name:               "to-local-otlp",
 								Destination:        "http://localhost:4318/v1/metrics",
-								DefaultDropMetrics: boolPtr(true),
+								DefaultDropMetrics: new(true),
 								AddLabels: map[string]string{
 									"forwarded_to": "otlp",
 								},
@@ -543,7 +543,7 @@ func getContents() Contents {
 							{
 								Name:               "to-remote-otlp",
 								Destination:        "https://metrics.contoso.org/v1/metrics",
-								DefaultDropMetrics: boolPtr(true),
+								DefaultDropMetrics: new(true),
 								AddLabels: map[string]string{
 									"forwarded_to": "otlp",
 								},
@@ -604,8 +604,9 @@ func getContents() Contents {
 	}
 }
 
+//go:fix inline
 func boolPtr(val bool) *bool {
-	return &val
+	return new(val)
 }
 
 var HostLogDescription = "The host log config configures file, journald, and kernel log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.\n\n" +

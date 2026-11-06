@@ -18,7 +18,7 @@ func TestStore_ReloadRulesSkipsInvalidInterval(t *testing.T) {
 
 	newRule := func(name string, interval time.Duration) *alertrulev1.AlertRule {
 		return &alertrulev1.AlertRule{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "foo", Name: name},
+			Namespace: "foo", Name: name,
 			Spec: alertrulev1.AlertRuleSpec{
 				Database:    "SomeDB",
 				Interval:    metav1.Duration{Duration: interval},

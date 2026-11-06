@@ -173,7 +173,7 @@ func TestHealthSuccessClearsFailureBackoff(t *testing.T) {
 // Without InitialUnhealthyTimeout every failure skips the peer for the full UnhealthyTimeout, as before.
 func TestHealthPeerBackoffDefaultIsUnhealthyTimeout(t *testing.T) {
 	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute})
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		require.Equal(t, time.Minute, failAfterBackoff(h, "peer"))
 	}
 
@@ -234,7 +234,7 @@ func TestReplicatorPeerOverloadHonorsRetryAfter(t *testing.T) {
 func TestHealthPeerBackoffIsJittered(t *testing.T) {
 	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute, InitialUnhealthyTimeout: time.Second})
 	seen := map[time.Duration]bool{}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		peer := fmt.Sprintf("peer-%d", i)
 		before := time.Now()
 		h.SetPeerUnhealthy(peer)

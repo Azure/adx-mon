@@ -34,7 +34,7 @@ func TestAdmissionIsolationAndRecovery(t *testing.T) {
 func TestAdmissionConcurrentReservations(t *testing.T) {
 	a := NewAdmission(AdmissionOpts{Enforce: true, Global: Usage{100, 10}, Default: Usage{100, 10}})
 	var wg sync.WaitGroup
-	for n := 0; n < 100; n++ {
+	for n := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -67,7 +67,7 @@ func TestAdmissionOverridesGlobalAndHysteresis(t *testing.T) {
 
 func TestReservationReleaseRollsBackAndReusesSafely(t *testing.T) {
 	a := NewAdmission(AdmissionOpts{Enforce: true, Default: Usage{100, 10}})
-	for n := 0; n < 100; n++ {
+	for range 100 {
 		r, err := a.Reserve("a", Destination{"DB", "A"}, 10, 1)
 		require.NoError(t, err)
 		r.Release()

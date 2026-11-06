@@ -535,7 +535,7 @@ func TestConfig_ValidateOtelLog_Transforms(t *testing.T) {
 				Transforms: []*LogTransform{
 					{
 						Name: "plugin",
-						Config: map[string]interface{}{
+						Config: map[string]any{
 							"GoPath":     "path",
 							"ImportName": "import",
 						},
@@ -557,14 +557,14 @@ func TestConfig_ValidateOtelLog_Transforms(t *testing.T) {
 				Transforms: []*LogTransform{
 					{
 						Name: "plugin",
-						Config: map[string]interface{}{
+						Config: map[string]any{
 							"GoPath":     "path",
 							"ImportName": "import",
 						},
 					},
 					{
 						Name:   "unknown-type",
-						Config: map[string]interface{}{},
+						Config: map[string]any{},
 					},
 				},
 			},
@@ -1494,7 +1494,7 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 				Transforms: []*LogTransform{
 					{
 						Name: "plugin",
-						Config: map[string]interface{}{
+						Config: map[string]any{
 							"GoPath":     "path",
 							"ImportName": "import",
 						},
@@ -1523,14 +1523,14 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 				Transforms: []*LogTransform{
 					{
 						Name: "plugin",
-						Config: map[string]interface{}{
+						Config: map[string]any{
 							"GoPath":     "path",
 							"ImportName": "import",
 						},
 					},
 					{
 						Name:   "shootlasers",
-						Config: map[string]interface{}{},
+						Config: map[string]any{},
 					},
 				},
 			},

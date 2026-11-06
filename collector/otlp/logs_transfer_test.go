@@ -550,8 +550,7 @@ func BenchmarkLogsService(b *testing.B) {
 
 	recorder := httptest.NewRecorder()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		req, _ := http.NewRequest("POST", "/v1/logs", bytes.NewReader(serialized))
 		req.Header.Set("Content-Type", "application/x-protobuf")
 

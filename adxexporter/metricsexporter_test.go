@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -214,10 +213,8 @@ func TestReconcile(t *testing.T) {
 		{
 			name: "successful reconciliation with matching criteria",
 			metricsExporter: &adxmonv1.MetricsExporter{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-exporter",
-					Namespace: "default",
-				},
+				Name:      "test-exporter",
+				Namespace: "default",
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
@@ -239,7 +236,7 @@ func TestReconcile(t *testing.T) {
 			expectedRequeueTime: time.Minute, // Minimum requeue interval
 			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
 				// Return successful query results
-				mock.SetNextResult(t, [][]interface{}{
+				mock.SetNextResult(t, [][]any{
 					{"test_metric", 42.5, time.Now()},
 				})
 			},
@@ -248,10 +245,8 @@ func TestReconcile(t *testing.T) {
 		{
 			name: "successful reconciliation with longer interval",
 			metricsExporter: &adxmonv1.MetricsExporter{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-exporter-long",
-					Namespace: "default",
-				},
+				Name:      "test-exporter-long",
+				Namespace: "default",
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 5 * time.Minute},
@@ -271,7 +266,7 @@ func TestReconcile(t *testing.T) {
 			expectedRequeueTime: 5 * time.Minute,
 			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
 				// Return successful query results
-				mock.SetNextResult(t, [][]interface{}{
+				mock.SetNextResult(t, [][]any{
 					{"long_interval_metric", 100.0, time.Now()},
 				})
 			},
@@ -280,10 +275,8 @@ func TestReconcile(t *testing.T) {
 		{
 			name: "skipped reconciliation due to non-matching criteria",
 			metricsExporter: &adxmonv1.MetricsExporter{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-exporter-skip",
-					Namespace: "default",
-				},
+				Name:      "test-exporter-skip",
+				Namespace: "default",
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
@@ -310,10 +303,8 @@ func TestReconcile(t *testing.T) {
 		{
 			name: "query execution failure",
 			metricsExporter: &adxmonv1.MetricsExporter{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-exporter-error",
-					Namespace: "default",
-				},
+				Name:      "test-exporter-error",
+				Namespace: "default",
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
@@ -383,10 +374,8 @@ func TestReconcile(t *testing.T) {
 			require.NoError(t, err)
 
 			req := reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      tt.metricsExporter.Name,
-					Namespace: tt.metricsExporter.Namespace,
-				},
+				Name:      tt.metricsExporter.Name,
+				Namespace: tt.metricsExporter.Namespace,
 			}
 
 			result, err := reconciler.Reconcile(context.Background(), req)
@@ -434,10 +423,8 @@ func TestReconcile_NotFound(t *testing.T) {
 	}
 
 	req := reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "nonexistent",
-			Namespace: "default",
-		},
+		Name:      "nonexistent",
+		Namespace: "default",
 	}
 
 	result, err := reconciler.Reconcile(context.Background(), req)
@@ -585,10 +572,8 @@ func TestResourceAttributesInOTLPPayload(t *testing.T) {
 
 	// Create test MetricsExporter
 	me := &adxmonv1.MetricsExporter{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-resource-attrs",
-			Namespace: "default",
-		},
+		Name:      "test-resource-attrs",
+		Namespace: "default",
 		Spec: adxmonv1.MetricsExporterSpec{
 			Transform: adxmonv1.TransformConfig{
 				ValueColumns:      []string{"count"},
@@ -718,10 +703,8 @@ func TestMetricNamePrefix(t *testing.T) {
 			require.NoError(t, err)
 
 			me := &adxmonv1.MetricsExporter{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-prefix",
-					Namespace: "default",
-				},
+				Name:      "test-prefix",
+				Namespace: "default",
 				Spec: adxmonv1.MetricsExporterSpec{
 					Transform: adxmonv1.TransformConfig{
 						ValueColumns:     []string{"value"},
@@ -827,10 +810,8 @@ func TestMetricNamePrefixInOTLPPayload(t *testing.T) {
 			}
 
 			me := &adxmonv1.MetricsExporter{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-prefix",
-					Namespace: "default",
-				},
+				Name:      "test-prefix",
+				Namespace: "default",
 				Spec: adxmonv1.MetricsExporterSpec{
 					Transform: adxmonv1.TransformConfig{
 						ValueColumns:     []string{valueColumn},
@@ -919,10 +900,8 @@ func TestTransformAndRegisterMetrics(t *testing.T) {
 
 	// Create test MetricsExporter with transform configuration
 	me := &adxmonv1.MetricsExporter{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-exporter",
-			Namespace: "default",
-		},
+		Name:      "test-exporter",
+		Namespace: "default",
 		Spec: adxmonv1.MetricsExporterSpec{
 			Transform: adxmonv1.TransformConfig{
 				ValueColumns:      []string{"value"},
@@ -975,7 +954,7 @@ func TestKustoQueryValuesTransformAndPushToOTLP(t *testing.T) {
 	mockClient := NewMockKustoExecutor(t, "Metrics", "https://test.kusto.windows.net")
 	mockClient.results = append(mockClient.results, createDatasetWithColumns(
 		[]string{"metric_name", "value", "timestamp", "region"},
-		[][]interface{}{{
+		[][]any{{
 			azvalue.NewString("request_count"),
 			azvalue.NewReal(42.5),
 			azvalue.NewDateTime(timestamp),
@@ -1048,10 +1027,8 @@ func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
 
 	// Create MetricsExporter with default metric name (no MetricNameColumn)
 	me := &adxmonv1.MetricsExporter{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-default-metric",
-			Namespace: "default",
-		},
+		Name:      "test-default-metric",
+		Namespace: "default",
 		Spec: adxmonv1.MetricsExporterSpec{
 			Transform: adxmonv1.TransformConfig{
 				ValueColumns:      []string{"value"},
@@ -1107,10 +1084,8 @@ func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
 
 	// Configure MetricsExporter with multiple value columns
 	me := &adxmonv1.MetricsExporter{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-exporter",
-			Namespace: "default",
-		},
+		Name:      "test-exporter",
+		Namespace: "default",
 		Spec: adxmonv1.MetricsExporterSpec{
 			Database: "TestDB",
 			Body:     "TestQuery",
@@ -1126,7 +1101,7 @@ func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
 	}
 
 	// Mock data with multiple value columns
-	rows := []map[string]interface{}{
+	rows := []map[string]any{
 		{
 			"cpu_usage":    75.5,
 			"memory_usage": 85.2,

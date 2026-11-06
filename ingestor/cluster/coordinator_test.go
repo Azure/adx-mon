@@ -21,18 +21,14 @@ import (
 
 func TestCoordinator_NewPeer(t *testing.T) {
 	self := &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-0",
-			Namespace: "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "StatefulSet",
-					Name: "ingestor",
-				},
+		Kind:       "Pod",
+		APIVersion: "v1",
+		Name:       "ingestor-0",
+		Namespace:  "adx-mon",
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				Kind: "StatefulSet",
+				Name: "ingestor",
 			},
 		},
 		Status: v1.PodStatus{
@@ -51,18 +47,14 @@ func TestCoordinator_NewPeer(t *testing.T) {
 	}
 
 	newPeer := &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-1",
-			Namespace: "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "StatefulSet",
-					Name: "ingestor",
-				},
+		Kind:       "Pod",
+		APIVersion: "v1",
+		Name:       "ingestor-1",
+		Namespace:  "adx-mon",
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				Kind: "StatefulSet",
+				Name: "ingestor",
 			},
 		},
 		Status: v1.PodStatus{
@@ -111,22 +103,18 @@ func TestCoordinator_NewPeer(t *testing.T) {
 
 func TestCoordinator_LostPeer(t *testing.T) {
 	self := &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
+		Kind:       "Pod",
+		APIVersion: "v1",
+		Name:       "ingestor-0",
+		Namespace:  "adx-mon",
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				Kind: "StatefulSet",
+				Name: "ingestor",
+			},
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-0",
-			Namespace: "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "StatefulSet",
-					Name: "ingestor",
-				},
-			},
-			Labels: map[string]string{
-				"app": "ingestor",
-			},
+		Labels: map[string]string{
+			"app": "ingestor",
 		},
 		Status: v1.PodStatus{
 			PodIP: "10.200.0.1",
@@ -144,22 +132,18 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	}
 
 	newPeer := &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
+		Kind:       "Pod",
+		APIVersion: "v1",
+		Name:       "ingestor-1",
+		Namespace:  "adx-mon",
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				Kind: "StatefulSet",
+				Name: "ingestor",
+			},
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-1",
-			Namespace: "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "StatefulSet",
-					Name: "ingestor",
-				},
-			},
-			Labels: map[string]string{
-				"app": "ingestor",
-			},
+		Labels: map[string]string{
+			"app": "ingestor",
 		},
 		Status: v1.PodStatus{
 			PodIP: "10.200.0.2",
@@ -193,18 +177,14 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	coord.mu.RUnlock()
 
 	newPeer = &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-1",
-			Namespace: "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "StatefulSet",
-					Name: "ingestor",
-				},
+		Kind:       "Pod",
+		APIVersion: "v1",
+		Name:       "ingestor-1",
+		Namespace:  "adx-mon",
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				Kind: "StatefulSet",
+				Name: "ingestor",
 			},
 		},
 		Status: v1.PodStatus{
@@ -286,19 +266,15 @@ func TestCoordinatorInK8s(t *testing.T) {
 	require.NoError(t, c.Open(ctx))
 
 	ns := &v1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: opts.Namespace,
-		},
+		Name: opts.Namespace,
 	}
 	_, err = client.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	require.NoError(t, err)
 
 	replicas := int32(1)
 	ss := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor",
-			Namespace: opts.Namespace,
-		},
+		Name:      "ingestor",
+		Namespace: opts.Namespace,
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
@@ -339,11 +315,9 @@ func newPeerPod(name string, ready bool) *v1.Pod {
 		status = v1.ConditionTrue
 	}
 	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			Namespace:       "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "ingestor"}},
-		},
+		Name:            name,
+		Namespace:       "adx-mon",
+		OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "ingestor"}},
 		Status: v1.PodStatus{
 			PodIP: "10.200.0.1",
 			Conditions: []v1.PodCondition{

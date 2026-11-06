@@ -310,9 +310,7 @@ func (n *uploader) uploadReader(ctx context.Context, reader io.Reader, database,
 func (n *uploader) newGzipReader(reader io.Reader, wg *sync.WaitGroup) *io.PipeReader {
 	pr, pw := io.Pipe()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		zw := n.gzipWriterPool.Get().(*kgzip.Writer)
 		defer n.gzipWriterPool.Put(zw)
 		zw.Reset(pw)
@@ -330,7 +328,7 @@ func (n *uploader) newGzipReader(reader io.Reader, wg *sync.WaitGroup) *io.PipeR
 			return
 		}
 		_ = pw.Close()
-	}()
+	})
 
 	return pr
 }

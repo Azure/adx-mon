@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"maps"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"sort"
@@ -22,7 +23,6 @@ import (
 	connect "github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -90,7 +90,6 @@ var serviceBackends = []struct {
 func runCollectorBackends(t *testing.T, fn func(t *testing.T, backend storage.Backend)) {
 	t.Helper()
 	for _, tt := range serviceBackends {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			fn(t, tt.backend)
 		})
@@ -303,10 +302,8 @@ func TestService_Open_HostPort(t *testing.T) {
 					},
 				},
 				ReadinessProbe: &v1.Probe{
-					ProbeHandler: v1.ProbeHandler{
-						HTTPGet: &v1.HTTPGetAction{
-							Port: intstr.FromInt(10254),
-						},
+					HTTPGet: &v1.HTTPGetAction{
+						Port: intstr.FromInt(10254),
 					},
 				},
 			},
@@ -406,10 +403,8 @@ func TestMakeTargets(t *testing.T) {
 		{
 			Name: "container",
 			ReadinessProbe: &v1.Probe{
-				ProbeHandler: v1.ProbeHandler{
-					HTTPGet: &v1.HTTPGetAction{
-						Port: intstr.FromInt(10254),
-					},
+				HTTPGet: &v1.HTTPGetAction{
+					Port: intstr.FromInt(10254),
 				},
 			},
 			Ports: []v1.ContainerPort{
@@ -441,10 +436,8 @@ func TestMakeTargetsFromList(t *testing.T) {
 		{
 			Name: "container",
 			ReadinessProbe: &v1.Probe{
-				ProbeHandler: v1.ProbeHandler{
-					HTTPGet: &v1.HTTPGetAction{
-						Port: intstr.FromInt(10254),
-					},
+				HTTPGet: &v1.HTTPGetAction{
+					Port: intstr.FromInt(10254),
 				},
 			},
 			Ports: []v1.ContainerPort{
@@ -462,10 +455,8 @@ func TestMakeTargetsFromList(t *testing.T) {
 		{
 			Name: "othercontainer",
 			ReadinessProbe: &v1.Probe{
-				ProbeHandler: v1.ProbeHandler{
-					HTTPGet: &v1.HTTPGetAction{
-						Port: intstr.FromInt(11111),
-					},
+				HTTPGet: &v1.HTTPGetAction{
+					Port: intstr.FromInt(11111),
 				},
 			},
 			Ports: []v1.ContainerPort{
@@ -501,10 +492,8 @@ func TestMakeTargetsFromListNegative(t *testing.T) {
 		{
 			Name: "container",
 			ReadinessProbe: &v1.Probe{
-				ProbeHandler: v1.ProbeHandler{
-					HTTPGet: &v1.HTTPGetAction{
-						Port: intstr.FromInt(10254),
-					},
+				HTTPGet: &v1.HTTPGetAction{
+					Port: intstr.FromInt(10254),
 				},
 			},
 			Ports: []v1.ContainerPort{
@@ -683,16 +672,12 @@ func TestAddTargetFromMap_NamedPort(t *testing.T) {
 
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
 	m := map[string]string{}
-	for k, v := range labels {
-		m[k] = v
-	}
+	maps.Copy(m, labels)
 
 	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-			Labels:    m,
-		},
+		Namespace: namespace,
+		Name:      name,
+		Labels:    m,
 		Spec: v1.PodSpec{
 			NodeName: node,
 		},
@@ -776,8 +761,7 @@ func TestService_AdmissionPreservesRealtimeDiskReservation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	store := s.store.(*storage.LocalStore)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, store.Open(ctx))
 	defer store.Close()
 

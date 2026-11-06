@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -95,10 +96,8 @@ func TestSyncerEnsureInitialDecodesCacheKeys(t *testing.T) {
 
 func requireCondition(t *testing.T, queries []string, fn func(string) bool) {
 	t.Helper()
-	for _, query := range queries {
-		if fn(query) {
-			return
-		}
+	if slices.ContainsFunc(queries, fn) {
+		return
 	}
 	t.Fatalf("no query satisfied condition\nqueries: %v", queries)
 }

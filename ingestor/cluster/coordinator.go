@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"sort"
 	"strings"
@@ -173,7 +174,7 @@ func graceExpiry(p *v1.Pod) (time.Time, bool) {
 	return notReady.Add(peerRemovalDelay), true
 }
 
-func (c *coordinator) OnAdd(obj interface{}, isInitialList bool) {
+func (c *coordinator) OnAdd(obj any, isInitialList bool) {
 	if p, ok := obj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}
@@ -183,7 +184,7 @@ func (c *coordinator) OnAdd(obj interface{}, isInitialList bool) {
 	}
 }
 
-func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
+func (c *coordinator) OnUpdate(oldObj, newObj any) {
 	if p, ok := newObj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}
@@ -193,7 +194,7 @@ func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
 	}
 }
 
-func (c *coordinator) OnDelete(obj interface{}) {
+func (c *coordinator) OnDelete(obj any) {
 	if p, ok := obj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}
@@ -420,9 +421,7 @@ func (c *coordinator) syncPeersLocked() error {
 
 func (c *coordinator) setPartitioner(set map[string]string) error {
 	c.peers = make(map[string]string, len(set))
-	for peer, addr := range set {
-		c.peers[peer] = addr
-	}
+	maps.Copy(c.peers, set)
 
 	part, err := NewPartition(set)
 	if err != nil {

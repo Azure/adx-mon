@@ -64,9 +64,8 @@ func BenchmarkEncoder(b *testing.B) {
 	logbatch.AddLiterals(testlogs)
 
 	e := newFluentEncoder("destTag")
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = e.encode(&logbatch)
 	}
 }
@@ -88,24 +87,24 @@ func TestEncode(t *testing.T) {
 	rest = validateTag(t, rest, "tag1")
 	rest, entries := getEntries(t, rest)
 	validateEntries(t, entries, []entrytuple{
-		{timestamp: timeOne, record: map[string]interface{}{"key1": "tag1value1", "key2": "tag1value2"}},
-		{timestamp: timeTwo, record: map[string]interface{}{"key3": "tag1value3", "key4": "tag1value4"}},
+		{timestamp: timeOne, record: map[string]any{"key1": "tag1value1", "key2": "tag1value2"}},
+		{timestamp: timeTwo, record: map[string]any{"key3": "tag1value3", "key4": "tag1value4"}},
 	})
 
 	rest = validateArrayHeaderForwardMode(t, rest)
 	rest = validateTag(t, rest, "tag2")
 	rest, entries = getEntries(t, rest)
 	validateEntries(t, entries, []entrytuple{
-		{timestamp: timeOne, record: map[string]interface{}{"key1": "value1", "key2": "value2", "object": map[string]interface{}{"key3": "value3", "key4": "value4"}}},
+		{timestamp: timeOne, record: map[string]any{"key1": "value1", "key2": "value2", "object": map[string]any{"key3": "value3", "key4": "value4"}}},
 	})
 
 	rest = validateArrayHeaderForwardMode(t, rest)
 	rest = validateTag(t, rest, "tag3")
 	rest, entries = getEntries(t, rest)
 	validateEntries(t, entries, []entrytuple{
-		{timestamp: timeOne, record: map[string]interface{}{"key1": "tag3value1", "key2": "tag3value2", "object": map[string]interface{}{"key1": "value1",
+		{timestamp: timeOne, record: map[string]any{"key1": "tag3value1", "key2": "tag3value2", "object": map[string]any{"key1": "value1",
 			"key2": "value2"}}},
-		{timestamp: timeTwo, record: map[string]interface{}{"key3": "tag3value3", "key4": "tag3value4", "object": map[string]interface{}{"key1": "value1",
+		{timestamp: timeTwo, record: map[string]any{"key3": "tag3value3", "key4": "tag3value4", "object": map[string]any{"key1": "value1",
 			"key2": "value2"}}},
 	})
 
@@ -115,10 +114,10 @@ func TestEncode(t *testing.T) {
 	newLogs := []*types.LogLiteral{
 		{
 			Timestamp: timeTwo,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": "tag5",
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"key1": "tag5value1",
 			},
 		},
@@ -136,7 +135,7 @@ func TestEncode(t *testing.T) {
 	rest = validateTag(t, rest, "tag5")
 	rest, entries = getEntries(t, rest)
 	validateEntries(t, entries, []entrytuple{
-		{timestamp: timeTwo, record: map[string]interface{}{"key1": "tag5value1"}},
+		{timestamp: timeTwo, record: map[string]any{"key1": "tag5value1"}},
 	})
 
 	// nothing more to read
@@ -145,8 +144,8 @@ func TestEncode(t *testing.T) {
 
 func TestEncodeEdgeCases(t *testing.T) {
 	invalidLog := &types.LogLiteral{
-		Attributes: map[string]interface{}{"destTag": "tag1"},
-		Body:       map[string]interface{}{"unsupported": make(chan int)},
+		Attributes: map[string]any{"destTag": "tag1"},
+		Body:       map[string]any{"unsupported": make(chan int)},
 	}
 	tests := []struct {
 		name     string
@@ -239,51 +238,51 @@ func init() {
 	testlogs = []*types.LogLiteral{
 		{
 			Timestamp: timeOne,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": "tag1",
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"key1": "tag1value1",
 				"key2": "tag1value2",
 			},
 		},
 		{ // no dest tag
 			Timestamp:  timeThree,
-			Attributes: map[string]interface{}{},
-			Body: map[string]interface{}{
+			Attributes: map[string]any{},
+			Body: map[string]any{
 				"not-routed":   "value1",
 				"not-routed-2": "value2",
 			},
 		},
 		{ // non-string dest tag
 			Timestamp: timeThree,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": 1,
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"not-routed":   "value1",
 				"not-routed-2": "value2",
 			},
 		},
 		{
 			Timestamp: timeTwo,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": "tag1",
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"key3": "tag1value3",
 				"key4": "tag1value4",
 			},
 		},
 		{
 			Timestamp: timeOne,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": "tag2",
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"key1": "value1",
 				"key2": "value2",
-				"object": map[string]interface{}{
+				"object": map[string]any{
 					"key3": "value3",
 					"key4": "value4",
 				},
@@ -291,13 +290,13 @@ func init() {
 		},
 		{
 			Timestamp: timeOne,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": "tag3",
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"key1": "tag3value1",
 				"key2": "tag3value2",
-				"object": map[string]interface{}{
+				"object": map[string]any{
 					"key1": "value1",
 					"key2": "value2",
 				},
@@ -305,13 +304,13 @@ func init() {
 		},
 		{
 			Timestamp: timeTwo,
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				"destTag": "tag3",
 			},
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				"key3": "tag3value3",
 				"key4": "tag3value4",
-				"object": map[string]interface{}{
+				"object": map[string]any{
 					"key1": "value1",
 					"key2": "value2",
 				},
@@ -322,7 +321,7 @@ func init() {
 
 type entrytuple struct {
 	timestamp uint64
-	record    map[string]interface{}
+	record    map[string]any
 }
 
 func validateArrayHeaderForwardMode(t *testing.T, b []byte) []byte {
@@ -366,7 +365,7 @@ func getEntries(t *testing.T, b []byte) ([]byte, []entrytuple) {
 		require.NoError(t, err)
 		entry.timestamp = extension.UnixTsNano
 
-		var record map[string]interface{}
+		var record map[string]any
 		record, rest, err = msgp.ReadMapStrIntfBytes(rest, nil)
 		require.NoError(t, err)
 		require.NotEmpty(t, record)

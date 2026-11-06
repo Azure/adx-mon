@@ -23,16 +23,14 @@ func TestWAL_ConcurrentSizeRotationCreatesOneSegment(t *testing.T) {
 	_, _ = rand.Read(buf)
 	var wg sync.WaitGroup
 	var failed atomic.Int64
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
+	for range 20 {
+		wg.Go(func() {
+			for range 200 {
 				if err := w.Write(context.Background(), buf); err != nil {
 					failed.Add(1)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

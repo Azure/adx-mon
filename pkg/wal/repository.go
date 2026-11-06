@@ -32,7 +32,7 @@ type Repository struct {
 
 	// Total size of all wals in the repository.  This is updated
 	// lazily in the background.
-	size int64
+	size atomic.Int64
 }
 
 type RepositoryOpts struct {
@@ -419,7 +419,7 @@ func (s *Repository) WriteDebug(w io.Writer) error {
 	if err := s.wals.Each(func(key string, value *WAL) error {
 		walsSize += value.Size()
 		count++
-		tw.Write([]byte(fmt.Sprintf("%s\t%s\t%d\n", key, value.Path(), value.Size())))
+		fmt.Fprintf(tw, "%s\t%s\t%d\n", key, value.Path(), value.Size())
 		return nil
 	}); err != nil {
 		return err
@@ -457,10 +457,10 @@ func (s *Repository) sampleWALs(ctx context.Context) {
 		}); err != nil {
 			logger.Errorf("Failed to sample WALs: %s", err.Error())
 		}
-		atomic.StoreInt64(&s.size, sz)
+		s.size.Store(sz)
 	}
 }
 
 func (s *Repository) Size() int64 {
-	return atomic.LoadInt64(&s.size)
+	return s.size.Load()
 }

@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 	"net/http"
@@ -36,8 +35,7 @@ func TestReplicatorTableBackoffKeepsPeerHealthy(t *testing.T) {
 	health := NewHealth(HealthOpts{})
 	rep, err := NewReplicator(ReplicatorOpts{Partitioner: &fakePartitioner{owner: "peer", addr: s.URL}, Health: health, Hostname: "local", MaxTransferConcurrency: 1, DisableGzip: true})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 	seg, err := wal.NewSegment(t.TempDir(), "DB_A_s")

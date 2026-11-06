@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -92,15 +93,9 @@ func (l *Log) Copy() *Log {
 	copy := LogPool.Get()
 	copy.timestamp = l.timestamp
 	copy.observedTimestamp = l.observedTimestamp
-	for k, v := range l.attributes {
-		copy.attributes[k] = v
-	}
-	for k, v := range l.body {
-		copy.body[k] = v
-	}
-	for k, v := range l.resource {
-		copy.resource[k] = v
-	}
+	maps.Copy(copy.attributes, l.attributes)
+	maps.Copy(copy.body, l.body)
+	maps.Copy(copy.resource, l.resource)
 	return copy
 }
 
@@ -232,9 +227,7 @@ func (l *Log) ResourceLen() int {
 // This creates a shallow copy of the map elements. The map is safe to modify, but most elements are not.
 func (l *Log) GetAttributes() map[string]any {
 	result := make(map[string]any, len(l.attributes))
-	for k, v := range l.attributes {
-		result[k] = v
-	}
+	maps.Copy(result, l.attributes)
 	return result
 }
 
@@ -242,9 +235,7 @@ func (l *Log) GetAttributes() map[string]any {
 // This creates a shallow copy of the map elements. The map is safe to modify, but most elements are not.
 func (l *Log) GetBody() map[string]any {
 	result := make(map[string]any, len(l.body))
-	for k, v := range l.body {
-		result[k] = v
-	}
+	maps.Copy(result, l.body)
 	return result
 }
 
@@ -252,9 +243,7 @@ func (l *Log) GetBody() map[string]any {
 // This creates a shallow copy of the map elements. The map is safe to modify, but most elements are not.
 func (l *Log) GetResource() map[string]any {
 	result := make(map[string]any, len(l.resource))
-	for k, v := range l.resource {
-		result[k] = v
-	}
+	maps.Copy(result, l.resource)
 	return result
 }
 

@@ -139,7 +139,7 @@ func (m *MockKustoExecutor) SetRowError(err error) {
 	m.rowErr = err
 }
 
-func (m *MockKustoExecutor) SetNextResult(t *testing.T, rows [][]interface{}) {
+func (m *MockKustoExecutor) SetNextResult(t *testing.T, rows [][]any) {
 	t.Helper()
 	m.results = append(m.results, createMockDataset(rows))
 }
@@ -158,11 +158,11 @@ func (m *MockKustoExecutor) Reset() {
 	m.rowErr = nil
 }
 
-func createMockDataset(rows [][]interface{}) azquery.Dataset {
+func createMockDataset(rows [][]any) azquery.Dataset {
 	return createDatasetWithColumns([]string{"metric_name", "value", "timestamp"}, rows)
 }
 
-func createDatasetWithColumns(columnNames []string, rows [][]interface{}) azquery.Dataset {
+func createDatasetWithColumns(columnNames []string, rows [][]any) azquery.Dataset {
 	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
 	columns := make([]azquery.Column, 0, len(columnNames))
 	for i, name := range columnNames {
@@ -196,7 +196,7 @@ func createDatasetWithColumns(columnNames []string, rows [][]interface{}) azquer
 	return &mockDataset{base: base, tables: []azquery.Table{table}}
 }
 
-func inferColumnType(rows [][]interface{}, idx int) aztypes.Column {
+func inferColumnType(rows [][]any, idx int) aztypes.Column {
 	for _, row := range rows {
 		if idx >= len(row) {
 			continue
@@ -375,7 +375,7 @@ MyTable | summarize avg_value = avg(Value) by ServiceName`
 	t.Run("streamed row error", func(t *testing.T) {
 		mockClient.Reset()
 		streamErr := errors.New("row stream failed")
-		mockClient.SetNextResult(t, [][]interface{}{{"metric_one", 1.0, startTime}})
+		mockClient.SetNextResult(t, [][]any{{"metric_one", 1.0, startTime}})
 		mockClient.SetRowError(streamErr)
 
 		result, err := executor.ExecuteQuery(ctx, queryBody, startTime, endTime, clusterLabels)
@@ -395,7 +395,7 @@ func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
 	executor.SetMaxRows(1)
 
 	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
-	mockClient.SetNextResult(t, [][]interface{}{
+	mockClient.SetNextResult(t, [][]any{
 		{"metric_one", 1.0, now},
 		{"metric_two", 2.0, now},
 	})
@@ -418,7 +418,7 @@ func TestQueryExecutor_ExecuteQuery_MaterializesNativeValues(t *testing.T) {
 	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
 	executor := NewQueryExecutor(mockClient)
 	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
-	mockClient.SetNextResult(t, [][]interface{}{{"metric_one", 1.5, now}})
+	mockClient.SetNextResult(t, [][]any{{"metric_one", 1.5, now}})
 
 	result, err := executor.ExecuteQuery(context.Background(), "MyTable", now.Add(-time.Hour), now, nil)
 
@@ -440,7 +440,7 @@ func TestMaterializeKustoValue(t *testing.T) {
 	tests := []struct {
 		name  string
 		value azvalue.Kusto
-		want  interface{}
+		want  any
 	}{
 		{name: "string", value: azvalue.NewString("metric_one"), want: "metric_one"},
 		{name: "bool", value: azvalue.NewBool(true), want: true},
