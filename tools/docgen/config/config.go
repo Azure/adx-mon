@@ -604,11 +604,6 @@ func getContents() Contents {
 	}
 }
 
-//go:fix inline
-func boolPtr(val bool) *bool {
-	return new(val)
-}
-
 var HostLogDescription = "The host log config configures file, journald, and kernel log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.\n\n" +
 	"### Kernel Log Checkpoints\n\n" +
 	"`kernel-target` reads the kernel message buffer and stores acknowledged sequence numbers in `kernel_*` checkpoint files under `storage-dir`. Each checkpoint includes the host boot ID from `/proc/sys/kernel/random/boot_id`. Collector restarts within the same boot resume after the acknowledged sequence; after a node reboot, the old checkpoint is ignored and collection starts from the oldest message still retained in the kernel buffer. The boot ID must be readable when checkpointing is enabled; otherwise the kernel source fails to start.\n\n" +
