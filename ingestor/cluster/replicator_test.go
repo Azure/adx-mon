@@ -140,6 +140,56 @@ func TestReplicator_SegmentExistsError(t *testing.T) {
 	require.True(t, batch.IsRemoved())
 }
 
+// A batch the peer reports as locked is released without being removed, so its segments are retried, and the peer
+// stays healthy.  The batch does not ask to be retried sooner than other failures.
+func TestReplicator_SegmentLockedError(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusLocked)
+	}))
+	defer server.Close()
+
+	health := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute})
+	opts := ReplicatorOpts{
+		Partitioner:        &fakePartitioner{owner: "node2", addr: server.URL},
+		Health:             health,
+		SegmentRemover:     &fakeSegmentRemover{},
+		InsecureSkipVerify: true,
+		Hostname:           "node1",
+		DisableGzip:        true,
+	}
+
+	rep, err := NewReplicator(opts)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = rep.Open(ctx)
+	require.NoError(t, err)
+	defer rep.Close()
+
+	segmentPath := filepath.Join(t.TempDir(), "DB_Table_1.wal")
+	require.NoError(t, os.WriteFile(segmentPath, []byte("test"), 0644))
+	batch := &Batch{
+		Segments: []wal.SegmentInfo{
+			{Path: segmentPath},
+		},
+		batcher: &fakeBatcher{},
+	}
+
+	rep.TransferQueue() <- batch
+	require.Eventually(t, batch.IsReleased, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, rep.Close())
+
+	require.False(t, batch.IsRemoved())
+	require.FileExists(t, segmentPath)
+	require.True(t, health.IsPeerHealthy("node2"))
+	batch.mu.Lock()
+	require.Zero(t, batch.retryDelay)
+	batch.mu.Unlock()
+}
+
 func TestReplicator_PeerOverloadedError(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
