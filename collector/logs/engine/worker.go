@@ -42,14 +42,24 @@ func (w *worker) Run() {
 // RunWaitingForStorage is like Run, but when storage is full the durable sink waits for room rather than dropping
 // the batch, until stop is done.  Sources that stop reading while the worker waits use it, so full storage delays
 // their logs instead of losing them.
+//
+// Once a batch fails after stop is done, the batches still queued behind it are disposed of without being sent or
+// acknowledged.  Acknowledgements only move a source's cursor forward, so storing and acknowledging a later batch would
+// move the cursor past the logs that failed, and they would not be read again on restart.
 func (w *worker) RunWaitingForStorage(stop context.Context) {
+	stopped := false
 	for msg := range w.Input {
+		if stopped {
+			types.DisposeLogBatch(msg)
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), w.BatchTimeout)
 		if stop != nil {
 			ctx = types.WithStorageWait(ctx, stop)
 		}
-		w.processBatch(ctx, msg)
+		_, err := w.ProcessBatch(ctx, msg)
 		cancel()
+		stopped = err != nil && stop != nil && stop.Err() != nil
 	}
 }
 
