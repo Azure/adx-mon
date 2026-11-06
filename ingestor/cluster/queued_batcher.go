@@ -24,10 +24,15 @@ const (
 type queuedPolicy struct {
 	b      *batcher
 	linger time.Duration
+
+	// transferLinger, when positive, replaces linger for prefixes owned by another node, whose batches are transferred
+	// rather than uploaded.  Transfers are merged while they wait for a worker, so they need not linger as long to
+	// be combined.
+	transferLinger time.Duration
 }
 
-func newQueuedBatcher(b *batcher, linger time.Duration) *eventBatcher {
-	r := newEventBatcher(b, queuedPolicy{b: b, linger: linger}, queuedSweepInterval)
+func newQueuedBatcher(b *batcher, linger, transferLinger time.Duration) *eventBatcher {
+	r := newEventBatcher(b, queuedPolicy{b: b, linger: linger, transferLinger: transferLinger}, queuedSweepInterval)
 	// A prefix that keeps failing, such as while ADX or the peer is unavailable, backs off to the sweep interval so
 	// it is retried no more often than before retries were event driven.
 	r.maxRetryDelay = queuedSweepInterval
@@ -40,7 +45,12 @@ func (p queuedPolicy) accepts(si wal.SegmentInfo) bool {
 	return si.Priority != ingestpolicy.PriorityRealtime || p.b.realtime == nil
 }
 
-func (p queuedPolicy) maxLatency() time.Duration {
+func (p queuedPolicy) maxLatency(prefix string) time.Duration {
+	if p.transferLinger > 0 && !p.b.transferDisabled {
+		if owner, _ := p.b.Partitioner.Owner([]byte(prefix)); owner != p.b.hostname {
+			return p.transferLinger
+		}
+	}
 	return p.linger
 }
 

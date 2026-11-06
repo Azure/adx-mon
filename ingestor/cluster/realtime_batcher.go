@@ -41,7 +41,7 @@ func (p realtimePolicy) accepts(si wal.SegmentInfo) bool {
 	return si.Priority == ingestpolicy.PriorityRealtime
 }
 
-func (p realtimePolicy) maxLatency() time.Duration {
+func (p realtimePolicy) maxLatency(string) time.Duration {
 	return p.opts.MaxBatchLatency
 }
 
