@@ -115,6 +115,7 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 			lastListErr = err
 			return false, nil
 		}
+		lastListErr = nil
 		if len(pods.Items) == 0 {
 			lastPodState = "no pods match the label selector"
 			return false, nil
