@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -58,6 +59,16 @@ type ReplicatorOpts struct {
 	// records the number of segments in each transfer.
 	TransferOutcomes *prometheus.CounterVec
 	TransferSegments prometheus.Observer
+
+	// MaxTransfersPerTable, when positive, is how many transfers of one table run at once.  Batches of a table wait
+	// behind its running transfer and are merged, so the owner receives fewer, larger transfers for the table.  When
+	// zero, a table may use every worker except the reserved ones.
+	MaxTransfersPerTable int
+
+	// MaxBatchSegments and MaxTransferSize bound a batch made by merging the batches waiting for a table.
+	// MaxBatchSegments defaults to DefaultMaxSegmentCount; a negative value disables merging.
+	MaxBatchSegments int
+	MaxTransferSize  int64
 }
 
 type SegmentRemover interface {
@@ -89,6 +100,9 @@ type replicator struct {
 	SegmentRemover      SegmentRemover
 	transferConcurrency int
 	reservedPercent     int
+	perTable            int
+	mergeSegments       int
+	mergeBytes          int64
 	backoff             destinationBackoff
 	transferLatency     *prometheus.HistogramVec
 	transferOutcomes    *prometheus.CounterVec
@@ -119,7 +133,15 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		return nil, err
 	}
 
+	mergeSegments := DefaultMaxSegmentCount
+	if opts.MaxBatchSegments != 0 {
+		mergeSegments = max(0, opts.MaxBatchSegments)
+	}
+
 	return &replicator{
+		perTable:            opts.MaxTransfersPerTable,
+		mergeSegments:       mergeSegments,
+		mergeBytes:          opts.MaxTransferSize,
 		queue:               make(chan *Batch, 10000),
 		realtimeQueue:       make(chan *Batch, 10000),
 		cli:                 cli,
@@ -140,7 +162,13 @@ func (r *replicator) Open(ctx context.Context) error {
 	r.wg.Add(r.transferConcurrency)
 	// Queued transfers are scheduled fairly across destinations so one table
 	// cannot monopolise the pool. Realtime transfers keep their direct path.
-	queued := FairQueue(ctx, r.queue, FairQueueOpts{Workers: r.transferConcurrency, Pipeline: "transfer"})
+	queued := FairQueue(ctx, r.queue, FairQueueOpts{
+		Workers:            r.transferConcurrency,
+		Pipeline:           "transfer",
+		MaxRunningPerTable: r.perTable,
+		MergeSegments:      r.mergeSegments,
+		MergeBytes:         r.mergeBytes,
+	})
 	queues := PriorityQueues{Realtime: r.realtimeQueue, Queued: queued}
 	RunWorkers(ctx, queues, r.transferConcurrency, r.reservedPercent, func(batch *Batch) {
 		r.transfer(ctx, batch)
@@ -195,6 +223,12 @@ func transferOutcome(err error) string {
 	default:
 		return "error"
 	}
+}
+
+// lockedRetryDelay returns how long a batch the owner reported as locked waits before it is retried: 100–300 ms, with
+// jitter so batches locked at the same moment are not retried together.
+func lockedRetryDelay() time.Duration {
+	return 100*time.Millisecond + rand.N(200*time.Millisecond)
 }
 
 // maxSplitDepth bounds how many times an oversized batch is halved before it is
@@ -298,7 +332,9 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 				}
 				return nil
 			} else if errors.Is(err, ErrSegmentLocked) {
-				// Segment is locked, retry later.
+				// The owner's segment for the table was busy for longer than it waits.  That clears in milliseconds, so
+				// retry soon rather than after the backoff for failures; batches that arrive meanwhile are merged in.
+				batch.RetryAfter(lockedRetryDelay())
 				return nil
 			} else if errors.Is(err, ErrPeerOverloaded) {
 				// Ingestor is overloaded, mark the peer as unhealthy and retry no sooner than it asked.

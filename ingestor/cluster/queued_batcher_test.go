@@ -48,7 +48,7 @@ func (s noEventsSegmenter) Subscribe() {}
 func newEventModeEnv(t *testing.T, realtime RealtimeBatchOpts, linger time.Duration) *realtimeTestEnv {
 	t.Helper()
 	env := newRealtimeTestEnv(t, realtime, false)
-	env.b.queued = newQueuedBatcher(env.b, linger)
+	env.b.queued = newQueuedBatcher(env.b, linger, 0)
 	env.open(t)
 	return env
 }
@@ -200,7 +200,7 @@ func TestQueuedBatcher_MatchesScan(t *testing.T) {
 	}
 
 	event := newBatcher()
-	newQueuedBatcher(event, time.Hour).Flush(context.Background())
+	newQueuedBatcher(event, time.Hour, 0).Flush(context.Background())
 	var got []string
 	for len(event.uploadQueue) > 0 {
 		got = append(got, batchKey("upload", <-event.uploadQueue))
@@ -303,7 +303,7 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 
 		b.Run(fmt.Sprintf("mode=event/prefixes=%d", prefixes), func(b *testing.B) {
 			bt, freshSegments := newBenchmarkBatcher(b, prefixes, fresh)
-			e := newQueuedBatcher(bt, time.Hour)
+			e := newQueuedBatcher(bt, time.Hour, 0)
 			ctx := context.Background()
 			b.ReportAllocs()
 			for b.Loop() {
@@ -325,7 +325,7 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 		// spans 12 periods.
 		b.Run(fmt.Sprintf("event-sweep/prefixes=%d", prefixes), func(b *testing.B) {
 			bt, _ := newBenchmarkBatcher(b, prefixes, 0)
-			e := newQueuedBatcher(bt, time.Hour)
+			e := newQueuedBatcher(bt, time.Hour, 0)
 			b.ReportAllocs()
 			b.ResetTimer()
 			ctx := context.Background()
@@ -382,14 +382,14 @@ func TestQueuedBatcher_RetriesReleasedBatches(t *testing.T) {
 // A prefix that keeps failing backs off to the sweep interval, and a delivered batch resets the backoff.
 func TestQueuedBatcher_ReleasedBatchesBackOff(t *testing.T) {
 	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
-	r := newQueuedBatcher(env.b, time.Millisecond)
+	r := newQueuedBatcher(env.b, time.Millisecond, 0)
 	require.Equal(t, queuedSweepInterval, r.maxRetryDelay)
 	r.maxRetryDelay = 5 * time.Second
 
 	prefix := "db_Cpu"
 	retryDelay := func() time.Duration {
 		before := time.Now()
-		r.released(prefix)
+		r.released(prefix, 0)
 		return r.pending[prefix].retryAfter.Sub(before).Round(time.Second)
 	}
 	require.Equal(t, 1*time.Second, retryDelay())
@@ -402,9 +402,9 @@ func TestQueuedBatcher_ReleasedBatchesBackOff(t *testing.T) {
 	require.Equal(t, 1*time.Second, retryDelay())
 }
 
-// A released batch is retried after the event batcher's retry delay even when it asked to be retried sooner.  Its
-// RetryAfter only defers the scheduler's next work for the table.
-func TestQueuedBatcher_RetryAfterDoesNotShortenRetry(t *testing.T) {
+// A released batch that asked to be retried after a delay is retried then rather than after the event batcher's retry
+// delay, and does not count toward the prefix's backoff.
+func TestQueuedBatcher_RetryAfterSetsRetry(t *testing.T) {
 	env := newEventModeEnv(t, RealtimeBatchOpts{}, 10*time.Millisecond)
 	env.b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: env.b.hostname}
 	env.b.queued.retryDelay = 200 * time.Millisecond
@@ -415,6 +415,67 @@ func TestQueuedBatcher_RetryAfterDoesNotShortenRetry(t *testing.T) {
 	released := time.Now()
 	batch.Release()
 
+	retry := receiveBatch(t, env.transfer, time.Second)
+	require.GreaterOrEqual(t, time.Since(released), 10*time.Millisecond)
+	require.Less(t, time.Since(released), 190*time.Millisecond)
+	env.b.queued.mu.Lock()
+	require.Zero(t, env.b.queued.releases["db_Peer"])
+	env.b.queued.mu.Unlock()
+
+	// A release without a delay still waits the event batcher's retry delay.
+	released = time.Now()
+	retry.Release()
 	receiveBatch(t, env.transfer, time.Second)
 	require.GreaterOrEqual(t, time.Since(released), 190*time.Millisecond)
+}
+
+// Segments of a table owned by another node wait the transfer linger, and owned tables the queued linger.
+func TestQueuedPolicy_TransferLinger(t *testing.T) {
+	b := &batcher{hostname: "me", Partitioner: &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: "me"}}
+	p := queuedPolicy{b: b, linger: 5 * time.Second, transferLinger: 100 * time.Millisecond}
+	require.Equal(t, 100*time.Millisecond, p.maxLatency("db_Peer"))
+	require.Equal(t, 5*time.Second, p.maxLatency("db_Owned"))
+
+	// Segments that would be uploaded here because transfers are disabled wait the queued linger.
+	b.transferDisabled = true
+	require.Equal(t, 5*time.Second, p.maxLatency("db_Peer"))
+
+	// Without a transfer linger every table waits the queued linger, and ownership is not looked up.
+	b.transferDisabled = false
+	b.Partitioner = nil
+	p.transferLinger = 0
+	require.Equal(t, 5*time.Second, p.maxLatency("db_Peer"))
+}
+
+func TestQueuedBatcher_TransferLingerSendsPeerSegmentsSooner(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
+	env.b.queued = newQueuedBatcher(env.b, time.Hour, 20*time.Millisecond)
+	env.b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: env.b.hostname}
+	env.open(t)
+
+	start := time.Now()
+	peer := env.add(t, "Peer", 100, ingestpolicy.PriorityQueued)
+	env.add(t, "Owned", 100, ingestpolicy.PriorityQueued)
+
+	require.Equal(t, []string{peer.Path}, receiveBatch(t, env.transfer, time.Second).Paths())
+	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
+	select {
+	case b := <-env.upload:
+		t.Fatalf("owned segment did not wait the queued linger: %v", b.Paths())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// The sweep uses each prefix's own linger.
+func TestQueuedBatcher_SweepUsesTransferLinger(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
+	env.b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: env.b.hostname}
+	r := newQueuedBatcher(env.b, time.Hour, 20*time.Millisecond)
+	env.add(t, "Peer", 100, ingestpolicy.PriorityQueued)
+	env.add(t, "Owned", 100, ingestpolicy.PriorityQueued)
+
+	before := time.Now()
+	r.sweep()
+	require.WithinDuration(t, before.Add(20*time.Millisecond), r.pending["db_Peer"].deadline, 50*time.Millisecond)
+	require.WithinDuration(t, before.Add(time.Hour), r.pending["db_Owned"].deadline, time.Second)
 }
