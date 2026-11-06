@@ -189,12 +189,14 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 //
 // The check reserves nothing and does not count segments, so it makes partial writes rarer rather than impossible: a
 // concurrent request can still use up the room it saw, or the segment limit can be reached, after some of the tables
-// are written, and the sender's retry then writes those again.  When only the queued share of the budget is used
-// up, the queued tables are shed and the rest are written, so the realtime reservation keeps realtime data flowing.
+// are written, and the sender's retry then writes those again.  When the realtime tables fit but the queued ones might
+// not, the request is not rejected: the realtime tables are written first, and then each queued table is written if
+// its actual size fits and shed if it does not, so the realtime reservation keeps realtime data flowing.  Queued
+// tables are never shed on the estimate alone, which is an upper bound and can be many times their actual size.
 //
 // Realtime tables come first: they are checked against the whole budget using only their part of the request, so a
-// large queued payload cannot block them.  The queued tables are kept only if they fit in the queued share and also
-// fit alongside the realtime tables.  size(i) is table i's estimated size from seriesEstimate.
+// large queued payload cannot block them.  The queued tables might not fit unless they fit in the queued share and
+// also fit alongside the realtime tables.  size(i) is table i's estimated size from seriesEstimate.
 //
 // The estimate is an upper bound, so one larger than a whole limit would be rejected even by an empty store, and the
 // sender's retries could never make progress.  Such an estimate is taken as the limit: it fits once the store is
@@ -279,6 +281,10 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		key      []byte
 		series   []*prompb.TimeSeries
 		estimate int64
+		// full is set for a queued table that might not fit alongside the rest of the request: it is the rejection
+		// recorded when the table is shed, rather than the request rejected, because its write does not fit in the
+		// global budget.
+		full *wal.TableOverloadedError
 	}
 	var tables []*tableSeries
 	byKey := make(map[string]int)
@@ -297,23 +303,28 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		tables[i].estimate += seriesEstimate(req, v)
 	}
 
-	full, err := s.overBudget(len(tables), func(i int) int64 { return tables[i].estimate }, func(i int) []byte { return tables[i].key })
+	mayNotFit, err := s.overBudget(len(tables), func(i int) int64 { return tables[i].estimate }, func(i int) []byte { return tables[i].key })
 	if err != nil {
 		return err
 	}
+	if mayNotFit != nil {
+		// Write the tables that fit first, so the queued tables that might not fit cannot take their room.
+		var fit, rest []*tableSeries
+		for i, t := range tables {
+			if mayNotFit[i] {
+				t.full = queuedBudgetFull(t.key)
+				rest = append(rest, t)
+			} else {
+				fit = append(fit, t)
+			}
+		}
+		tables = append(fit, rest...)
+	}
 
-	for i, t := range tables {
+	for _, t := range tables {
 		var samples int64
 		for _, v := range t.series {
 			samples += int64(len(v.Samples))
-		}
-
-		if full != nil && full[i] {
-			d, _ := wal.DestinationFromPrefix(string(t.key))
-			s.recordRejection(&wal.TableOverloadedError{Destination: d, Reason: "queued_budget"}, samples, 0, "metrics")
-			outcome.Rejected += samples
-			outcome.RejectedSeries = append(outcome.RejectedSeries, t.series...)
-			continue
 		}
 
 		if quota := s.preAdmit(t.key); quota != nil {
@@ -346,7 +357,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
 			if errors.Is(err, errBlockTooLarge) || errors.As(err, &quota) && blockTooLarge(quota, len(t.series)) {
-				accepted, rejected, err := s.writeEachSeries(ctx, w, enc, req, t.series)
+				accepted, rejected, err := s.writeEachSeries(ctx, w, enc, req, t.series, t.full)
 				outcome.Accepted += accepted
 				metrics.SamplesStored.Add(float64(accepted))
 				for _, v := range rejected {
@@ -357,6 +368,9 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 					return err
 				}
 				continue
+			}
+			if quota == nil && t.full != nil && errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+				quota = t.full
 			}
 			if quota != nil {
 				s.recordRejection(quota, samples, int64(len(enc.Bytes())), "metrics")
@@ -383,6 +397,12 @@ func blockTooLarge(quota *wal.TableOverloadedError, n int) bool {
 	return quota.Reason == "bytes" && n > 1
 }
 
+// queuedBudgetFull is the rejection recorded for a queued table shed because the global budget's queued share is full.
+func queuedBudgetFull(key []byte) *wal.TableOverloadedError {
+	d, _ := wal.DestinationFromPrefix(string(key))
+	return &wal.TableOverloadedError{Destination: d, Reason: "queued_budget"}
+}
+
 // errBlockTooLarge is returned by writeBlock for a block that was not written because it is larger than the room left
 // in its table's budget.
 var errBlockTooLarge = errors.New("block larger than the room left in its table's budget")
@@ -403,8 +423,9 @@ func (s *LocalStore) writeBlock(ctx context.Context, w *wal.WAL, key []byte, n i
 
 // writeEachSeries writes a table's series one block per series, for a table whose block of every series did not fit,
 // so the series that fit are written and only the rest are shed, as before a table's series were written together.  It
-// returns the samples written and the series shed.
-func (s *LocalStore) writeEachSeries(ctx context.Context, w *wal.WAL, enc *transform2.MetricsCSVWriter, req *prompb.WriteRequest, series []*prompb.TimeSeries) (int64, []*prompb.TimeSeries, error) {
+// returns the samples written and the series shed.  When full is not nil, series that do not fit in the global budget
+// are shed as well and recorded as full, rather than stopping with ErrMaxDiskUsageExceeded.
+func (s *LocalStore) writeEachSeries(ctx context.Context, w *wal.WAL, enc *transform2.MetricsCSVWriter, req *prompb.WriteRequest, series []*prompb.TimeSeries, full *wal.TableOverloadedError) (int64, []*prompb.TimeSeries, error) {
 	var accepted int64
 	var rejected []*prompb.TimeSeries
 	for _, v := range series {
@@ -415,7 +436,10 @@ func (s *LocalStore) writeEachSeries(ctx context.Context, w *wal.WAL, enc *trans
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
 			var quota *wal.TableOverloadedError
 			if !errors.As(err, &quota) {
-				return accepted, rejected, err
+				if full == nil || !errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+					return accepted, rejected, err
+				}
+				quota = full
 			}
 			s.recordRejection(quota, int64(len(v.Samples)), int64(len(enc.Bytes())), "metrics")
 			rejected = append(rejected, v)
