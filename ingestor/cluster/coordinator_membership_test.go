@@ -109,7 +109,8 @@ func TestCoordinator_StartingPeerDoesNotJoin(t *testing.T) {
 }
 
 // Membership comes from the pods' status alone, so a coordinator that restarts while a peer is overloaded builds the
-// same partition and elects the same leader as one that saw the peer go not ready.
+// same partition and elects the same leader as one that saw the peer go not ready.  The overloaded peer keeps its
+// tables but not the leadership.
 func TestCoordinator_RestartedCoordinatorAgreesOnNotReadyPeer(t *testing.T) {
 	existing, existingPods := newPeerTestCoordinator(t, "ingestor-1")
 	existingPods.pods = []*v1.Pod{newPeerPod("ingestor-0", true), newPeerPod("ingestor-1", true), newPeerPod("ingestor-2", true)}
@@ -124,8 +125,29 @@ func TestCoordinator_RestartedCoordinatorAgreesOnNotReadyPeer(t *testing.T) {
 	require.NoError(t, restarted.syncPeers())
 
 	require.Equal(t, owners(existing, 1000), owners(restarted, 1000))
-	require.False(t, existing.IsLeader())
-	require.False(t, restarted.IsLeader(), "the overloaded ingestor-0 is still the leader")
+	require.True(t, existing.IsLeader(), "ingestor-1 is the first ready ingestor")
+	require.False(t, restarted.IsLeader())
+}
+
+// A leader that stops being ready keeps its tables during the grace period, but hands over the leadership at once, so
+// a stalled leader does not hold up functions, summary rules and management jobs.
+func TestCoordinator_NotReadyLeaderStepsDown(t *testing.T) {
+	leader, leaderPods := newPeerTestCoordinator(t, "ingestor-0")
+	next, nextPods := newPeerTestCoordinator(t, "ingestor-1")
+	pods := []*v1.Pod{newPeerPod("ingestor-0", true), newPeerPod("ingestor-1", true)}
+	leaderPods.pods, nextPods.pods = pods, pods
+	require.NoError(t, leader.syncPeers())
+	require.NoError(t, next.syncPeers())
+	require.True(t, leader.IsLeader())
+	require.False(t, next.IsLeader())
+
+	pods[0] = newOverloadedPeerPod("ingestor-0", time.Now())
+	require.NoError(t, leader.syncPeers())
+	require.NoError(t, next.syncPeers())
+	require.False(t, leader.IsLeader(), "a not ready leader steps down")
+	require.True(t, next.IsLeader(), "the first ready ingestor takes over")
+	require.Equal(t, 2, leader.Peers().Count, "the not ready ingestor keeps its place in the partition")
+	require.Equal(t, owners(leader, 1000), owners(next, 1000))
 }
 
 // An ingestor that is starting and not yet ready leaves itself out of the partition, as the other ingestors do, so it
