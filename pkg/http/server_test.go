@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,6 +38,43 @@ func TestNewHttpServer_Endpoints(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, tt.status, resp.StatusCode, tt.endpoint)
+	}
+}
+
+func TestHttpServerProtocols(t *testing.T) {
+	h := NewServer(&ServerOpts{ListenAddr: "localhost:0"})
+	h.RegisterHandlerFunc("/proto", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(r.Proto))
+	})
+	require.NoError(t, h.Open(t.Context()))
+	defer h.Close()
+	url := "http://" + h.listener.Addr().String() + "/proto"
+
+	h2c := new(http.Protocols)
+	h2c.SetUnencryptedHTTP2(true)
+	http1 := new(http.Protocols)
+	http1.SetHTTP1(true)
+
+	tests := []struct {
+		name      string
+		protocols *http.Protocols
+		wantProto string
+	}{
+		{"unencrypted http2 with prior knowledge", h2c, "HTTP/2.0"},
+		{"http1", http1, "HTTP/1.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: &http.Transport{Protocols: tt.protocols}}
+			resp, err := client.Get(url)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantProto, resp.Proto)
+			require.Equal(t, tt.wantProto, string(body))
+		})
 	}
 }
 
