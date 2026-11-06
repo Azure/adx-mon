@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -179,4 +180,115 @@ func TestFairQueueMaxRunningPerTableAbovePool(t *testing.T) {
 	a.Release()
 	b.Release()
 	receiveFair(t, out).Release()
+}
+
+// Batches of destinations in a group that is running its limit wait, and keep merging, while other groups run.
+func TestFairQueueMaxRunningPerGroup(t *testing.T) {
+	rec := &releaseRecorder{}
+	groups := map[string]string{"A": "peer1", "B": "peer1", "C": "peer2"}
+	input, out := mergeQueue(t, FairQueueOpts{Workers: 8, MergeSegments: 10, MaxRunningPerGroup: 1,
+		Group: func(b *Batch) string { return groups[b.Table] }})
+	batch := func(table, path string) *Batch {
+		b := pathBatch(table, "DB_"+table, path, 1)
+		b.batcher = rec
+		return b
+	}
+
+	input <- batch("A", "a1")
+	a := receiveFair(t, out)
+	input <- batch("B", "b1")
+	input <- batch("B", "b2")
+	input <- batch("C", "c1")
+	c := receiveFair(t, out)
+	require.Equal(t, "C", c.Table, "another group runs while peer1 is full")
+	requireNoDispatch(t, out)
+
+	a.Release()
+	b := receiveFair(t, out)
+	require.Equal(t, []string{"b1", "b2"}, b.Paths(), "batches that waited for the group were merged")
+	b.Release()
+	c.Release()
+}
+
+func TestFairQueueGroupLimitNeedsGroupAndLimit(t *testing.T) {
+	for name, opts := range map[string]FairQueueOpts{
+		"no group": {Workers: 4, MaxRunningPerGroup: 1},
+		"no limit": {Workers: 4, Group: func(*Batch) string { return "peer" }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			input, out := mergeQueue(t, opts)
+			input <- fairBatch("A", "s", 1)
+			input <- fairBatch("B", "s", 1)
+			a, b := receiveFair(t, out), receiveFair(t, out)
+			a.Release()
+			b.Release()
+		})
+	}
+}
+
+// A group that has room goes to the destinations waiting for it in the order they started waiting.
+func TestFairQueueGroupServesLongestWaitingFirst(t *testing.T) {
+	input, out := mergeQueue(t, FairQueueOpts{Workers: 8, MaxRunningPerGroup: 1, Group: func(*Batch) string { return "peer" }})
+	input <- pathBatch("A", "DB_A", "a", 1)
+	running := receiveFair(t, out)
+	for _, table := range []string{"B", "C", "D"} {
+		input <- pathBatch(table, "DB_"+table, table, 1)
+		requireNoDispatch(t, out)
+	}
+	for _, want := range []string{"B", "C", "D"} {
+		running.Release()
+		running = receiveFair(t, out)
+		require.Equal(t, want, running.Table)
+	}
+	running.Release()
+}
+
+// A destination whose next batch moved to another group stops waiting for the old one.
+func TestFairQueueGroupWaitFollowsOwnerChange(t *testing.T) {
+	var mu sync.Mutex
+	groups := map[string]string{"A": "peer1", "B": "peer1"}
+	group := func(b *Batch) string { mu.Lock(); defer mu.Unlock(); return groups[b.Table] }
+	input, out := mergeQueue(t, FairQueueOpts{Workers: 8, MaxRunningPerGroup: 1, Group: group})
+
+	input <- pathBatch("A", "DB_A", "a", 1)
+	a := receiveFair(t, out)
+	input <- pathBatch("B", "DB_B", "b", 1)
+	requireNoDispatch(t, out)
+
+	// B's table moves to peer2, which has room, so B runs while A still holds peer1.
+	mu.Lock()
+	groups["B"] = "peer2"
+	mu.Unlock()
+	b := receiveFair(t, out)
+	require.Equal(t, "B", b.Table)
+	b.Release()
+	a.Release()
+}
+
+func TestGroupWaitsNext(t *testing.T) {
+	g := newGroupWaits(func(b *Batch) string { return b.Table[:1] }, 1)
+	a, b := wal.Destination{Database: "DB", Table: "x1"}, wal.Destination{Database: "DB", Table: "x2"}
+	tables := map[wal.Destination]*fairTable{
+		a: {queue: []*Batch{fairBatch("x1", "s", 1)}},
+		b: {queue: []*Batch{fairBatch("x2", "s", 1)}},
+	}
+	ready := func(t *fairTable) bool { return t != nil && len(t.queue) > 0 }
+	g.running["x"] = 1
+	g.wait(a, tables[a].queue[0])
+	g.wait(a, tables[a].queue[0])
+	g.wait(b, tables[b].queue[0])
+	require.Equal(t, []wal.Destination{a, b}, g.waiting["x"], "a destination waits once")
+
+	_, ok := g.next(tables, ready)
+	require.False(t, ok, "the group is still full")
+
+	g.done("x")
+	require.Empty(t, g.running)
+	// a has no work any more, so it stops waiting and b, next in line, goes.
+	tables[a].queue = nil
+	d, ok := g.next(tables, ready)
+	require.True(t, ok)
+	require.Equal(t, b, d)
+	require.Empty(t, g.waiting)
+	require.Empty(t, g.queued)
 }
