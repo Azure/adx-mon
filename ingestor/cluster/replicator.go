@@ -18,6 +18,10 @@ import (
 	"go.uber.org/multierr"
 )
 
+// transferConnsPerPeer is how many connections the replicator opens to each peer, and so how many transfers to a peer
+// run at once.
+const transferConnsPerPeer = 5
+
 // maxSchedulerRetry bounds how long the scheduler defers a destination on
 // behalf of one peer. The per-peer backoff remains authoritative.
 const maxSchedulerRetry = time.Second
@@ -115,12 +119,13 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		transferConcurrency = opts.MaxTransferConcurrency
 	}
 
-	// Keep every connection the default per-host limit of 5 allows so bursts reuse them instead of reconnecting.
+	// Keep every connection to a peer idle when it is not in use so bursts reuse them instead of reconnecting.
 	cli, err := NewClient(ClientOpts{
 		Timeout:               30 * time.Second,
 		InsecureSkipVerify:    opts.InsecureSkipVerify,
 		Close:                 false,
-		MaxIdleConnsPerHost:   5,
+		MaxIdleConnsPerHost:   transferConnsPerPeer,
+		MaxConnsPerHost:       transferConnsPerPeer,
 		MaxIdleConns:          transferConcurrency,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: transferResponseHeaderTimeout,
@@ -168,12 +173,22 @@ func (r *replicator) Open(ctx context.Context) error {
 		MaxRunningPerTable: r.perTable,
 		MergeSegments:      r.mergeSegments,
 		MergeBytes:         r.mergeBytes,
+		// Only as many transfers to a peer run as there are connections to it.  The rest wait in the queue, where
+		// they keep merging, rather than holding a worker that waits for a connection.
+		Group:              r.owner,
+		MaxRunningPerGroup: transferConnsPerPeer,
 	})
 	queues := PriorityQueues{Realtime: r.realtimeQueue, Queued: queued}
 	RunWorkers(ctx, queues, r.transferConcurrency, r.reservedPercent, func(batch *Batch) {
 		r.transfer(ctx, batch)
 	}, r.wg.Done)
 	return nil
+}
+
+// owner returns the peer that owns batch's table.
+func (r *replicator) owner(batch *Batch) string {
+	owner, _ := r.Partitioner.Owner([]byte(batch.Prefix))
+	return owner
 }
 
 func (r *replicator) Close() error {

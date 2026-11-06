@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -144,4 +145,107 @@ func TestNewReplicatorMergeLimits(t *testing.T) {
 			require.Equal(t, tc.bytes, r.(*replicator).mergeBytes)
 		})
 	}
+}
+
+// tablePartitioner assigns each table prefix to an owner, each served at its own address.
+type tablePartitioner struct {
+	addrs  map[string]string
+	owners map[string]string
+}
+
+func (p tablePartitioner) Owner(key []byte) (string, string) {
+	owner := p.owners[string(key)]
+	return owner, p.addrs[owner]
+}
+
+// No more transfers to a peer run at once than the replicator has connections to it, while transfers to other peers
+// still run.  Batches waiting for a connection stay queued, so later batches for their tables merge into them.
+func TestReplicator_LimitsTransfersPerPeerToConnections(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		inFlight = map[string]int{}
+		maxSeen  = map[string]int{}
+		requests = map[string]int{}
+	)
+	unblock := make(chan struct{})
+	release := sync.OnceFunc(func() { close(unblock) })
+	addrs := map[string]string{}
+	for _, peer := range []string{"peer1", "peer2"} {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			mu.Lock()
+			requests[peer]++
+			inFlight[peer]++
+			maxSeen[peer] = max(maxSeen[peer], inFlight[peer])
+			mu.Unlock()
+			<-unblock
+			mu.Lock()
+			inFlight[peer]--
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		defer server.Close()
+		addrs[peer] = server.URL
+	}
+	// Runs before the servers close, so a failed assertion does not leave their handlers blocked.
+	defer release()
+
+	owners := map[string]string{}
+	for i := 0; i < 8; i++ {
+		owners[fmt.Sprintf("DB_PeerOne%d", i)] = "peer1"
+		owners[fmt.Sprintf("DB_PeerTwo%d", i)] = "peer2"
+	}
+	rep, err := NewReplicator(ReplicatorOpts{
+		Partitioner:            tablePartitioner{addrs: addrs, owners: owners},
+		Health:                 &fakeHealthChecker{healthy: true},
+		SegmentRemover:         &fakeSegmentRemover{},
+		InsecureSkipVerify:     true,
+		Hostname:               "node1",
+		DisableGzip:            true,
+		MaxTransferConcurrency: 20,
+	})
+	require.NoError(t, err)
+	require.NoError(t, rep.Open(context.Background()))
+	defer rep.Close()
+
+	dir := t.TempDir()
+	rec := &releaseRecorder{}
+	send := func(prefix string) {
+		s, err := wal.NewSegment(dir, prefix)
+		require.NoError(t, err)
+		_, err = s.Write(context.Background(), []byte("x"))
+		require.NoError(t, err)
+		require.NoError(t, s.Close())
+		db, table, _, _, err := wal.ParseFilename(s.Path())
+		require.NoError(t, err)
+		rep.TransferQueue() <- &Batch{Database: db, Table: table, Prefix: prefix,
+			Segments: []wal.SegmentInfo{{Prefix: prefix, Path: s.Path(), Size: s.Size()}}, batcher: rec}
+	}
+	for prefix := range owners {
+		send(prefix)
+	}
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return inFlight["peer1"] == transferConnsPerPeer && inFlight["peer2"] == transferConnsPerPeer
+	}, 5*time.Second, 5*time.Millisecond, "each peer runs as many transfers as it has connections")
+	// A second batch for every table: those whose first batch is still waiting merge into it.
+	for prefix := range owners {
+		send(prefix)
+	}
+	time.Sleep(100 * time.Millisecond)
+	release()
+	segments := func() (n int) {
+		for _, r := range rec.releases() {
+			n += len(r)
+		}
+		return n
+	}
+	require.Eventually(t, func() bool { return segments() == 2*len(owners) }, 5*time.Second, 10*time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, map[string]int{"peer1": transferConnsPerPeer, "peer2": transferConnsPerPeer}, maxSeen)
+	// Per peer: 5 running first batches, 3 waiting first batches each merged with their second, and 5 second batches.
+	require.Equal(t, map[string]int{"peer1": 13, "peer2": 13}, requests)
 }
