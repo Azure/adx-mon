@@ -185,7 +185,11 @@ func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
 
 // overBudget reports which of a request's tables might not fit in the store's global budget, or nil when they all
 // fit.  It returns ErrMaxDiskUsageExceeded when the realtime tables do not fit, or when nothing fits, so the request
-// is rejected and retried rather than any realtime data being shed.  When only the queued share of the budget is used
+// is rejected and retried rather than any realtime data being shed.
+//
+// The check reserves nothing and does not count segments, so it makes partial writes rarer rather than impossible: a
+// concurrent request can still use up the room it saw, or the segment limit can be reached, after some of the tables
+// are written, and the sender's retry then writes those again.  When only the queued share of the budget is used
 // up, the queued tables are shed and the rest are written, so the realtime reservation keeps realtime data flowing.
 //
 // Realtime tables come first: they are checked against the whole budget using only their part of the request, so a
