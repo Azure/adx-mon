@@ -57,6 +57,26 @@ func TestService_HandleTransfer_DroppedPrefix(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, resp.Code)
 }
 
+// A transfer whose segment is locked is answered with 423 so the sender retries it later, and the connection is kept.
+func TestService_HandleTransfer_SegmentLocked(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{importFn: func(_ string, body io.ReadCloser) (int, error) {
+			_, _ = io.Copy(io.Discard, body)
+			return 0, wal.ErrSegmentLocked
+		}},
+		databases: map[string]struct{}{"testdb": {}},
+	}
+
+	req := httptest.NewRequest("POST", "/transfer?filename=testdb_Table_2f2c74ffa19e6000.wal", bytes.NewReader([]byte("data")))
+	resp := httptest.NewRecorder()
+	s.HandleTransfer(resp, req)
+	require.Equal(t, http.StatusLocked, resp.Code)
+	require.Contains(t, resp.Body.String(), wal.ErrSegmentLocked.Error())
+	require.Empty(t, resp.Header().Get("Connection"))
+	require.Empty(t, resp.Header().Get("Retry-After"))
+}
+
 func TestService_HandleTransfer_MissingFilename(t *testing.T) {
 	s := &Service{
 		health: &fakeHealthChecker{healthy: true},
