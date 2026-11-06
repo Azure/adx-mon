@@ -140,6 +140,36 @@ func TestHealthConcurrentFailureKeepsRetryAfter(t *testing.T) {
 	require.False(t, h.IsPeerHealthy("peer"))
 }
 
+// A transfer that was in flight when the peer asked for a pause, and then succeeds, does not end the pause early, but
+// it does reset the backoff from failures.
+func TestHealthConcurrentSuccessKeepsRetryAfter(t *testing.T) {
+	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute, InitialUnhealthyTimeout: time.Second})
+	h.jitter = func(n time.Duration) time.Duration { return n }
+
+	h.SetPeerUnhealthyFor("peer", 30*time.Second)
+	h.SetPeerHealthy("peer")
+	require.False(t, h.IsPeerHealthy("peer"), "the peer asked for 30s")
+	require.Equal(t, 30*time.Second, time.Until(nextCheck(h, "peer")).Round(time.Second))
+	require.Zero(t, h.state["peer"].Failures)
+
+	// Once the pause has ended, a success makes the peer healthy again.
+	h.mu.Lock()
+	h.state["peer"].pausedUntil = time.Now().Add(-time.Millisecond)
+	h.mu.Unlock()
+	h.SetPeerHealthy("peer")
+	require.True(t, h.IsPeerHealthy("peer"))
+	require.True(t, nextCheck(h, "peer").IsZero())
+}
+
+// A success clears a backoff from ordinary failures at once, as before.
+func TestHealthSuccessClearsFailureBackoff(t *testing.T) {
+	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute, InitialUnhealthyTimeout: time.Second})
+	h.SetPeerUnhealthy("peer")
+	require.False(t, h.IsPeerHealthy("peer"))
+	h.SetPeerHealthy("peer")
+	require.True(t, h.IsPeerHealthy("peer"))
+}
+
 // Without InitialUnhealthyTimeout every failure skips the peer for the full UnhealthyTimeout, as before.
 func TestHealthPeerBackoffDefaultIsUnhealthyTimeout(t *testing.T) {
 	h := NewHealth(HealthOpts{UnhealthyTimeout: time.Minute})

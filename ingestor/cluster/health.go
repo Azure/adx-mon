@@ -32,6 +32,10 @@ type HealthStatus struct {
 	Healthy   bool
 	NextCheck time.Time
 	Failures  int
+
+	// pausedUntil is when the latest Retry-After the peer asked for ends.  A success from a request that was already
+	// in flight does not end it early.
+	pausedUntil time.Time
 }
 
 type HealthOpts struct {
@@ -152,6 +156,9 @@ func (h *Health) SetPeerUnhealthyFor(peer string, retryAfter time.Duration) {
 	if next := now.Add(min(max(h.peerBackoff(failures), retryAfter), h.opts.UnhealthyTimeout)); next.After(s.NextCheck) {
 		s.NextCheck = next
 	}
+	if paused := now.Add(min(retryAfter, h.opts.UnhealthyTimeout)); retryAfter > 0 && paused.After(s.pausedUntil) {
+		s.pausedUntil = paused
+	}
 
 	s.Healthy = false
 	h.state[peer] = s
@@ -180,9 +187,17 @@ func (h *Health) SetPeerHealthy(peer string) {
 		s = &HealthStatus{}
 	}
 
-	s.Healthy = true
-	s.NextCheck = time.Time{}
 	s.Failures = 0
+	// A request that was in flight when the peer asked for a pause can still succeed.  That resets the backoff from
+	// failures, but the peer is left alone until the pause it asked for ends.
+	if time.Now().UTC().Before(s.pausedUntil) {
+		s.Healthy = false
+		s.NextCheck = s.pausedUntil
+	} else {
+		s.Healthy = true
+		s.NextCheck = time.Time{}
+		s.pausedUntil = time.Time{}
+	}
 	h.state[peer] = s
 }
 
