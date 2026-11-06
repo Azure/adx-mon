@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/wal"
 	dto "github.com/prometheus/client_model/go"
@@ -79,7 +80,7 @@ func transferOutcomeCases() map[string]struct {
 	}
 }
 
-// requests_received_total counts every /transfer response by its code, except 423.
+// requests_received_total counts every /transfer response by its code.
 func TestHandleTransferCountsRequestsByCode(t *testing.T) {
 	for name, tc := range transferOutcomeCases() {
 		t.Run(name, func(t *testing.T) {
@@ -92,11 +93,60 @@ func TestHandleTransferCountsRequestsByCode(t *testing.T) {
 			tc.service.HandleTransfer(resp, r)
 			require.Equal(t, tc.status, resp.Code)
 
-			if tc.status == http.StatusLocked {
-				require.Empty(t, countedSince(before), "a 423 is not counted")
-				return
-			}
 			require.Equal(t, map[string]float64{strconv.Itoa(tc.status): 1}, countedSince(before))
 		})
 	}
+}
+
+func transfersReceived(sender, code string) float64 {
+	m := &dto.Metric{}
+	if err := metrics.IngestorTransfersReceived.WithLabelValues(sender, code).Write(m); err != nil {
+		panic(err)
+	}
+	return m.GetCounter().GetValue()
+}
+
+// transfers_received_total counts every /transfer response by its sender and code.
+func TestHandleTransferCountsTransfersBySenderAndCode(t *testing.T) {
+	for name, tc := range transferOutcomeCases() {
+		for sender, header := range map[string]string{"collector": "", "peer": "true"} {
+			t.Run(name+"/"+sender, func(t *testing.T) {
+				code := strconv.Itoa(tc.status)
+				before := transfersReceived(sender, code)
+				r := httptest.NewRequest("POST", "/transfer?filename="+tc.filename, bytes.NewReader([]byte("data")))
+				for k, v := range tc.header {
+					r.Header[k] = v
+				}
+				if header != "" {
+					r.Header.Set(cluster.PeerTransferHeader, header)
+				}
+				resp := httptest.NewRecorder()
+				tc.service.HandleTransfer(resp, r)
+				require.Equal(t, tc.status, resp.Code)
+				require.Equal(t, before+1, transfersReceived(sender, code))
+			})
+		}
+	}
+}
+
+func TestStatusRecorder(t *testing.T) {
+	t.Run("first code wins", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		s := &statusRecorder{ResponseWriter: resp, code: http.StatusOK}
+		s.WriteHeader(http.StatusLocked)
+		s.WriteHeader(http.StatusAccepted)
+		require.Equal(t, http.StatusLocked, s.code)
+	})
+	t.Run("write without a header is 200", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		s := &statusRecorder{ResponseWriter: resp, code: http.StatusOK}
+		_, err := s.Write([]byte("x"))
+		require.NoError(t, err)
+		s.WriteHeader(http.StatusTeapot)
+		require.Equal(t, http.StatusOK, s.code)
+	})
+	t.Run("unwrap", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		require.Same(t, resp, (&statusRecorder{ResponseWriter: resp}).Unwrap())
+	})
 }

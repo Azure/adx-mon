@@ -158,6 +158,9 @@ against a latency target.
 | --- | --- |
 | `adxmon_collector_transfer_latency_seconds{database}` | Age of the oldest collector segment in a batch when it is transferred to an ingestor. |
 | `adxmon_ingestor_transfer_latency_seconds{database}` | Age of the oldest segment in a batch when it is transferred to the peer that owns the table. |
+| `adxmon_ingestor_transfers_received_total{sender,code}` | `/transfer` requests received, by sender (`collector`, or `peer` for another ingestor) and response code.  A `423` means the table's segment was busy and the sender retries later. |
+| `adxmon_ingestor_peer_transfers_total{outcome}` | Transfers sent to the ingestor that owns the table, by outcome: `accepted`, `locked`, `table_overloaded`, `peer_overloaded`, `too_large`, `exists`, `bad_request` or `error`. |
+| `adxmon_ingestor_peer_transfer_segments` | Number of segments sent in each transfer to the ingestor that owns the table. |
 | `adxmon_ingestor_upload_latency_seconds{database,method}` | Age of the oldest ingestor segment in a batch when it is uploaded, by `method`: `streaming` or `queued`. |
 | `adxmon_ingestor_upload_duration_seconds{database,method}` | Duration of upload requests to Kusto. |
 | `adxmon_ingestor_upload_failures_total{database,table}` | Queued uploads that failed and will be retried. |

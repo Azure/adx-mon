@@ -53,6 +53,11 @@ type ReplicatorOpts struct {
 
 	// TransferLatency, if set, records the age of the oldest segment in each transferred batch by database.
 	TransferLatency *prometheus.HistogramVec
+
+	// TransferOutcomes, if set, counts transfers by outcome (see transferOutcome), and TransferSegments, if set,
+	// records the number of segments in each transfer.
+	TransferOutcomes *prometheus.CounterVec
+	TransferSegments prometheus.Observer
 }
 
 type SegmentRemover interface {
@@ -86,6 +91,8 @@ type replicator struct {
 	reservedPercent     int
 	backoff             destinationBackoff
 	transferLatency     *prometheus.HistogramVec
+	transferOutcomes    *prometheus.CounterVec
+	transferSegments    prometheus.Observer
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
@@ -123,6 +130,8 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		transferConcurrency: transferConcurrency,
 		reservedPercent:     opts.QueuedReservedWorkersPercent,
 		transferLatency:     opts.TransferLatency,
+		transferOutcomes:    opts.TransferOutcomes,
+		transferSegments:    opts.TransferSegments,
 	}, nil
 }
 
@@ -159,6 +168,30 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 	}
 
 	batch.Release()
+}
+
+// transferOutcome names the outcome of a transfer for ReplicatorOpts.TransferOutcomes.
+func transferOutcome(err error) string {
+	var quota *wal.TableOverloadedError
+	var oversized *wal.SegmentTooLargeError
+	switch {
+	case err == nil:
+		return "accepted"
+	case errors.As(err, &quota):
+		return "table_overloaded"
+	case errors.As(err, &oversized):
+		return "too_large"
+	case errors.Is(err, &ErrBadRequest{}):
+		return "bad_request"
+	case errors.Is(err, ErrSegmentExists):
+		return "exists"
+	case errors.Is(err, ErrSegmentLocked):
+		return "locked"
+	case errors.Is(err, ErrPeerOverloaded):
+		return "peer_overloaded"
+	default:
+		return "error"
+	}
 }
 
 // maxSplitDepth bounds how many times an oversized batch is halved before it is
@@ -226,6 +259,12 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 		transferCtx, cancelTransfer := withTransferDeadline(ctx, size)
 		err = transferError(transferCtx, size, r.cli.Write(transferCtx, addr, filename, mr))
 		cancelTransfer()
+		if r.transferOutcomes != nil {
+			r.transferOutcomes.WithLabelValues(transferOutcome(err)).Inc()
+		}
+		if r.transferSegments != nil {
+			r.transferSegments.Observe(float64(len(segments)))
+		}
 		if err != nil {
 			if quota, ok := errors.AsType[*wal.TableOverloadedError](err); ok {
 				// The authoritative backoff is per peer and destination. The
