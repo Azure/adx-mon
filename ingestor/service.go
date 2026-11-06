@@ -273,6 +273,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		PeerTransfer:                 true,
 		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 		TransferLatency:              metrics.IngestorTransferLatency,
+		TransferOutcomes:             metrics.IngestorPeerTransfers,
+		TransferSegments:             metrics.IngestorPeerTransferSegments,
 	})
 	if err != nil {
 		return nil, err
@@ -544,6 +546,13 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
+	sender := "collector"
+	if r.Header.Get(cluster.PeerTransferHeader) != "" {
+		sender = "peer"
+	}
+	status := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
+	w = status
+	defer func() { metrics.IngestorTransfersReceived.WithLabelValues(sender, strconv.Itoa(status.code)).Inc() }()
 	filename := r.URL.Query().Get("filename")
 	if filename == "" {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
@@ -653,6 +662,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
 	} else if errors.Is(err, wal.ErrSegmentLocked) {
+		m.WithLabelValues(strconv.Itoa(http.StatusLocked)).Inc()
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
 	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
@@ -829,4 +839,28 @@ func (q *queueSizerAdapter) SegmentsSize() int64 {
 
 func (q *queueSizerAdapter) MaxSegmentAge() time.Duration {
 	return q.store.Index().OldestSegmentAge()
+}
+
+// statusRecorder records the status code written to a response.
+type statusRecorder struct {
+	http.ResponseWriter
+	code    int
+	written bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.written {
+		s.code, s.written = code, true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	s.written = true
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
 }
