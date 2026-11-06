@@ -15,7 +15,7 @@ import (
 // map order.
 func TestEventBatcher_BatchesOldestFirst(t *testing.T) {
 	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
-	r := newQueuedBatcher(env.b, time.Hour)
+	r := newQueuedBatcher(env.b, time.Hour, 0)
 
 	now := time.Now()
 	var want []string
@@ -40,7 +40,7 @@ func TestEventBatcher_BatchesOldestFirst(t *testing.T) {
 // deadline.  Scheduling the earlier deadline would spin the event loop on an expired timer until the backoff ends.
 func TestEventBatcher_NextDeadlineWaitsForRetryAfter(t *testing.T) {
 	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
-	r := newQueuedBatcher(env.b, time.Hour)
+	r := newQueuedBatcher(env.b, time.Hour, 0)
 
 	now := time.Now()
 	retryAfter := now.Add(time.Minute)

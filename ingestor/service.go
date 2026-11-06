@@ -147,6 +147,15 @@ type ServiceOpts struct {
 	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
 	MaxTransferConcurrency int
 
+	// MaxTransfersPerTable, when positive, is how many transfers of one table run at once.  Batches waiting behind a
+	// running transfer are merged, so the owner receives fewer, larger transfers.  When zero, a table may use every
+	// transfer worker but the reserved ones.
+	MaxTransfersPerTable int
+
+	// TransferLinger, when positive, is how long a closed segment of a table owned by another ingestor waits to be
+	// batched with others before it is transferred.  When zero, it waits as long as owned segments.
+	TransferLinger time.Duration
+
 	// ConcurrentUploads is the maximum number of concurrent uploads.
 	ConcurrentUploads int
 
@@ -269,6 +278,9 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Health:                       health,
 		SegmentRemover:               store,
 		MaxTransferConcurrency:       opts.MaxTransferConcurrency,
+		MaxTransfersPerTable:         opts.MaxTransfersPerTable,
+		MaxBatchSegments:             opts.MaxBatchSegments,
+		MaxTransferSize:              opts.MaxTransferSize,
 		DisableGzip:                  true,
 		PeerTransfer:                 true,
 		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
@@ -288,6 +300,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxTransferAge:          opts.MaxTransferAge,
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		MaxTableBatches:         max(10, opts.ConcurrentUploads*2, opts.MaxTransferConcurrency*2),
+		TransferLinger:          opts.TransferLinger,
 		Partitioner:             coord,
 		Segmenter:               store.Index(),
 		Usage:                   store,

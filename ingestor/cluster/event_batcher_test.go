@@ -19,8 +19,8 @@ type transferPolicy struct{}
 func (transferPolicy) accepts(si wal.SegmentInfo) bool {
 	return si.Priority == ingestpolicy.PriorityQueued
 }
-func (transferPolicy) maxLatency() time.Duration { return time.Hour }
-func (transferPolicy) sizeTrigger() int64        { return 1 << 40 }
+func (transferPolicy) maxLatency(string) time.Duration { return time.Hour }
+func (transferPolicy) sizeTrigger() int64              { return 1 << 40 }
 
 func (transferPolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo) (owned, notOwned []*Batch) {
 	batch := &Batch{Prefix: prefix, Priority: ingestpolicy.PriorityQueued, batcher: b}

@@ -144,7 +144,7 @@ func TestReplicator_SegmentExistsError(t *testing.T) {
 }
 
 // A batch the peer reports as locked is released without being removed, so its segments are retried, and the peer
-// stays healthy.  The batch does not ask to be retried sooner than other failures.
+// stays healthy.  The lock clears in milliseconds, so the batch asks to be retried within 100–300 ms.
 func TestReplicator_SegmentLockedError(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusLocked)
@@ -189,7 +189,8 @@ func TestReplicator_SegmentLockedError(t *testing.T) {
 	require.FileExists(t, segmentPath)
 	require.True(t, health.IsPeerHealthy("node2"))
 	batch.mu.Lock()
-	require.Zero(t, batch.retryDelay)
+	require.GreaterOrEqual(t, batch.retryDelay, 100*time.Millisecond)
+	require.Less(t, batch.retryDelay, 300*time.Millisecond)
 	batch.mu.Unlock()
 }
 

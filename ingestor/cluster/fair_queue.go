@@ -45,6 +45,18 @@ type FairQueueOpts struct {
 	// newcomer waits for an in-flight batch to finish. Defaults to one when the
 	// pool has more than one worker.
 	ReservedWorkers int
+
+	// MaxRunningPerTable, when positive, caps how many batches of one destination run at once below the pool size less
+	// ReservedWorkers.  A destination's batches then wait behind its running ones, where MergeSegments can combine
+	// them, rather than reaching the destination as many concurrent requests.
+	MaxRunningPerTable int
+
+	// MergeSegments, when positive, enables merging: a batch for a destination whose last queued batch has the same
+	// prefix and priority is added to that batch rather than queued behind it, as long as the result has at most
+	// MergeSegments segments and, when MergeBytes is positive, at most MergeBytes bytes.  A waiting batch keeps
+	// growing until a worker takes it, so batches are larger when the destination is slower.
+	MergeSegments int
+	MergeBytes    int64
 }
 
 func (o FairQueueOpts) withDefaults() FairQueueOpts {
@@ -161,6 +173,9 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 	if limit < 1 {
 		limit = 1
 	}
+	if opts.MaxRunningPerTable > 0 && opts.MaxRunningPerTable < limit {
+		limit = opts.MaxRunningPerTable
+	}
 
 	for {
 		candidate, destination := selectCandidate(tables, order, &cursor, &round, limit, opts.Quantum)
@@ -200,6 +215,10 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 				table = &fairTable{lastRound: round}
 				tables[d] = table
 				order = append(order, d)
+			}
+			if n := len(table.queue); n > 0 && mergeBatch(table.queue[n-1], b, opts) {
+				statusDirty = true
+				continue
 			}
 			if len(table.queue) >= opts.QueueDepth {
 				b.Release()
@@ -291,6 +310,34 @@ func selectCandidate(tables map[wal.Destination]*fairTable, order []wal.Destinat
 		*cursor++
 	}
 	return nil, wal.Destination{}
+}
+
+// mergeBatch adds next's segments to queued, a batch waiting for a worker, when they are for the same prefix and
+// priority and the result stays within opts' merge limits.  It reports whether it merged them, after which next must
+// not be used: its segments are claimed by queued and are released with it.
+func mergeBatch(queued, next *Batch, opts FairQueueOpts) bool {
+	if opts.MergeSegments <= 0 || queued.Prefix == "" || queued.Prefix != next.Prefix ||
+		queued.Priority != next.Priority || queued.batcher != next.batcher {
+		return false
+	}
+	if len(queued.Segments)+len(next.Segments) > opts.MergeSegments {
+		return false
+	}
+	if opts.MergeBytes > 0 && segmentBytes(queued)+segmentBytes(next) > opts.MergeBytes {
+		return false
+	}
+	queued.mu.Lock()
+	queued.Segments = append(queued.Segments, next.Segments...)
+	queued.mu.Unlock()
+	return true
+}
+
+func segmentBytes(b *Batch) int64 {
+	var size int64
+	for _, s := range b.Segments {
+		size += s.Size
+	}
+	return size
 }
 
 func batchBytes(b *Batch) int64 {
