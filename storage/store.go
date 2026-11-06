@@ -342,10 +342,10 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 			return wal.ErrMaxDiskUsageExceeded
 		}
 
-		if err := w.Write(ctx, enc.Bytes()); err != nil {
+		if err := s.writeBlock(ctx, w, t.key, len(t.series), enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
-			if errors.As(err, &quota) && blockTooLarge(quota, len(t.series)) {
+			if errors.Is(err, errBlockTooLarge) || errors.As(err, &quota) && blockTooLarge(quota, len(t.series)) {
 				accepted, rejected, err := s.writeEachSeries(ctx, w, enc, req, t.series)
 				outcome.Accepted += accepted
 				metrics.SamplesStored.Add(float64(accepted))
@@ -381,6 +381,24 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 // the table's budget, so some of its rows written one at a time may still fit.
 func blockTooLarge(quota *wal.TableOverloadedError, n int) bool {
 	return quota.Reason == "bytes" && n > 1
+}
+
+// errBlockTooLarge is returned by writeBlock for a block that was not written because it is larger than the room left
+// in its table's budget.
+var errBlockTooLarge = errors.New("block larger than the room left in its table's budget")
+
+// writeBlock writes a table's block of n rows, unless it has more than one row and is larger than the room left in the
+// table's budget, when it returns errBlockTooLarge so the caller writes the rows one at a time.  Checking first matters
+// because a rejected write throttles the table until its usage drops well below the limit, and the throttle would then
+// shed the rows that fit as well.  The block's uncompressed size is checked, which is larger than the compressed block
+// the write reserves, so the check rarely lets through a block that is then rejected.
+func (s *LocalStore) writeBlock(ctx context.Context, w *wal.WAL, key []byte, n int, block []byte) error {
+	if n > 1 {
+		if d, err := wal.DestinationFromPrefix(string(key)); err == nil && !s.opts.Admission.FitsTable(d, int64(len(block))) {
+			return errBlockTooLarge
+		}
+	}
+	return w.Write(ctx, block)
 }
 
 // writeEachSeries writes a table's series one block per series, for a table whose block of every series did not fit,
@@ -584,10 +602,10 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 			return &PartialWriteError{Pending: pending(i), Err: wal.ErrMaxDiskUsageExceeded}
 		}
 
-		if err := w.Write(ctx, enc.Bytes()); err != nil {
+		if err := s.writeBlock(ctx, w, t.key, len(t.logs), enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
-			if errors.As(err, &quota) && blockTooLarge(quota, len(t.logs)) {
+			if errors.Is(err, errBlockTooLarge) || errors.As(err, &quota) && blockTooLarge(quota, len(t.logs)) {
 				accepted, rejected, unwritten, err := s.writeEachLog(ctx, w, enc, logs, t.logs)
 				outcome.Accepted += accepted
 				outcome.Rejected += rejected
