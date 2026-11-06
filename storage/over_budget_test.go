@@ -16,8 +16,8 @@ func newOverBudgetStore(t *testing.T, global, reserved int64) *LocalStore {
 	return &LocalStore{opts: StoreOpts{Admission: a, Policy: policy}}
 }
 
-// When the realtime and queued parts of a request each fit but not together, the queued part is shed so the
-// realtime part is written, never the other way around.
+// When the realtime and queued parts of a request each fit but not together, the queued part is the one that might not
+// fit, so it is written after the realtime part, never the other way around.
 func TestOverBudgetKeepsRealtimeWhenBothDoNotFitTogether(t *testing.T) {
 	s := newOverBudgetStore(t, 64<<10, 32<<10)
 	r, err := s.opts.Admission.Reserve("DB_Other_1.wal", wal.Destination{Database: "DB", Table: "Other"}, 10<<10, 0)
@@ -28,7 +28,7 @@ func TestOverBudgetKeepsRealtimeWhenBothDoNotFitTogether(t *testing.T) {
 
 	full, err := s.overBudget(2, func(i int) int64 { return sizes[i] }, func(i int) []byte { return keys[i] })
 	require.NoError(t, err)
-	require.Equal(t, []bool{false, true}, full, "the queued table should be shed and the realtime one kept")
+	require.Equal(t, []bool{false, true}, full, "only the queued table might not fit")
 }
 
 // Realtime data that does not fit is rejected with a retryable error rather than shed, even when the queued part
