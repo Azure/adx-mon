@@ -99,3 +99,21 @@ func TestAdmission_Tracks(t *testing.T) {
 	a.Forget(Destination{Database: "db", Table: "table"}, seg.Path())
 	require.False(t, a.Tracks(seg.Path()))
 }
+
+// FitsTable answers whether a write fits without throttling the table when it does not, so a smaller write that fits
+// is still admitted.
+func TestFitsTableDoesNotThrottle(t *testing.T) {
+	a := NewAdmission(AdmissionOpts{Enforce: true, Default: Usage{Bytes: 1000}})
+	d := Destination{Database: "DB", Table: "T"}
+	r, err := a.Reserve("a.wal", d, 900, 0)
+	require.NoError(t, err)
+	r.Finish(900)
+
+	require.False(t, a.FitsTable(d, 200))
+	_, throttled := a.Throttled(d)
+	require.False(t, throttled)
+	require.True(t, a.FitsTable(d, 100))
+	r, err = a.Reserve("a.wal", d, 100, 0)
+	require.NoError(t, err)
+	r.Finish(100)
+}

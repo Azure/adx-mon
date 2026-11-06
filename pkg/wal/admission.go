@@ -200,6 +200,19 @@ func (a *Admission) FitsEstimate(d Destination, bytes int64) bool {
 	return a.Fits(d, bytes)
 }
 
+// FitsTable reports whether bytes more fit in d's enforced table byte budget.  Unlike Reserve it does not throttle the
+// table when they do not, so a caller can split a write that is too large without the rejected whole throttling the
+// table against the smaller parts that fit.
+func (a *Admission) FitsTable(d Destination, bytes int64) bool {
+	if a == nil || !a.opts.Enforce {
+		return true
+	}
+	t := a.Table(d)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.limit.Bytes <= 0 || t.usage.Bytes+bytes <= t.limit.Bytes
+}
+
 // FitsAll reports whether bytes more fit in the global byte budget of every destination.
 func (a *Admission) FitsAll(bytes int64) bool {
 	if a == nil {
