@@ -77,8 +77,15 @@ gendocs:
 	go run tools/docgen/config/config.go
 .PHONY: gendocs
 
+# Packages with tests gated by testutils.IntegrationTest. Each starts its own
+# k3s cluster and builds images, so they run one package at a time: running
+# them in parallel starves Docker and k3s and makes the tests flaky.
+INTEGRATION_PKGS = $(shell grep -rl --include='*_test.go' --exclude-dir=vendor 'IntegrationTest(t)' . | xargs -n1 dirname | sort -u)
+UNIT_PKGS = $(filter-out $(addprefix $(shell go list -m)/,$(patsubst ./%,%,$(INTEGRATION_PKGS))),$(shell go list ./...))
+
 test:
-	ENABLE_ASSERTIONS=true INTEGRATION=1 go test -timeout 30m ./...
+	ENABLE_ASSERTIONS=true INTEGRATION=1 go test -timeout 30m $(UNIT_PKGS)
+	ENABLE_ASSERTIONS=true INTEGRATION=1 go test -p 1 -timeout 30m $(INTEGRATION_PKGS)
 .PHONY: test
 
 # Generate CRDs, replacing MY_CRD with the _kind_ of the CRD you want to create

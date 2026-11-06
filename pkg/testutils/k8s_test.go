@@ -8,7 +8,6 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,8 +18,8 @@ func TestInstallFunctionsCrd(t *testing.T) {
 	testutils.IntegrationTest(t)
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
+	testutils.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
 	t.Run("install functions crd definition", func(t *testing.T) {

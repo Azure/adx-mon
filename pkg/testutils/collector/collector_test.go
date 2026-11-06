@@ -34,8 +34,8 @@ func TestCollector(t *testing.T) {
 	})
 
 	t.Run("inside cluster", func(t *testing.T) {
-		k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-		testcontainers.CleanupContainer(t, k3sContainer)
+		k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
+		testutils.CleanupContainer(t, k3sContainer)
 		require.NoError(t, err)
 
 		collectorContainer, err := collector.Run(ctx, "", collector.WithCluster(ctx, k3sContainer))
