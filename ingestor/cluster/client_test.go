@@ -302,3 +302,27 @@ func TestClientMarksPeerTransfers(t *testing.T) {
 		}
 	}
 }
+
+// A 423 from the peer is reported as ErrSegmentLocked carrying the request's ID, so the sender retries the segment
+// later.
+func TestClient_Write_SegmentLocked(t *testing.T) {
+	var requestId string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestId = r.Header.Get("X-Request-ID")
+		w.WriteHeader(http.StatusLocked)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+		DisableGzip:        true,
+	})
+	require.NoError(t, err)
+
+	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
+	require.ErrorIs(t, err, ErrSegmentLocked)
+	require.NotEmpty(t, requestId)
+	require.EqualError(t, err, "segment is locked requestId="+requestId)
+	require.EqualError(t, ErrSegmentLocked, "segment is locked", "the shared error is not changed")
+}
