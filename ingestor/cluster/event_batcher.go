@@ -29,8 +29,8 @@ type eventPolicy interface {
 	// accepts returns true if the event batcher batches the segment.
 	accepts(si wal.SegmentInfo) bool
 
-	// maxLatency is the maximum time a closed segment waits to be batched with others.
-	maxLatency() time.Duration
+	// maxLatency is the maximum time a closed segment of prefix waits to be batched with others.
+	maxLatency(prefix string) time.Duration
 
 	// sizeTrigger is the size of a prefix's unbatched segments at which they are batched without waiting for
 	// maxLatency.
@@ -112,11 +112,18 @@ func (r *eventBatcher) onSegment(si wal.SegmentInfo) {
 	if !r.policy.accepts(si) {
 		return
 	}
-	r.markPending(si.Prefix, time.Now().Add(r.policy.maxLatency()))
+	r.markPending(si.Prefix, time.Now().Add(r.policy.maxLatency(si.Prefix)))
 }
 
-// released is called when a batch is released without being removed so its segments are retried.
-func (r *eventBatcher) released(prefix string) {
+// released is called when a batch is released without being removed so its segments are retried.  A batch that asked
+// to be retried after retryAfter, such as one its peer was briefly too busy to accept, is retried then.  Otherwise the
+// retry backs off for consecutive releases of prefix.
+func (r *eventBatcher) released(prefix string, retryAfter time.Duration) {
+	if retryAfter > 0 {
+		at := time.Now().Add(retryAfter)
+		r.markPendingWithRetry(prefix, at, at)
+		return
+	}
 	delay := r.retryDelay
 	if r.maxRetryDelay > 0 {
 		r.mu.Lock()
@@ -128,8 +135,8 @@ func (r *eventBatcher) released(prefix string) {
 		}
 		delay = min(delay, r.maxRetryDelay)
 	}
-	retryAfter := time.Now().Add(delay)
-	r.markPendingWithRetry(prefix, retryAfter, retryAfter)
+	at := time.Now().Add(delay)
+	r.markPendingWithRetry(prefix, at, at)
 }
 
 // removed resets the retry backoff of prefix after one of its batches is delivered.
@@ -180,12 +187,12 @@ func (r *eventBatcher) markPendingWithRetry(prefix string, deadline, retryAfter 
 // sweep marks every prefix in the index with unbatched segments accepted by the policy as pending.  Prefixes whose
 // segments are all part of a batch are skipped so they are not reprocessed.
 func (r *eventBatcher) sweep() {
-	deadline := time.Now().Add(r.policy.maxLatency())
+	now := time.Now()
 	var segments []wal.SegmentInfo
 	for _, prefix := range r.prefixes() {
 		segments = r.b.Segmenter.Get(segments[:0], prefix)
 		if len(segments) > 0 && r.policy.accepts(segments[0]) && r.hasUnbatched(segments) {
-			r.markPending(prefix, deadline)
+			r.markPending(prefix, now.Add(r.policy.maxLatency(prefix)))
 		}
 	}
 }

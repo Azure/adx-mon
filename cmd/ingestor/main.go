@@ -86,6 +86,8 @@ func newApp() *cli.App {
 			&cli.IntFlag{Name: "max-batch-segments", Usage: "Maximum number of segments per batch", Value: 25},
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
+			&cli.IntFlag{Name: "max-transfers-per-table", Usage: "Maximum transfers of one table in flight.  Batches of a table waiting behind its running transfers are merged into one, so the owner receives fewer, larger transfers.  0 allows every transfer worker but the reserved ones"},
+			&cli.DurationFlag{Name: "transfer-linger", Usage: "How long a closed segment of a table owned by another ingestor waits to be batched with others before it is transferred.  0 waits as long as segments of owned tables (5s)"},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
 			&cli.DurationFlag{Name: "slow-request-threshold", Usage: "Threshold for slow requests. Set to 0 to disable.", Value: 10 * time.Second},
 
@@ -160,6 +162,8 @@ func realMain(ctx *cli.Context) error {
 	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
 	forwardTransfers := ctx.Bool("forward-transfers")
 	maxTransferConcurrency := ctx.Int("max-transfer-concurrency")
+	maxTransfersPerTable := ctx.Int("max-transfers-per-table")
+	transferLinger := ctx.Duration("transfer-linger")
 	enableWALFsync := ctx.Bool("enable-wal-fsync")
 	slowRequestThreshold := ctx.Duration("slow-request-threshold")
 
@@ -341,6 +345,8 @@ func realMain(ctx *cli.Context) error {
 		ConcurrentUploads:            concurrentUploads,
 		EnableWALFsync:               enableWALFsync,
 		MaxTransferConcurrency:       maxTransferConcurrency,
+		MaxTransfersPerTable:         maxTransfersPerTable,
+		TransferLinger:               transferLinger,
 		InsecureSkipVerify:           insecureSkipVerify,
 		DropFilePrefixes:             dropPrefixes,
 		SlowRequestThreshold:         slowRequestThreshold.Seconds(),

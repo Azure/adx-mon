@@ -68,6 +68,11 @@ type BatcherOpts struct {
 	// DefaultQueuedLinger.
 	QueuedLinger time.Duration
 
+	// TransferLinger, when positive, replaces QueuedLinger for segments of tables owned by another node.  Their
+	// batches are merged while they wait for a transfer worker, so they can be sent sooner without making more,
+	// smaller transfers.
+	TransferLinger time.Duration
+
 	TransfersDisabled bool
 
 	// Usage is optional.  When set, SegmentsTotal and SegmentsSize, and the metrics derived from them, report every
@@ -293,7 +298,7 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		if linger <= 0 {
 			linger = DefaultQueuedLinger
 		}
-		b.queued = newQueuedBatcher(b, linger)
+		b.queued = newQueuedBatcher(b, linger, opts.TransferLinger)
 	}
 
 	return b, nil
@@ -700,10 +705,13 @@ func (b *batcher) Release(batch *Batch) {
 	if batch.IsRemoved() {
 		return
 	}
+	batch.mu.Lock()
+	retryAfter := batch.retryDelay
+	batch.mu.Unlock()
 	if b.realtime != nil && batch.Priority == ingestpolicy.PriorityRealtime {
-		b.realtime.released(batch.Prefix)
+		b.realtime.released(batch.Prefix, retryAfter)
 	} else if b.queued != nil {
-		b.queued.released(batch.Prefix)
+		b.queued.released(batch.Prefix, retryAfter)
 	}
 }
 

@@ -40,6 +40,14 @@ is less than 100MB so that the file can be merged with other files before being 
 
 If the transfer fails, the instance will upload the file directly. 
 
+Batches of a table that are waiting for a transfer worker are merged into one, up to `--max-batch-segments` segments
+and `--max-transfer-size` bytes, so a slower owner receives fewer, larger transfers.  `--max-transfers-per-table`
+limits how many transfers of one table run at once; later batches wait behind them and are merged.  By default a
+table may use every transfer worker but the reserved ones, so few batches wait.  `--transfer-linger` sets how long a
+closed segment of a table owned by another ingestor waits to be batched with others before it is transferred, which
+defaults to the 5 seconds owned segments wait.  If the owner answers that the table's segment is busy (423), the
+batch is retried after 100–300 ms rather than after the usual retry backoff.
+
 With `--forward-transfers`, a collector transfer for a table owned by another ingestor is forwarded to the owner as
 it is received, so it waits for one segment rotation instead of one on each ingestor.  The transfer is stored locally
 as above if the owner is unhealthy, does not respond within 3 seconds, or already has 5 forwards in flight.
