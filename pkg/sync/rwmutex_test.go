@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -78,4 +79,72 @@ func TestCountingRWMutexTryLockFailsAboveWaiterLimit(t *testing.T) {
 	require.Zero(t, rw.Waiters())
 	require.True(t, rw.TryLock())
 	rw.mu.Unlock()
+}
+
+func TestCountingRWMutexTryLockFor(t *testing.T) {
+	t.Run("unheld", func(t *testing.T) {
+		rw := NewCountingRWMutex(5)
+		require.True(t, rw.TryLockFor(context.Background(), time.Second))
+		rw.mu.Unlock()
+	})
+
+	t.Run("released within the wait", func(t *testing.T) {
+		rw := NewCountingRWMutex(5)
+		rw.Lock()
+		time.AfterFunc(10*time.Millisecond, rw.Unlock)
+		require.True(t, rw.TryLockFor(context.Background(), time.Second))
+		rw.mu.Unlock()
+	})
+
+	t.Run("held past the wait", func(t *testing.T) {
+		rw := NewCountingRWMutex(5)
+		rw.Lock()
+		defer rw.Unlock()
+		start := time.Now()
+		require.False(t, rw.TryLockFor(context.Background(), 30*time.Millisecond))
+		require.GreaterOrEqual(t, time.Since(start), 30*time.Millisecond)
+		require.EqualValues(t, 1, rw.Waiters(), "a caller that gave up is not counted")
+	})
+
+	t.Run("no wait", func(t *testing.T) {
+		rw := NewCountingRWMutex(5)
+		rw.Lock()
+		defer rw.Unlock()
+		start := time.Now()
+		require.False(t, rw.TryLockFor(context.Background(), 0))
+		require.Less(t, time.Since(start), 10*time.Millisecond)
+	})
+
+	t.Run("context done", func(t *testing.T) {
+		rw := NewCountingRWMutex(5)
+		rw.Lock()
+		defer rw.Unlock()
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(5*time.Millisecond, cancel)
+		start := time.Now()
+		require.False(t, rw.TryLockFor(ctx, time.Minute))
+		require.Less(t, time.Since(start), time.Second)
+	})
+
+	// While more goroutines than the limit hold or wait for the lock, TryLockFor keeps trying rather than giving up,
+	// and gets the lock once they are done.
+	t.Run("above the waiter limit", func(t *testing.T) {
+		rw := NewCountingRWMutex(1)
+		release := make(chan struct{})
+		var readers sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			readers.Add(1)
+			go func() {
+				defer readers.Done()
+				rw.RLock()
+				<-release
+				rw.RUnlock()
+			}()
+		}
+		require.Eventually(t, func() bool { return rw.Waiters() == 2 }, time.Second, time.Millisecond)
+		time.AfterFunc(10*time.Millisecond, func() { close(release) })
+		require.True(t, rw.TryLockFor(context.Background(), time.Second))
+		rw.mu.Unlock()
+		readers.Wait()
+	})
 }

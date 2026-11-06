@@ -2,7 +2,10 @@ package wal
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,20 +71,50 @@ func TestWALAppendReturnsSegmentCreationError(t *testing.T) {
 	require.Error(t, w.Append(context.Background(), segmentBytes(t, "a")))
 }
 
-// An append to a WAL whose active segment is locked returns ErrSegmentLocked at once rather than retrying, so the
-// sender can move on and retry later.
+// An append to a WAL whose active segment stays locked returns ErrSegmentLocked after the segment's bounded wait
+// rather than retrying, so the sender can move on and retry later.
 func TestWALAppendReturnsLockedWithoutRetrying(t *testing.T) {
 	w := newAppendWAL(t, WALOpts{})
 	require.NoError(t, w.Append(context.Background(), segmentBytes(t, "a")))
 	s := activeSegment(t, w)
 	s.mu.Lock()
+	unlock := sync.OnceFunc(s.mu.Unlock)
+	defer unlock()
 
 	start := time.Now()
 	err := w.Append(context.Background(), segmentBytes(t, "b"))
 	require.ErrorIs(t, err, ErrSegmentLocked)
-	require.Less(t, time.Since(start), time.Second)
+	require.Less(t, time.Since(start), appendLockWait+time.Second)
 	require.Zero(t, w.inflightWriteBytes)
 
-	s.mu.Unlock()
+	unlock()
 	require.Equal(t, []string{"a"}, values(t, s))
+}
+
+// Many senders appending to one WAL at once all succeed, where failing fast on a held lock shed many of them.
+func TestWALAppendConcurrentSendersAllSucceed(t *testing.T) {
+	w := newAppendWAL(t, WALOpts{})
+	const senders, appends = 50, 20
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var locked int
+	for i := 0; i < senders; i++ {
+		b := segmentBytes(t, fmt.Sprint(i))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < appends; j++ {
+				if err := w.Append(context.Background(), b); errors.Is(err, ErrSegmentLocked) {
+					mu.Lock()
+					locked++
+					mu.Unlock()
+				} else {
+					require.NoError(t, err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	require.Zero(t, locked)
+	require.Len(t, values(t, activeSegment(t, w)), senders*appends)
 }

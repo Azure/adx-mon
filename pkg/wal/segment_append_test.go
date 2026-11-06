@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -121,8 +122,8 @@ func TestSegmentAppendReturnsWriteError(t *testing.T) {
 	require.EqualValues(t, 8, a.Snapshot()[Destination{Database: "DB", Table: "Dst"}].Bytes, "the reservation is released")
 }
 
-// An append to a segment whose lock is held returns ErrSegmentLocked so the sender retries later, rather than
-// blocking the request.
+// An append to a segment whose lock stays held longer than appendLockWait returns ErrSegmentLocked so the sender
+// retries later, rather than blocking the request.
 func TestSegmentAppendReturnsLockedWhileLockHeld(t *testing.T) {
 	for name, hold := range map[string]func(*segment) func(){
 		"write": func(s *segment) func() { s.mu.Lock(); return s.mu.Unlock },
@@ -131,12 +132,14 @@ func TestSegmentAppendReturnsLockedWhileLockHeld(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := newAppendSegment(t)
 			b := segmentBytes(t, "a")
-			release := hold(s)
+			release := sync.OnceFunc(hold(s))
+			defer release()
 
 			start := time.Now()
 			_, err := s.Append(context.Background(), b)
 			require.ErrorIs(t, err, ErrSegmentLocked)
-			require.Less(t, time.Since(start), time.Second, "the append does not wait for the lock")
+			require.GreaterOrEqual(t, time.Since(start), appendLockWait, "the append waits for the lock")
+			require.Less(t, time.Since(start), appendLockWait+time.Second, "but no longer than appendLockWait")
 
 			release()
 			require.Equal(t, []string(nil), values(t, s), "nothing was written")
@@ -152,7 +155,9 @@ func TestSegmentAppendReturnsLockedAboveWaiterLimit(t *testing.T) {
 	s := newAppendSegment(t)
 	b := segmentBytes(t, "a")
 	release := make(chan struct{})
-	done := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	defer releaseAll()
+	done := make(chan struct{}, 6)
 	const readers = 6
 	for i := 0; i < readers; i++ {
 		go func() {
@@ -167,10 +172,42 @@ func TestSegmentAppendReturnsLockedAboveWaiterLimit(t *testing.T) {
 	_, err := s.Append(context.Background(), b)
 	require.ErrorIs(t, err, ErrSegmentLocked)
 
-	close(release)
+	releaseAll()
 	for i := 0; i < readers; i++ {
 		<-done
 	}
 	_, err = s.Append(context.Background(), b)
 	require.NoError(t, err)
+}
+
+// An append waits for a lock that another writer holds briefly instead of failing.
+func TestSegmentAppendWaitsForLockHeldBriefly(t *testing.T) {
+	for name, hold := range map[string]func(*segment) func(){
+		"write": func(s *segment) func() { s.mu.Lock(); return s.mu.Unlock },
+		"read":  func(s *segment) func() { s.mu.RLock(); return s.mu.RUnlock },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newAppendSegment(t)
+			release := hold(s)
+			time.AfterFunc(appendLockWait/5, release)
+
+			_, err := s.Append(context.Background(), segmentBytes(t, "a"))
+			require.NoError(t, err)
+			require.Equal(t, []string{"a"}, values(t, s))
+		})
+	}
+}
+
+// An append stops waiting for the lock when its context is done.
+func TestSegmentAppendStopsWaitingWhenContextDone(t *testing.T) {
+	s := newAppendSegment(t)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(5*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, err := s.Append(ctx, segmentBytes(t, "a"))
+	require.ErrorIs(t, err, ErrSegmentLocked)
+	require.Less(t, time.Since(start), appendLockWait)
 }
