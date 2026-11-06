@@ -73,6 +73,28 @@ var (
 		Help:      "Counter of requests received from an ingestor instance",
 	}, []string{"path", "code"})
 
+	IngestorTransfersReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "transfers_received_total",
+		Help:      "Counter of /transfer requests received, by sender (collector, or peer for another ingestor) and response code",
+	}, []string{"sender", "code"})
+
+	IngestorPeerTransfers = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "peer_transfers_total",
+		Help:      "Counter of transfers sent to the ingestor that owns the table, by outcome: accepted, locked (the owner's segment was busy), table_overloaded, peer_overloaded, too_large, exists, bad_request or error",
+	}, []string{"outcome"})
+
+	IngestorPeerTransferSegments = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "peer_transfer_segments",
+		Help:      "Number of segments sent in each transfer to the ingestor that owns the table",
+		Buckets:   []float64{1, 2, 3, 5, 8, 13, 25, 50, 100},
+	})
+
 	RequestsBytesReceived = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
