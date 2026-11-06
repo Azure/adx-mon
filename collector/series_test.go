@@ -97,8 +97,3 @@ func TestSeriesCreator_AddLabels(t *testing.T) {
 	require.Equal(t, "foo", string(series.Labels[4].Name))
 	require.Equal(t, "bar", string(series.Labels[4].Value))
 }
-
-//go:fix inline
-func strPtr(s string) *string {
-	return new(s)
-}
