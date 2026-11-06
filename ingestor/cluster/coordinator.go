@@ -391,7 +391,10 @@ func (c *coordinator) syncPeersLocked() error {
 
 		set[p.Name] = fmt.Sprintf("https://%s:9090", p.Status.PodIP)
 
-		if p.Name < leastNode || leastNode == "" {
+		// The leader is chosen from ready pods only, so a leader that stops being ready hands over its functions,
+		// summary rules and management jobs at once rather than after the grace period, which exists only to keep
+		// tables from moving.  A pod that is not ready sees so in its own status and steps down too.
+		if IsPodReady(p) && (p.Name < leastNode || leastNode == "") {
 			leastNode = p.Name
 		}
 	}
