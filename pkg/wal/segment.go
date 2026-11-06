@@ -349,6 +349,12 @@ func (s *segment) Iterator() (Iterator, error) {
 	return NewSegmentIterator(f)
 }
 
+// appendLockWait is how long Append waits for a segment's lock held by another writer before returning
+// ErrSegmentLocked.  Many senders transfer to the same segment at once, and each holds the lock only to append its
+// blocks, so a short wait lets nearly all of them in rather than failing them to retry seconds later.  It is bounded so a
+// contended segment still sheds senders instead of holding their requests.
+var appendLockWait = 100 * time.Millisecond
+
 // Append appends a raw blocks to the segment.  This is used for appending blocks that have already been compressed.
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
 func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
@@ -364,11 +370,10 @@ func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 		return 0, nil
 	}
 
-	if s.mu.TryLock() {
-		defer s.mu.Unlock()
-	} else {
+	if !s.mu.TryLockFor(ctx, appendLockWait) {
 		return 0, ErrSegmentLocked
 	}
+	defer s.mu.Unlock()
 
 	if s.closed {
 		return 0, ErrSegmentClosed
