@@ -337,7 +337,20 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
-			if errors.As(err, &quota) {
+			if errors.As(err, &quota) && blockTooLarge(quota, len(t.series)) {
+				accepted, rejected, err := s.writeEachSeries(ctx, w, enc, req, t.series)
+				outcome.Accepted += accepted
+				metrics.SamplesStored.Add(float64(accepted))
+				for _, v := range rejected {
+					outcome.Rejected += int64(len(v.Samples))
+				}
+				outcome.RejectedSeries = append(outcome.RejectedSeries, rejected...)
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			if quota != nil {
 				s.recordRejection(quota, samples, int64(len(enc.Bytes())), "metrics")
 				outcome.Rejected += samples
 				outcome.RejectedSeries = append(outcome.RejectedSeries, t.series...)
@@ -354,6 +367,60 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		return &outcome
 	}
 	return nil
+}
+
+// blockTooLarge reports whether a table's block of n rows was rejected only because it is larger than the room left in
+// the table's budget, so some of its rows written one at a time may still fit.
+func blockTooLarge(quota *wal.TableOverloadedError, n int) bool {
+	return quota.Reason == "bytes" && n > 1
+}
+
+// writeEachSeries writes a table's series one block per series, for a table whose block of every series did not fit,
+// so the series that fit are written and only the rest are shed, as before a table's series were written together.  It
+// returns the samples written and the series shed.
+func (s *LocalStore) writeEachSeries(ctx context.Context, w *wal.WAL, enc *transform2.MetricsCSVWriter, req *prompb.WriteRequest, series []*prompb.TimeSeries) (int64, []*prompb.TimeSeries, error) {
+	var accepted int64
+	var rejected []*prompb.TimeSeries
+	for _, v := range series {
+		enc.Reset()
+		if err := enc.MarshalCSV(req, v); err != nil {
+			return accepted, rejected, err
+		}
+		if err := w.Write(ctx, enc.Bytes()); err != nil {
+			var quota *wal.TableOverloadedError
+			if !errors.As(err, &quota) {
+				return accepted, rejected, err
+			}
+			s.recordRejection(quota, int64(len(v.Samples)), int64(len(enc.Bytes())), "metrics")
+			rejected = append(rejected, v)
+			continue
+		}
+		accepted += int64(len(v.Samples))
+	}
+	return accepted, rejected, nil
+}
+
+// writeEachLog is writeEachSeries for logs.  It returns the logs written and shed, and on an error the logs from the
+// one that failed on, which were not written.
+func (s *LocalStore) writeEachLog(ctx context.Context, w *wal.WAL, enc *transform2.NativeLogsCSVWriter, logs *types.LogBatch, idx []int) (int64, int64, []int, error) {
+	var accepted, rejected int64
+	for k, j := range idx {
+		enc.Reset()
+		if err := enc.MarshalNativeLog(logs.Logs[j]); err != nil {
+			return accepted, rejected, append([]int(nil), idx[k:]...), err
+		}
+		if err := w.Write(ctx, enc.Bytes()); err != nil {
+			var quota *wal.TableOverloadedError
+			if !errors.As(err, &quota) {
+				return accepted, rejected, append([]int(nil), idx[k:]...), err
+			}
+			s.recordRejection(quota, 1, int64(len(enc.Bytes())), "logs")
+			rejected++
+			continue
+		}
+		accepted++
+	}
+	return accepted, rejected, nil, nil
 }
 
 func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error {
@@ -512,7 +579,19 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
-			if errors.As(err, &quota) {
+			if errors.As(err, &quota) && blockTooLarge(quota, len(t.logs)) {
+				accepted, rejected, unwritten, err := s.writeEachLog(ctx, w, enc, logs, t.logs)
+				outcome.Accepted += accepted
+				outcome.Rejected += rejected
+				if err != nil {
+					if errors.Is(err, wal.ErrMaxDiskUsageExceeded) || errors.Is(err, wal.ErrMaxSegmentsExceeded) {
+						return &PartialWriteError{Pending: append(unwritten, pending(i+1)...), Err: err}
+					}
+					return err
+				}
+				continue
+			}
+			if quota != nil {
 				s.recordRejection(quota, n, int64(len(enc.Bytes())), "logs")
 				outcome.Rejected += n
 				continue
