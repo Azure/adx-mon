@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,6 +22,19 @@ import (
 )
 
 const K3sManifests = "/var/lib/rancher/k3s/server/manifests/"
+
+// WithoutDiskPressure keeps the k3s kubelet from tainting its node with
+// disk-pressure and garbage collecting images loaded into the cluster.
+// The kubelet measures the host's Docker filesystem, so its default
+// thresholds (imagefs.available<15%, image GC at 85% usage) trip on a large
+// but busy disk and leave test pods Pending even with tens of GiB free.
+func WithoutDiskPressure() testcontainers.CustomizeRequestOption {
+	return testcontainers.WithCmdArgs(
+		"--kubelet-arg=eviction-hard=memory.available<100Mi,nodefs.available<1Gi,imagefs.available<1Gi",
+		"--kubelet-arg=image-gc-high-threshold=100",
+		"--kubelet-arg=image-gc-low-threshold=99",
+	)
+}
 
 func WriteKubeConfig(ctx context.Context, k *k3s.K3sContainer, dir string) (string, error) {
 	kubeConfigYaml, err := k.GetKubeConfig(ctx)

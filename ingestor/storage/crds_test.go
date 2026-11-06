@@ -7,7 +7,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,8 +24,8 @@ func TestCRDs(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
+	testutils.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
 	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
