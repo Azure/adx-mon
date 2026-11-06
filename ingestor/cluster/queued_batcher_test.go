@@ -401,3 +401,20 @@ func TestQueuedBatcher_ReleasedBatchesBackOff(t *testing.T) {
 	r.removed(prefix)
 	require.Equal(t, 1*time.Second, retryDelay())
 }
+
+// A released batch is retried after the event batcher's retry delay even when it asked to be retried sooner.  Its
+// RetryAfter only defers the scheduler's next work for the table.
+func TestQueuedBatcher_RetryAfterDoesNotShortenRetry(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, 10*time.Millisecond)
+	env.b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: env.b.hostname}
+	env.b.queued.retryDelay = 200 * time.Millisecond
+
+	env.add(t, "Peer", 100, ingestpolicy.PriorityQueued)
+	batch := receiveBatch(t, env.transfer, time.Second)
+	batch.RetryAfter(10 * time.Millisecond)
+	released := time.Now()
+	batch.Release()
+
+	receiveBatch(t, env.transfer, time.Second)
+	require.GreaterOrEqual(t, time.Since(released), 190*time.Millisecond)
+}
