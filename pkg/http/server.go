@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/limiter"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 type HttpHandler struct {
@@ -114,15 +112,20 @@ func (s *HttpServer) Open(ctx context.Context) error {
 		maxHeaderBytes = s.opts.MaxHeaderBytes
 	}
 
+	// Support unencrypted HTTP/2 (prior knowledge) for unencrypted GRPC alongside HTTP/1.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
+	protocols.SetUnencryptedHTTP2(true)
+
 	s.srv = &http.Server{
 		ReadTimeout:    readTimeout,
 		WriteTimeout:   writeTimeout,
 		IdleTimeout:    idleTimeout,
 		MaxHeaderBytes: maxHeaderBytes,
 		Addr:           s.opts.ListenAddr,
-
-		// Support unencrypted HTTP/2 for unencrypted GRPC
-		Handler: h2c.NewHandler(s.mux, &http2.Server{}),
+		Protocols:      protocols,
+		Handler:        s.mux,
 	}
 
 	go func() {

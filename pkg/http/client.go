@@ -4,8 +4,6 @@ import (
 	"crypto/tls"
 	"net/http"
 	"time"
-
-	"golang.org/x/net/http2"
 )
 
 type ClientOpts struct {
@@ -91,21 +89,20 @@ func NewClient(opts ClientOpts) *http.Client {
 	t.TLSHandshakeTimeout = opts.TLSHandshakeTimeout
 	t.DisableKeepAlives = opts.DisableKeepAlives
 
-	if http2Transport, err := http2.ConfigureTransports(t); err == nil {
-		// if the connection has been idle for 10 seconds, send a ping frame for a health check
-		http2Transport.ReadIdleTimeout = 10 * time.Second
-		// if there's no response to the ping within 2 seconds, close the connection
-		http2Transport.PingTimeout = 2 * time.Second
-		http2Transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: opts.InsecureSkipVerify,
-		}
-	}
-
+	t.Protocols = new(http.Protocols)
+	t.Protocols.SetHTTP1(true)
 	if opts.DisableHTTP2 {
 		t.ForceAttemptHTTP2 = false
-		t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
-		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify}
+		// The cloned DefaultTransport TLS config already advertises "h2" via ALPN.
 		t.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	} else {
+		t.Protocols.SetHTTP2(true)
+		t.HTTP2 = &http.HTTP2Config{
+			// if the connection has been idle for 10 seconds, send a ping frame for a health check
+			SendPingTimeout: 10 * time.Second,
+			// if there's no response to the ping within 2 seconds, close the connection
+			PingTimeout: 2 * time.Second,
+		}
 	}
 
 	return &http.Client{
