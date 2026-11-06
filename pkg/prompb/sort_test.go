@@ -111,7 +111,7 @@ func BenchmarkIsSorted(b *testing.B) {
 		},
 	}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		IsSorted(l)
 	}
 }
@@ -128,10 +128,9 @@ func BenchmarkSort(b *testing.B) {
 			Value: randomLabelValue(rng),
 		}
 	}
-	b.ResetTimer()
 
 	// Run the benchmark
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		// Make a copy of the labels to sort
 		labelsCopy := make([]*Label, len(labels))
 		copy(labelsCopy, labels)

@@ -93,7 +93,7 @@ func ExtractManifests(to, from string, isolateKinds []string) error {
 	manifests := filepath.Join(to, "manifests.yaml")
 	decoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(string(manifestData)), 4096)
 	for {
-		var manifest map[string]interface{}
+		var manifest map[string]any
 		if err := decoder.Decode(&manifest); err != nil {
 			if err == io.EOF {
 				break

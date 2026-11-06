@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -51,8 +50,8 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 			spec.Transform.MetricNameColumn = "metric_name"
 		}
 		return &adxmonv1.MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-			Spec:       spec,
+			Name: name, Namespace: "default",
+			Spec: spec,
 		}
 	}
 
@@ -159,7 +158,7 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 			fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(me).Build()
 			mockKusto := NewMockKustoExecutor(t, "test-db", "https://test-cluster.kusto.windows.net")
 			if tt.expectExecuted {
-				mockKusto.SetNextResult(t, [][]interface{}{{"test_metric", 1.0, time.Now()}})
+				mockKusto.SetNextResult(t, [][]any{{"test_metric", 1.0, time.Now()}})
 			}
 
 			// Create mock OTLP server
@@ -180,7 +179,7 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 				OTLPEndpoint:   mockServer.URL,
 			}
 			require.NoError(t, reconciler.initOtlpExporter())
-			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: me.Name, Namespace: me.Namespace}}
+			req := reconcile.Request{Name: me.Name, Namespace: me.Namespace}
 			res, err := reconciler.Reconcile(context.Background(), req)
 			require.NoError(t, err)
 			queries := mockKusto.GetQueries()

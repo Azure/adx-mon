@@ -249,7 +249,7 @@ func NormalizeAdxIdentifier(s string) string {
 // See https://learn.microsoft.com/en-us/kusto/query/schema-entities/entity-names?view=microsoft-fabric#identifier-naming-rules
 func AppendNormalizeAdxIdentifier(dst, s []byte) []byte {
 	appendedChars := 0
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		if s[i] >= 'a' && s[i] <= 'z' || s[i] >= '0' && s[i] <= '9' || s[i] >= 'A' && s[i] <= 'Z' {
 			dst = append(dst, s[i])
 			appendedChars += 1

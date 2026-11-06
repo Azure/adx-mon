@@ -605,12 +605,11 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 
 	// Check if any criterion matches
 	for k, v := range criteria {
-		lowerKey := strings.ToLower(k)
 		// Look for matching cluster label (case-insensitive key matching)
 		for labelKey, labelValue := range clusterLabels {
-			if strings.ToLower(labelKey) == lowerKey {
+			if strings.EqualFold(labelKey, k) {
 				for _, value := range v {
-					if strings.ToLower(labelValue) == strings.ToLower(value) {
+					if strings.EqualFold(labelValue, value) {
 						return true // Found a match, return immediately
 					}
 				}

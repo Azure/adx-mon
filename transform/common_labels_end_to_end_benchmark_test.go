@@ -44,8 +44,7 @@ func benchmarkCommonLabelsEndToEnd(b *testing.B, consumer string, lazy bool) {
 	csvBuffer := bytes.NewBuffer(make([]byte, 0, 256*1024))
 	csvWriter := transform.NewMetricsCSVWriter(csvBuffer, nil)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		request := newEndToEndRequest(lazy)
 		if lazy {
 			transformer.TransformWriteRequestWithCommonLabels(request)
@@ -106,7 +105,7 @@ func newEndToEndRequest(lazy bool) *prompb.WriteRequest {
 		}
 	}
 
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		name := "cpu"
 		if i%2 != 0 {
 			name = "memory"
@@ -122,7 +121,7 @@ func newEndToEndRequest(lazy bool) *prompb.WriteRequest {
 			}
 		}
 		prompb.Sort(series.Labels)
-		for sample := 0; sample < 4; sample++ {
+		for sample := range 4 {
 			series.Samples = append(series.Samples, &prompb.Sample{
 				Timestamp: int64(1700000000000 + i*1000 + sample*100),
 				Value:     float64(i) + float64(sample)/10,

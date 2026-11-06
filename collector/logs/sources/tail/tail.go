@@ -54,7 +54,7 @@ type FileTailTarget struct {
 	Parsers []string
 
 	// Resources is a map of additional resource k/v pairs to add to each log.
-	Resources map[string]interface{}
+	Resources map[string]any
 }
 
 // TailSourceConfig configures TailSource.
@@ -126,7 +126,6 @@ func (s *TailSource) Open(ctx context.Context) error {
 
 	s.tailers = map[string]*Tailer{}
 	for _, target := range s.staticTargets {
-		target := target
 
 		err := s.AddTarget(target, nil)
 		if err != nil {

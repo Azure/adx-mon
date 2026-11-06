@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -24,23 +23,17 @@ func TestAlerterReconciler_IsReady(t *testing.T) {
 	require.NoError(t, appsv1.AddToScheme(scheme))
 
 	alerter := &adxmonv1.Alerter{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Alerter",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Alerter",
+		Name:       "test-alerter",
+		Namespace:  "default",
 	}
 
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "alerter",
-			Namespace: "default",
-		},
+		Name:      "alerter",
+		Namespace: "default",
 		Spec: appsv1.DeploymentSpec{
-			Replicas: to.Ptr(int32(2)),
+			Replicas: new(int32(2)),
 		},
 		Status: appsv1.DeploymentStatus{
 			ReadyReplicas: 2,
@@ -61,7 +54,7 @@ func TestAlerterReconciler_IsReady(t *testing.T) {
 	require.True(t, result.IsZero())
 
 	// Not ready case
-	dep.Spec.Replicas = to.Ptr(int32(3))
+	dep.Spec.Replicas = new(int32(3))
 	require.NoError(t, client.Update(context.Background(), dep))
 
 	result, err = r.IsReady(context.Background(), alerter)
@@ -75,14 +68,10 @@ func TestAlerterReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, appsv1.AddToScheme(scheme))
 
 	alerter := &adxmonv1.Alerter{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Alerter",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Alerter",
+		Name:       "test-alerter",
+		Namespace:  "default",
 		Spec: adxmonv1.AlerterSpec{
 			Image:              "test-image:v1",
 			ADXClusterSelector: &metav1.LabelSelector{},
@@ -91,12 +80,10 @@ func TestAlerterReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, alerter.Spec.StoreAppliedProvisioningState())
 
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		Name:      "test-alerter",
+		Namespace: "default",
 		Spec: appsv1.DeploymentSpec{
-			Replicas: to.Ptr(int32(2)),
+			Replicas: new(int32(2)),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
@@ -123,10 +110,8 @@ func TestAlerterReconciler_ReconcileComponent(t *testing.T) {
 
 	// No update needed
 	result, err := r.ReconcileComponent(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		Name:      "test-alerter",
+		Namespace: "default",
 	})
 	require.NoError(t, err)
 	require.True(t, result.IsZero())
@@ -136,10 +121,8 @@ func TestAlerterReconciler_ReconcileComponent(t *testing.T) {
 	require.NoError(t, client.Update(context.Background(), dep))
 
 	result, err = r.ReconcileComponent(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		Name:      "test-alerter",
+		Namespace: "default",
 	})
 	require.NoError(t, err)
 	require.False(t, result.IsZero())
@@ -151,16 +134,12 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	cluster := &adxmonv1.ADXCluster{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "ADXCluster",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-			Labels: map[string]string{
-				"app": "test-cluster",
-			},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "ADXCluster",
+		Name:       "test-cluster",
+		Namespace:  "default",
+		Labels: map[string]string{
+			"app": "test-cluster",
 		},
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: "test-cluster",
@@ -175,14 +154,10 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	}
 
 	alerter := &adxmonv1.Alerter{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Alerter",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Alerter",
+		Name:       "test-alerter",
+		Namespace:  "default",
 		Spec: adxmonv1.AlerterSpec{
 			ADXClusterSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
@@ -226,21 +201,17 @@ func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
 		},
 	}
 	alerter := &adxmonv1.Alerter{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
-		Spec: initialSpec,
+		Name:      "test-alerter",
+		Namespace: "default",
+		Spec:      initialSpec,
 	}
 	require.NoError(t, alerter.Spec.StoreAppliedProvisioningState())
 
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		Name:      "test-alerter",
+		Namespace: "default",
 		Spec: appsv1.DeploymentSpec{
-			Replicas: to.Ptr(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
@@ -257,11 +228,9 @@ func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
 	}
 
 	newCluster := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "new-cluster",
-			Namespace: "default",
-			Labels:    map[string]string{"env": "staging"},
-		},
+		Name:      "new-cluster",
+		Namespace: "default",
+		Labels:    map[string]string{"env": "staging"},
 		Spec: adxmonv1.ADXClusterSpec{
 			Endpoint: "https://newcluster.kusto.windows.net",
 		},
@@ -328,22 +297,18 @@ func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	alerter := &adxmonv1.Alerter{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-alerter",
-			Namespace: "default",
-		},
+		Name:      "test-alerter",
+		Namespace: "default",
 		Spec: adxmonv1.AlerterSpec{
 			Image: "test-image:v1",
 		},
 	}
 
 	cluster := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-			Labels: map[string]string{
-				"app": "adx-mon",
-			},
+		Name:      "test-cluster",
+		Namespace: "default",
+		Labels: map[string]string{
+			"app": "adx-mon",
 		},
 		Spec: adxmonv1.ADXClusterSpec{
 			Endpoint: "https://test.kusto.windows.net",

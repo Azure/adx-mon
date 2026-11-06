@@ -56,8 +56,8 @@ func (p *KlogParser) Parse(log *types.Log, msg string) error {
 	log.SetBodyValue("message", messageParts[1])
 
 	// Parse key-value pairs
-	pairs := strings.Fields(messageParts[2])
-	for _, pair := range pairs {
+	pairs := strings.FieldsSeq(messageParts[2])
+	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) == 2 {
 			key := kv[0]

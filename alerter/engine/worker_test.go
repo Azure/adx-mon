@@ -855,8 +855,7 @@ func TestWorker_Run_CancelsInFlightQuery(t *testing.T) {
 	outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(evaluationOutcomeCancelled)
 	counterBefore := getCounterValue(t, outcomeCounter)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	w.Run(ctx)
 	waitForWorkerTimer(t, fakeClock)
 	fakeClock.Step(0)

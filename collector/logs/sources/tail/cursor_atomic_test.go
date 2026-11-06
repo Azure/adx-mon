@@ -19,9 +19,7 @@ func TestWriteCursorIsAtomic(t *testing.T) {
 	var unreadable atomic.Int64
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -32,7 +30,7 @@ func TestWriteCursorIsAtomic(t *testing.T) {
 				unreadable.Add(1)
 			}
 		}
-	}()
+	})
 	for i := 1; i <= writes; i++ {
 		require.NoError(t, writeCursor(path, "fid", int64(i)))
 	}

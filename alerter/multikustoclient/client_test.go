@@ -228,10 +228,9 @@ func TestQuery_ThrottledNotificationDetails(t *testing.T) {
 			}
 			queryClient := &fakeQueryClient{endpoint: "https://cluster.kusto.windows.net", nextQueryDataset: dataset}
 			if queryType == "management" {
-				queryClient.nextMgmtDataset = &fakeV1Dataset{fakeDataset: fakeDataset{
+				queryClient.nextMgmtDataset = &fakeV1Dataset{
 					BaseDataset: dataset.BaseDataset,
-					tables:      []azquery.Table{azquery.NewTable(table.BaseTable, table.rows)},
-				}}
+					tables:      []azquery.Table{azquery.NewTable(table.BaseTable, table.rows)}}
 			}
 			client := multiKustoClient{clients: map[string]QueryClient{"db": queryClient}, maxNotifications: 1}
 			queryContext, err := engine.NewQueryContext(&rules.Rule{
@@ -342,7 +341,7 @@ type fakeDataset struct {
 func newFakeDataset(values []string) azqueryv1.Dataset {
 	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
 	table := newFakeTable(base, values)
-	return &fakeV1Dataset{fakeDataset: fakeDataset{BaseDataset: base, tables: []azquery.Table{table}}}
+	return &fakeV1Dataset{BaseDataset: base, tables: []azquery.Table{table}}
 }
 
 func (d *fakeDataset) Tables() []azquery.Table { return d.tables }

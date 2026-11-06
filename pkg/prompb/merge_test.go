@@ -245,8 +245,7 @@ func benchmarkHashLabels(b *testing.B, writeLabels func(hash.Hash64)) {
 	b.ReportAllocs()
 	hasher := xxhash.New()
 
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		hasher.Reset()
 		writeLabels(hasher)
 		mergedLabelsHash = hasher.Sum64()

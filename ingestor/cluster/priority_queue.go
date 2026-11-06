@@ -68,7 +68,7 @@ func ReservedWorkers(n, percent int) int {
 // percent) workers only process queued batches.  done is called when each worker exits.
 func RunWorkers(ctx context.Context, q PriorityQueues, n, percent int, fn func(*Batch), done func()) {
 	reserved := ReservedWorkers(n, percent)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		go func(reserved bool) {
 			defer done()
 			for {

@@ -68,7 +68,7 @@ func IsThrottlingError(err error) bool {
 	if httpErr, ok := errors.AsType[*azkustoerrors.HttpError](err); ok && httpErr.IsThrottled() {
 		return true
 	}
-	errMap, ok := decodeRESTError(err)["error"].(map[string]interface{})
+	errMap, ok := decodeRESTError(err)["error"].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -92,7 +92,7 @@ func IsThrottlingMessage(message string) bool {
 		strings.HasPrefix(scriptMessageDetails(message), throttlingMessagePrefix)
 }
 
-func decodeRESTError(err error) map[string]interface{} {
+func decodeRESTError(err error) map[string]any {
 	if azkustoErr, ok := errors.AsType[*azkustoerrors.HttpError](err); ok {
 		return azkustoErr.UnmarshalREST()
 	}
@@ -100,13 +100,13 @@ func decodeRESTError(err error) map[string]interface{} {
 	return nil
 }
 
-func stringValueEquals(values map[string]interface{}, key, expected string) bool {
+func stringValueEquals(values map[string]any, key, expected string) bool {
 	value, ok := values[key].(string)
 	return ok && value == expected
 }
 
-func hasWrappedMissingTableError(decoded map[string]interface{}) bool {
-	errMap, ok := decoded["error"].(map[string]interface{})
+func hasWrappedMissingTableError(decoded map[string]any) bool {
+	errMap, ok := decoded["error"].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -114,7 +114,7 @@ func hasWrappedMissingTableError(decoded map[string]interface{}) bool {
 	return strings.Contains(details, "Semantic error: "+missingEntityErrorCode+":") && isMissingTableMessage(details)
 }
 
-func scriptErrorDetails(errMap map[string]interface{}) string {
+func scriptErrorDetails(errMap map[string]any) string {
 	if !stringValueEquals(errMap, "@type", scriptAbortedErrorType) {
 		return ""
 	}
@@ -127,11 +127,11 @@ func scriptErrorDetails(errMap map[string]interface{}) string {
 }
 
 func scriptMessageDetails(message string) string {
-	separator := strings.LastIndex(message, scriptDetailsSeparator)
-	if separator == -1 {
+	_, after, ok := strings.CutLast(message, scriptDetailsSeparator)
+	if !ok {
 		return ""
 	}
-	return message[separator+len(scriptDetailsSeparator):]
+	return after
 }
 
 func isMissingTableMessage(message string) bool {
@@ -143,12 +143,12 @@ func isMissingTableMessage(message string) bool {
 	return false
 }
 
-func extractRESTMessage(decoded map[string]interface{}) (string, bool) {
+func extractRESTMessage(decoded map[string]any) (string, bool) {
 	if decoded == nil {
 		return "", false
 	}
 
-	errMap, ok := decoded["error"].(map[string]interface{})
+	errMap, ok := decoded["error"].(map[string]any)
 	if !ok {
 		return "", false
 	}

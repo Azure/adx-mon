@@ -9,13 +9,13 @@ import (
 var (
 	mp = &easyproto.MarshalerPool{}
 
-	WriteRequestPool = NewPool[*WriteRequest](
+	WriteRequestPool = NewPool(
 		func() *WriteRequest {
 			return &WriteRequest{}
 		},
 	)
 
-	TimeSeriesPool = NewPool[*TimeSeries](
+	TimeSeriesPool = NewPool(
 		func() *TimeSeries {
 			return &TimeSeries{}
 		},

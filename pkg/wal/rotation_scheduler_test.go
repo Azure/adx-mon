@@ -140,12 +140,12 @@ func TestRotationScheduler_ConcurrentSchedule(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for g := range 8 {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(int64(g)))
-			for i := 0; i < 1000; i++ {
+			for range 1000 {
 				w := wals[r.Intn(len(wals))]
 				if r.Intn(4) == 0 {
 					s.unschedule(w)
@@ -174,8 +174,7 @@ func BenchmarkRotationScheduler_Schedule(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		w := wals[i%len(wals)]
 		s.schedule(w, now.Add(time.Duration(i)*time.Microsecond))
 	}

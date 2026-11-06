@@ -44,11 +44,11 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 				{
 					Timestamp:         1696983205797489936,
 					ObservedTimestamp: 1696983226797489936, // +21s
-					Body: map[string]interface{}{
+					Body: map[string]any{
 						types.BodyKeyMessage: "something\n happened",
 						"key\nwithnewline":   "value",
 					},
-					Attributes: map[string]interface{}{
+					Attributes: map[string]any{
 						// adx-mon attributes are filtered
 						"adxmon_cursor_position":    "abcdef",
 						types.AttributeDatabaseName: "ADatabase",
@@ -56,7 +56,7 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 						"hello\nkey":                "world\ntraveler",
 						"other":                     "attribute",
 					},
-					Resource: map[string]interface{}{
+					Resource: map[string]any{
 						"RPTenant": "eastus",
 						// Labels, annotations and adxmon_ are filtered since they are only used internally
 						"label.foo":        "labels",
@@ -73,14 +73,14 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 					SeverityNumber:    "",
 					TraceId:           "",
 					SpanId:            "",
-					Body: map[string]interface{}{
+					Body: map[string]any{
 						"message":          "something\n happened",
 						"key\nwithnewline": "value",
 					},
-					Resource: map[string]interface{}{
+					Resource: map[string]any{
 						"RPTenant": "eastus",
 					},
-					Attributes: map[string]interface{}{
+					Attributes: map[string]any{
 						"hello\nkey": "world\ntraveler",
 						"other":      "attribute",
 					},
@@ -93,21 +93,21 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 				{
 					Timestamp:         1696983205797489936,
 					ObservedTimestamp: 1696983226797489936, // +21s
-					Body: map[string]interface{}{
+					Body: map[string]any{
 						types.BodyKeyMessage: "something happened",
-						"complexVal": map[string]interface{}{
+						"complexVal": map[string]any{
 							"nested": "value",
 							"hello":  []string{"world"},
 						},
 					},
-					Attributes: map[string]interface{}{
+					Attributes: map[string]any{
 						// adx-mon attributes are filtered
 						types.AttributeDatabaseName: "ADatabase",
 						types.AttributeTableName:    "ATable",
 						"hello":                     []string{"world"},
 						"other":                     "attribute",
 					},
-					Resource: map[string]interface{}{
+					Resource: map[string]any{
 						"RPTenant": "eastus",
 						"goodbye":  []string{"space"},
 					},
@@ -115,21 +115,21 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 				{
 					Timestamp:         1696983226797489936, // +21s
 					ObservedTimestamp: 1696983229797489936, // +3s
-					Body: map[string]interface{}{
+					Body: map[string]any{
 						types.BodyKeyMessage: "something happened",
-						"complexVal": map[string]interface{}{
+						"complexVal": map[string]any{
 							"nested": "other value",
 							"hello":  []string{"world"},
 						},
 					},
-					Attributes: map[string]interface{}{
+					Attributes: map[string]any{
 						// adx-mon attributes are filtered
 						types.AttributeDatabaseName: "ADatabase",
 						types.AttributeTableName:    "ATable",
 						"hello":                     []string{"space"},
 						"other":                     "attribute",
 					},
-					Resource: map[string]interface{}{
+					Resource: map[string]any{
 						"RPTenant": "eastus",
 					},
 				},
@@ -142,19 +142,19 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 					SeverityNumber:    "",
 					TraceId:           "",
 					SpanId:            "",
-					Body: map[string]interface{}{
+					Body: map[string]any{
 						"message": "something happened",
-						"complexVal": map[string]interface{}{
+						"complexVal": map[string]any{
 							"nested": "value",
-							"hello":  []interface{}{"world"},
+							"hello":  []any{"world"},
 						},
 					},
-					Resource: map[string]interface{}{
+					Resource: map[string]any{
 						"RPTenant": "eastus",
-						"goodbye":  []interface{}{"space"},
+						"goodbye":  []any{"space"},
 					},
-					Attributes: map[string]interface{}{
-						"hello": []interface{}{"world"},
+					Attributes: map[string]any{
+						"hello": []any{"world"},
 						"other": "attribute",
 					},
 				},
@@ -165,18 +165,18 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 					SeverityNumber:    "",
 					TraceId:           "",
 					SpanId:            "",
-					Body: map[string]interface{}{
+					Body: map[string]any{
 						"message": "something happened",
-						"complexVal": map[string]interface{}{
+						"complexVal": map[string]any{
 							"nested": "other value",
-							"hello":  []interface{}{"world"},
+							"hello":  []any{"world"},
 						},
 					},
-					Resource: map[string]interface{}{
+					Resource: map[string]any{
 						"RPTenant": "eastus",
 					},
-					Attributes: map[string]interface{}{
-						"hello": []interface{}{"space"},
+					Attributes: map[string]any{
+						"hello": []any{"space"},
 						"other": "attribute",
 					},
 				},
@@ -216,15 +216,15 @@ func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
 		{
 			Timestamp:         1696983205797489936,
 			ObservedTimestamp: 1696983226797489936, // +21s
-			Body: map[string]interface{}{
+			Body: map[string]any{
 				types.BodyKeyMessage: "something happened",
 			},
-			Attributes: map[string]interface{}{
+			Attributes: map[string]any{
 				// adx-mon attributes are filtered
 				types.AttributeDatabaseName: "ADatabase",
 				types.AttributeTableName:    "ATable",
 			},
-			Resource: map[string]interface{}{
+			Resource: map[string]any{
 				"RPTenant":     "eastus",
 				"UnderlayName": "hcp-underlay-eastus-cx-test",
 			},
@@ -238,9 +238,8 @@ func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
 
 	buf := bytes.NewBuffer(make([]byte, 0, 64*1024))
 	enc := NewCSVNativeLogsCSVWriter(buf, nil)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for _, log := range batch.Logs {
 			enc.MarshalNativeLog(log)
 		}

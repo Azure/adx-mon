@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"maps"
 	"strconv"
 	"sync"
 	"time"
@@ -71,13 +72,9 @@ func (s *statistics) snapshot() snapshot {
 	defer s.mu.Unlock()
 	x := s.data
 	x.attempts = make(map[outcome]uint64, len(s.data.attempts))
-	for k, v := range s.data.attempts {
-		x.attempts[k] = v
-	}
+	maps.Copy(x.attempts, s.data.attempts)
 	x.responses = make(map[int]uint64, len(s.data.responses))
-	for k, v := range s.data.responses {
-		x.responses[k] = v
-	}
+	maps.Copy(x.responses, s.data.responses)
 	return x
 }
 

@@ -35,7 +35,7 @@ func TestWriteTimeSeriesShedsQueuedSeriesForRealtime(t *testing.T) {
 	}
 
 	r := &prompb.WriteRequest{CommonLabels: labels}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries("fast", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 		r.Timeseries = append(r.Timeseries, newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 	}
@@ -67,7 +67,7 @@ func TestWriteTimeSeriesRejectsWhenRealtimeFull(t *testing.T) {
 	defer filled.Release()
 
 	r := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries("fast", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 		r.Timeseries = append(r.Timeseries, newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 	}
@@ -86,7 +86,7 @@ func TestWriteTimeSeriesWritesRequestLargerThanEstimateAllows(t *testing.T) {
 	defer s.Close()
 
 	r := &prompb.WriteRequest{CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}}
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries("cpu", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 	}
 	require.NoError(t, s.WriteTimeSeries(ctx, r))
@@ -118,7 +118,7 @@ func TestWriteTimeSeriesLargeQueuedPayloadDoesNotBlockRealtime(t *testing.T) {
 
 	// One realtime series alongside queued series whose estimate alone is larger than the whole budget.
 	r := &prompb.WriteRequest{CommonLabels: labels, Timeseries: []*prompb.TimeSeries{newTimeSeries("fast", nil, 1, 1)}}
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 	}
 	err = s.WriteTimeSeries(ctx, r)
@@ -146,7 +146,7 @@ func TestWriteTimeSeriesWritesQueuedPayloadThatFitsDespiteLargeEstimate(t *testi
 
 	// One realtime series alongside queued series whose estimate alone is larger than the whole budget.
 	r := &prompb.WriteRequest{CommonLabels: labels, Timeseries: []*prompb.TimeSeries{newTimeSeries("fast", nil, 1, 1)}}
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 	}
 	require.NoError(t, s.WriteTimeSeries(ctx, r), "the queued series fit and should be written")
@@ -172,7 +172,7 @@ func TestWriteTimeSeriesShedsQueuedTableWhoseWriteDoesNotFit(t *testing.T) {
 
 	labels := []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("DB")}}
 	r := &prompb.WriteRequest{CommonLabels: labels}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		r.Timeseries = append(r.Timeseries, newTimeSeries("slow", map[string]string{"n": fmt.Sprint(i)}, 1, 1))
 	}
 	r.Timeseries = append(r.Timeseries, newTimeSeries("fast", nil, 1, 1))

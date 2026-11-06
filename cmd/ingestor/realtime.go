@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -226,15 +227,15 @@ func parseRealtimeTable(s string) (ingestpolicy.Table, error) {
 // parseStreamingBudget parses a budget in the format <endpoint>=<n>.  The last '=' separates the budget so endpoints
 // may contain '='.
 func parseStreamingBudget(s string) (string, int, error) {
-	i := strings.LastIndex(s, "=")
-	if i < 0 {
+	before, after, ok := strings.CutLast(s, "=")
+	if !ok {
 		return "", 0, fmt.Errorf("invalid --realtime-streaming-budget %q: expected <endpoint>=<n>", s)
 	}
-	endpoint := normalizeEndpoint(s[:i])
+	endpoint := normalizeEndpoint(before)
 	if endpoint == "" {
 		return "", 0, fmt.Errorf("invalid --realtime-streaming-budget %q: endpoint is required", s)
 	}
-	budget, err := strconv.Atoi(strings.TrimSpace(s[i+1:]))
+	budget, err := strconv.Atoi(strings.TrimSpace(after))
 	if err != nil || budget < 1 {
 		return "", 0, fmt.Errorf("invalid --realtime-streaming-budget %q: budget must be a positive integer", s)
 	}
@@ -274,12 +275,7 @@ func (c *realtimeConfig) uploadOpts(database, endpoint string, slots map[string]
 
 func (c *realtimeConfig) hasRealtimeDatabase(database string) bool {
 	db := schema.NormalizeAdxIdentifier(database)
-	for _, v := range c.Policy.RealtimeDatabases() {
-		if v == db {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.Policy.RealtimeDatabases(), db)
 }
 
 // serviceOpts returns the realtime options for the ingestor service, or nil if no realtime tables are configured.

@@ -23,7 +23,7 @@ func makeScheme(t *testing.T) *runtime.Scheme {
 }
 
 func TestIsOwnedBy_DefaultsToIngestor(t *testing.T) {
-	sr := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr"}}
+	sr := &v1.SummaryRule{Namespace: "default", Name: "sr"}
 	if !IsOwnedBy(sr, v1.SummaryRuleOwnerIngestor) {
 		t.Fatalf("expected default ownership to be ingestor")
 	}
@@ -33,7 +33,7 @@ func TestIsOwnedBy_DefaultsToIngestor(t *testing.T) {
 }
 
 func TestIsOwnedBy_UnknownOwner(t *testing.T) {
-	sr := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: "someone-else"}}}
+	sr := &v1.SummaryRule{Namespace: "default", Name: "sr", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: "someone-else"}}
 	if IsOwnedBy(sr, v1.SummaryRuleOwnerIngestor) {
 		t.Fatalf("expected false for unknown owner")
 	}
@@ -43,7 +43,7 @@ func TestIsOwnedBy_UnknownOwner(t *testing.T) {
 }
 
 func TestWantsOwner(t *testing.T) {
-	sr := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr", Annotations: map[string]string{v1.SummaryRuleDesiredOwnerAnnotation: v1.SummaryRuleOwnerADXExporter}}}
+	sr := &v1.SummaryRule{Namespace: "default", Name: "sr", Annotations: map[string]string{v1.SummaryRuleDesiredOwnerAnnotation: v1.SummaryRuleOwnerADXExporter}}
 	if !WantsOwner(sr, v1.SummaryRuleOwnerADXExporter) {
 		t.Fatalf("expected WantsOwner true for exporter")
 	}
@@ -81,7 +81,7 @@ func TestSafeToAdopt(t *testing.T) {
 }
 
 func TestClaimInMemory(t *testing.T) {
-	sr := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr"}}
+	sr := &v1.SummaryRule{Namespace: "default", Name: "sr"}
 	ClaimInMemory(sr, v1.SummaryRuleOwnerADXExporter)
 	if sr.Annotations[v1.SummaryRuleOwnerAnnotation] != v1.SummaryRuleOwnerADXExporter {
 		t.Fatalf("expected owner annotation to be set to exporter")
@@ -93,7 +93,7 @@ func TestClaimInMemory(t *testing.T) {
 
 func TestPatchClaim(t *testing.T) {
 	scheme := makeScheme(t)
-	sr := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr", Annotations: map[string]string{}}}
+	sr := &v1.SummaryRule{Namespace: "default", Name: "sr", Annotations: map[string]string{}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sr).Build()
 
 	if err := PatchClaim(context.Background(), c, sr, v1.SummaryRuleOwnerADXExporter); err != nil {

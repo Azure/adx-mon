@@ -42,29 +42,21 @@ func TestIntegration(t *testing.T) {
 
 	kustainerUrl, k3sContainer := StartCluster(ctx, t)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		VerifyLogs(ctx, t, kustainerUrl)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		VerifyMetrics(ctx, t, kustainerUrl)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		VerifyAlerts(ctx, t, kustainerUrl, k3sContainer)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		VerifyMetricsExporter(ctx, t, k3sContainer)
-	}()
+	})
 
 	wg.Wait()
 }
@@ -188,14 +180,10 @@ func VerifyMetricsExporter(ctx context.Context, t *testing.T, k3sContainer *k3s.
 		require.NoError(t, err)
 
 		rule := &adxmonv1.MetricsExporter{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "MetricsExporter",
-				APIVersion: "adx-mon.azure.com/v1",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "kusto-values-e2e",
-				Namespace: "adx-mon",
-			},
+			Kind:       "MetricsExporter",
+			APIVersion: "adx-mon.azure.com/v1",
+			Name:       "kusto-values-e2e",
+			Namespace:  "adx-mon",
 			Spec: adxmonv1.MetricsExporterSpec{
 				Database: "Metrics",
 				Body:     `print metric_name="e2e_request_count", value=real(42.5), timestamp=now(), region="west"`,
@@ -270,14 +258,10 @@ func VerifyAlerts(ctx context.Context, t *testing.T, kustainerUrl string, k3sCon
 
 	t.Run("Install rule", func(t *testing.T) {
 		rule := &adxmonv1.AlertRule{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "AlertRule",
-				APIVersion: "adx-mon.azure.com/v1",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "testalert",
-				Namespace: "adx-mon",
-			},
+			Kind:       "AlertRule",
+			APIVersion: "adx-mon.azure.com/v1",
+			Name:       "testalert",
+			Namespace:  "adx-mon",
 			Spec: adxmonv1.AlertRuleSpec{
 				Database:          "Logs",
 				Interval:          metav1.Duration{Duration: time.Minute},

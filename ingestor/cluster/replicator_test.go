@@ -31,8 +31,7 @@ func TestReplicator_SuccessfulTransfer(t *testing.T) {
 	rep, err := NewReplicator(opts)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = rep.Open(ctx)
 	require.NoError(t, err)
@@ -75,8 +74,7 @@ func TestReplicator_BadRequestError(t *testing.T) {
 	rep, err := NewReplicator(opts)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = rep.Open(ctx)
 	require.NoError(t, err)
@@ -118,8 +116,7 @@ func TestReplicator_SegmentExistsError(t *testing.T) {
 	rep, err := NewReplicator(opts)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = rep.Open(ctx)
 	require.NoError(t, err)
@@ -161,8 +158,7 @@ func TestReplicator_PeerOverloadedError(t *testing.T) {
 	rep, err := NewReplicator(opts)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = rep.Open(ctx)
 	require.NoError(t, err)
@@ -206,8 +202,7 @@ func TestReplicator_UnknownError(t *testing.T) {
 	rep, err := NewReplicator(opts)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = rep.Open(ctx)
 	require.NoError(t, err)

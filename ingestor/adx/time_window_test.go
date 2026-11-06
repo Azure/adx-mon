@@ -22,9 +22,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-rule",
-			},
+			Name: "test-rule",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -102,9 +100,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-rule",
-			},
+			Name: "test-rule",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -195,9 +191,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Create a rule with no prior execution history
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-rule",
-			},
+			Name: "test-rule",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",
@@ -285,9 +279,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Create a rule with 30-minute interval
 		rule := &v1.SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-rule",
-			},
+			Name: "test-rule",
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "TestTable",

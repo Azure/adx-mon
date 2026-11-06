@@ -16,8 +16,7 @@ import (
 // One destination stuck in an upload must not consume every worker: a healthy
 // destination has to keep making progress.
 func TestADXUploadWorkersIsolateSlowTable(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	n := NewUploader(nil, UploaderOpts{Database: "DB", ConcurrentUploads: 2})
 	started := make(chan string, 10)

@@ -233,13 +233,13 @@ func (f *FluentForwardLogExport) Validate() error {
 		return fmt.Errorf("destination must be set")
 	}
 
-	if strings.HasPrefix(f.Destination, "unix://") {
-		socketPath := strings.TrimPrefix(f.Destination, "unix://")
+	if after, ok := strings.CutPrefix(f.Destination, "unix://"); ok {
+		socketPath := after
 		if len(socketPath) == 0 {
 			return fmt.Errorf("invalid destination %s: unix socket path is empty", f.Destination)
 		}
-	} else if strings.HasPrefix(f.Destination, "tcp://") {
-		destinationHostPort := strings.TrimPrefix(f.Destination, "tcp://")
+	} else if after, ok := strings.CutPrefix(f.Destination, "tcp://"); ok {
+		destinationHostPort := after
 		_, port, err := net.SplitHostPort(destinationHostPort)
 		if err != nil {
 			return fmt.Errorf("invalid destination %s: %w", f.Destination, err)

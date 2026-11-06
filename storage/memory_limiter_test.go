@@ -41,14 +41,12 @@ func TestMemoryLimiterIsDisabledWhenUnset(t *testing.T) {
 func TestMemoryLimiterIsRaceFree(t *testing.T) {
 	m := storage.NewMemoryLimiter(1000)
 	var wg sync.WaitGroup
-	for n := 0; n < 200; n++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 200 {
+		wg.Go(func() {
 			if m.Reserve(10) {
 				m.Release(10)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	require.Zero(t, m.InFlight())
@@ -63,8 +61,7 @@ func TestImportRespectsIntakeMemoryCeiling(t *testing.T) {
 		Admission:       budget,
 		MaxIntakeMemory: 1024, // room for exactly one in-flight import
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 
@@ -133,8 +130,7 @@ func TestImportAdmitsPayloadSmallerThanCeilingWhenTableBudgetIsLarger(t *testing
 		Admission:       budget,
 		MaxIntakeMemory: 1024,
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 
@@ -152,8 +148,7 @@ func TestImportAtIntakeCeiling(t *testing.T) {
 		Admission:       wal.NewAdmission(wal.AdmissionOpts{}),
 		MaxIntakeMemory: int64(len(payload)),
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, s.Open(ctx))
 	defer s.Close()
 

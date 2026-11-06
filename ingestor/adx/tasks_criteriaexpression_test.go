@@ -27,7 +27,7 @@ func (f fakeStatementExecutor) Mgmt(ctx context.Context, stmt azkustodata.Statem
 					{ColumnName: "Result", DataType: "String", ColumnType: "string"},
 				},
 				Rows: []kustov1.RawRow{
-					{Row: []interface{}{"ok"}},
+					{Row: []any{"ok"}},
 				},
 			},
 		},
@@ -137,7 +137,6 @@ func TestSummaryRuleTask_shouldProcessRule_CriteriaExpression(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		c := c
 		labels := defaultLabels
 		if c.labels != nil {
 			labels = c.labels

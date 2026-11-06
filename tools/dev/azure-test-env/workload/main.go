@@ -71,7 +71,7 @@ func mixed(w http.ResponseWriter, r *http.Request) {
 	const noisyCount = 8
 	now := uint64(time.Now().UnixNano())
 	records := make([]*logdata.LogRecord, 0, noisyCount+1)
-	for i := 0; i < noisyCount; i++ {
+	for range noisyCount {
 		records = append(records, &logdata.LogRecord{TimeUnixNano: now, ObservedTimeUnixNano: now,
 			Body:       &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: strings.Repeat("x", 1024)}},
 			Attributes: []*commonpb.KeyValue{kv("kusto.database", "Logs"), kv("kusto.table", "E2eOtlpLogs"), kv("run_id", id), kv("seq", strconv.Itoa(seq))}})

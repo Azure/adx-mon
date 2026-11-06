@@ -11,9 +11,8 @@ import (
 func BenchmarkInfof(b *testing.B) {
 	destination := "MDM://AKSCONTROLPLANE"
 	title := "[AzureCloud/prod][centralus] ingress containerservice/containerservice-ingress success rate below 99"
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		logger.Infof("Received alert notification: [%s] %s", destination, title)
 	}
 }
@@ -21,9 +20,8 @@ func BenchmarkInfof(b *testing.B) {
 func BenchmarkInfo(b *testing.B) {
 	destination := "MDM://AKSCONTROLPLANE"
 	title := "[AzureCloud/prod][centralus] ingress containerservice/containerservice-ingress success rate below 99"
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		logger.Info("Received alert notification:", "destination", destination, "title", title)
 	}
 }

@@ -42,7 +42,7 @@ func newConsumerBenchmarkRequests() (*prompb.WriteRequest, *prompb.WriteRequest)
 	prompb.Sort(commonLabels)
 
 	lazy := &prompb.WriteRequest{CommonLabels: commonLabels}
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		name := "cpu"
 		if i%2 == 1 {
 			name = "memory"
@@ -79,8 +79,7 @@ func benchmarkMarshalRequest(b *testing.B, request *prompb.WriteRequest) {
 	b.Helper()
 	b.ReportAllocs()
 	buffer := make([]byte, 0, 64*1024)
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		var err error
 		buffer, err = request.MarshalTo(buffer[:0])
 		if err != nil {
@@ -92,8 +91,7 @@ func benchmarkMarshalRequest(b *testing.B, request *prompb.WriteRequest) {
 func benchmarkCSVRequest(b *testing.B, request *prompb.WriteRequest) {
 	b.Helper()
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		buffer := bytes.NewBuffer(make([]byte, 0, 64*1024))
 		writer := NewMetricsCSVWriter(buffer, nil)
 		for _, timeSeries := range request.Timeseries {

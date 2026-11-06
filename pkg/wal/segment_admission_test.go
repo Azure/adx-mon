@@ -58,8 +58,7 @@ func BenchmarkSegmentWriteAdmission(b *testing.B) {
 	defer s.Close()
 	payload := []byte("test")
 	b.ReportAllocs()
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		written, err := s.Write(context.Background(), payload)
 		require.NoError(b, err)
 		require.True(b, written > 0)

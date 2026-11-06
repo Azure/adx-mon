@@ -19,11 +19,9 @@ func TestShutDownRunner_ShutdownNotCalledIfNotAnnotated(t *testing.T) {
 
 	// Create a fake pod with annotations
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "test-pod",
-			Namespace:   namespace,
-			Annotations: map[string]string{},
-		},
+		Name:        "test-pod",
+		Namespace:   namespace,
+		Annotations: map[string]string{},
 	}
 	client.CoreV1().Pods(namespace).Create(context.Background(), pod, metav1.CreateOptions{})
 
@@ -54,12 +52,10 @@ func TestShutDownRunner_ShutdownNotCalledIfAnnotated(t *testing.T) {
 
 	// Create a fake pod with annotations
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: namespace,
-			Annotations: map[string]string{
-				SHUTDOWN_REQUESTED: "true",
-			},
+		Name:      "test-pod",
+		Namespace: namespace,
+		Annotations: map[string]string{
+			SHUTDOWN_REQUESTED: "true",
 		},
 	}
 	client.CoreV1().Pods(namespace).Create(context.Background(), pod, metav1.CreateOptions{})

@@ -43,7 +43,7 @@ func TestFiniteFileRun(t *testing.T) {
 				if len(content) > 0 && content[len(content)-1] != '\n' {
 					t.Fatal("missing final newline")
 				}
-				for _, line := range bytes.Split(content, []byte{'\n'}) {
+				for line := range bytes.SplitSeq(content, []byte{'\n'}) {
 					if len(line) == 0 {
 						continue
 					}

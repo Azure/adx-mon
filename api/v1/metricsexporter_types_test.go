@@ -66,9 +66,7 @@ func TestMetricsExporter_GetLastExecutionTime(t *testing.T) {
 func TestMetricsExporter_SetLastExecutionTime(t *testing.T) {
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	me := &MetricsExporter{
-		ObjectMeta: metav1.ObjectMeta{
-			Generation: 2,
-		},
+		Generation: 2,
 	}
 
 	me.SetLastExecutionTime(testTime)
@@ -94,9 +92,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 
 	t.Run("first execution - time passed", func(t *testing.T) {
 		me := &MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: MetricsExporterSpec{
 				Interval: metav1.Duration{Duration: 5 * time.Minute},
 			},
@@ -115,9 +111,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 
 	t.Run("first execution - time not passed", func(t *testing.T) {
 		me := &MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: MetricsExporterSpec{
 				Interval: metav1.Duration{Duration: 15 * time.Minute},
 			},
@@ -136,9 +130,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 
 	t.Run("subsequent execution - time passed", func(t *testing.T) {
 		me := &MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: MetricsExporterSpec{
 				Interval: metav1.Duration{Duration: 5 * time.Minute},
 			},
@@ -159,9 +151,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 
 	t.Run("subsequent execution - time not passed", func(t *testing.T) {
 		me := &MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: MetricsExporterSpec{
 				Interval: metav1.Duration{Duration: 5 * time.Minute},
 			},
@@ -206,10 +196,8 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 	t.Run("deletion timestamp set - should not execute", func(t *testing.T) {
 		now := metav1.NewTime(fixedTime)
 		me := &MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation:        1,
-				DeletionTimestamp: &now,
-			},
+			Generation:        1,
+			DeletionTimestamp: &now,
 			Spec: MetricsExporterSpec{
 				Interval: metav1.Duration{Duration: 5 * time.Minute},
 			},
@@ -226,9 +214,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 
 	t.Run("no conditions - first execution timing", func(t *testing.T) {
 		me := &MetricsExporter{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: MetricsExporterSpec{
 				Interval: metav1.Duration{Duration: 5 * time.Minute},
 			},

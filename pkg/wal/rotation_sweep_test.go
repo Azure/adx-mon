@@ -60,7 +60,7 @@ func TestWAL_RotationDeadlinesAreSpread(t *testing.T) {
 	const maxAge = time.Minute
 	scheduler := newRotationScheduler(0, nil)
 	var deadlines []time.Duration
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		w := newTestWAL(t, WALOpts{SegmentMaxAge: maxAge, scheduler: scheduler})
 		require.NoError(t, w.Write(context.Background(), []byte("data")))
 		deadlines = append(deadlines, w.rotationDeadline.Sub(w.Segment().CreatedAt()))

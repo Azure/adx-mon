@@ -627,8 +627,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		forward = func(data []byte) bool { return s.forwarder.forward(f, data) }
 	}
 	n, err := s.store.ImportWith(f, body, forward)
-	var oversized *wal.SegmentTooLargeError
-	if errors.As(err, &oversized) {
+	if oversized, ok := errors.AsType[*wal.SegmentTooLargeError](err); ok {
 		// Permanent for this payload: tell the sender how much this destination
 		// can accept so it can split rather than retry the same batch forever.
 		w.Header().Set(cluster.MaxTransferBytesHeader, strconv.FormatInt(oversized.Limit, 10))
@@ -636,8 +635,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, oversized.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
-	var quota *wal.TableOverloadedError
-	if errors.As(err, &quota) {
+	if quota, ok := errors.AsType[*wal.TableOverloadedError](err); ok {
 		w.Header().Set(cluster.OverloadScopeHeader, "table")
 		w.Header().Set(cluster.OverloadReasonHeader, quota.Reason)
 		w.Header().Set("Retry-After", strconv.Itoa(int(quota.RetryAfter.Seconds())))

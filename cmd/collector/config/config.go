@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -480,13 +481,7 @@ func (w *HostLog) Validate() error {
 			return errors.New("host-log.file-target.table must be set")
 		}
 
-		foundValidType := false
-		for _, validType := range validLogTypes {
-			if v.LogType == validType {
-				foundValidType = true
-				break
-			}
-		}
+		foundValidType := slices.Contains(validLogTypes, v.LogType)
 		if !foundValidType {
 			return fmt.Errorf("host-log.file-target.log-type %s is not a valid log type", v.LogType)
 		}
@@ -839,10 +834,10 @@ func (c *Config) processStringFields(v reflect.Value, f func(string) string) {
 	case reflect.String:
 		v.SetString(f(v.String()))
 	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			c.processStringFields(v.Field(i), f)
+		for _, field := range v.Fields() {
+			c.processStringFields(field, f)
 		}
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return
 		}

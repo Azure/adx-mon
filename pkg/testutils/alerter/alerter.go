@@ -32,13 +32,11 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Aler
 	}
 
 	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:       DefaultImage,
-			Tag:        DefaultTag,
-			Context:    relative, // repo base
-			Dockerfile: "build/images/Dockerfile.alerter",
-			KeepImage:  true,
-		},
+		Repo:       DefaultImage,
+		Tag:        DefaultTag,
+		Context:    relative, // repo base
+		Dockerfile: "build/images/Dockerfile.alerter",
+		KeepImage:  true,
 	}
 
 	genericContainerReq := testcontainers.GenericContainerRequest{

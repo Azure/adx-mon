@@ -17,22 +17,19 @@ func TestKubeNode_OpenAndMetadata(t *testing.T) {
 	t.Parallel()
 
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "node-test",
-			Labels: map[string]string{
-				"role": "worker",
-			},
-			Annotations: map[string]string{
-				"zone": "us-east",
-			},
+		Name: "node-test",
+		Labels: map[string]string{
+			"role": "worker",
+		},
+		Annotations: map[string]string{
+			"zone": "us-east",
 		},
 	}
 
 	client := fake.NewSimpleClientset(node)
 	watcher := NewKubeNode(client, "node-test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	require.NoError(t, watcher.Open(ctx))
 	t.Cleanup(func() {
@@ -71,26 +68,23 @@ func TestKubeNode_Walkers(t *testing.T) {
 	t.Parallel()
 
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "node-test",
-			Labels: map[string]string{
-				"role":  "worker",
-				"arch":  "amd64",
-				"zone":  "us-east",
-				"class": "general",
-			},
-			Annotations: map[string]string{
-				"alpha": "one",
-				"beta":  "two",
-			},
+		Name: "node-test",
+		Labels: map[string]string{
+			"role":  "worker",
+			"arch":  "amd64",
+			"zone":  "us-east",
+			"class": "general",
+		},
+		Annotations: map[string]string{
+			"alpha": "one",
+			"beta":  "two",
 		},
 	}
 
 	client := fake.NewSimpleClientset(node)
 	watcher := NewKubeNode(client, "node-test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	require.NoError(t, watcher.Open(ctx))
 	t.Cleanup(func() {
@@ -116,22 +110,19 @@ func TestKubeNode_DeleteEventKeepsMetadata(t *testing.T) {
 	t.Parallel()
 
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "node-test",
-			Labels: map[string]string{
-				"role": "worker",
-			},
-			Annotations: map[string]string{
-				"zone": "us-east",
-			},
+		Name: "node-test",
+		Labels: map[string]string{
+			"role": "worker",
+		},
+		Annotations: map[string]string{
+			"zone": "us-east",
 		},
 	}
 
 	client := fake.NewSimpleClientset(node)
 	watcher := NewKubeNode(client, "node-test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	require.NoError(t, watcher.Open(ctx))
 	t.Cleanup(func() {
@@ -180,16 +171,13 @@ func TestKubeNode_CloseIdempotent(t *testing.T) {
 	t.Parallel()
 
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "node-test",
-		},
+		Name: "node-test",
 	}
 
 	client := fake.NewSimpleClientset(node)
 	watcher := NewKubeNode(client, "node-test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	require.NoError(t, watcher.Open(ctx))
 

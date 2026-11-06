@@ -151,7 +151,7 @@ func TestRealtimeBatcher_SplitsBatches(t *testing.T) {
 	env.b.maxBatchSegments = 3
 
 	var paths []string
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		paths = append(paths, env.add(t, "Realtime", 100, ingestpolicy.PriorityRealtime).Path)
 	}
 	big := env.add(t, "Realtime", 1000, ingestpolicy.PriorityRealtime)
@@ -165,7 +165,7 @@ func TestRealtimeBatcher_SplitsBatches(t *testing.T) {
 	require.Equal(t, []string{big.Path}, (<-env.realtime).Paths())
 
 	env.b.maxBatchSegments = 2
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		env.add(t, "Other", 1, ingestpolicy.PriorityRealtime)
 	}
 	env.b.realtime.Flush(context.Background())
@@ -282,13 +282,13 @@ func TestRealtimeBatcher_DoesNotBatchSegmentsTwice(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < segments; i++ {
+		for range segments {
 			env.add(t, "Realtime", 1, ingestpolicy.PriorityRealtime)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			env.b.realtime.Flush(context.Background())
 		}
 	}()
@@ -390,7 +390,7 @@ func TestRealtimeBatcher_NoSegmentsLostUnderConcurrency(t *testing.T) {
 	env.open(t)
 
 	const segments = 500
-	for i := 0; i < segments; i++ {
+	for range segments {
 		env.add(t, "Realtime", 1, ingestpolicy.PriorityRealtime)
 	}
 

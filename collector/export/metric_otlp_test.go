@@ -90,8 +90,7 @@ func BenchmarkPromToOtlpRequest(b *testing.B) {
 	}
 
 	// Run the benchmark
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _, err := exporter.promToOtlpRequest(req)
 		if err != nil {
 			b.Fatalf("Failed to forward metrics: %v", err)
@@ -139,7 +138,7 @@ func TestPromToOtlpRequestConcurrent(t *testing.T) {
 	})
 
 	errgroup, _ := errgroup.WithContext(context.Background())
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		errgroup.Go(func() error {
 			// shared exporter
 			exporter.Write(context.Background(), req)
@@ -437,14 +436,14 @@ func TestPromToOtlpExporterWriteCancellation(t *testing.T) {
 
 // setupCorruptedPools purposely makes noisy object pools to catch lack of resets
 func setupCorruptedPools(exporter *PromToOtlpExporter) *PromToOtlpExporter {
-	exporter.stringKVPool = pool.NewGeneric(2, func(sz int) interface{} {
+	exporter.stringKVPool = pool.NewGeneric(2, func(sz int) any {
 		return &commonv1.KeyValue{
 			Key:   "corrupted",
 			Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "corrupted"}},
 		}
 	})
 
-	exporter.datapointPool = pool.NewGeneric(2, func(sz int) interface{} {
+	exporter.datapointPool = pool.NewGeneric(2, func(sz int) any {
 		return &metricsv1.NumberDataPoint{
 			Attributes:        []*commonv1.KeyValue{{Key: "corrupted", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 123.456}}}},
 			TimeUnixNano:      123123,

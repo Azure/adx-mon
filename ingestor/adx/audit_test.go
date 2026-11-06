@@ -35,8 +35,8 @@ func newAuditTestStore(t *testing.T, dir string) *storage.LocalStore {
 // writeActiveSegments writes to n distinct tables so each has an active, unrotated segment on disk.
 func writeActiveSegments(t *testing.T, store *storage.LocalStore, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
-		w, err := store.GetWAL(context.Background(), []byte(fmt.Sprintf("db_table%d", i)))
+	for i := range n {
+		w, err := store.GetWAL(context.Background(), fmt.Appendf(nil, "db_table%d", i))
 		require.NoError(t, err)
 		require.NoError(t, w.Write(context.Background(), []byte("some,csv,data\n")))
 		require.NoError(t, w.Flush())

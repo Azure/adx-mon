@@ -51,10 +51,8 @@ func TestFunctions(t *testing.T) {
 
 	t.Run("Install function", func(t *testing.T) {
 		fn := &adxmonv1.Function{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      typeNamespacedName.Name,
-				Namespace: typeNamespacedName.Namespace,
-			},
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
 			Spec: adxmonv1.FunctionSpec{
 				Body:     "some-function-body",
 				Database: "some-database",

@@ -70,8 +70,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 	if result.retry.notificationsThrottled || errors.Is(err, alert.ErrTooManyRequests) {
 		// This failed because we sent too many notifications.
 		evaluation.outcome = evaluationOutcomeNotificationThrottled
-		var overflow *ThrottledNotificationsError
-		if errors.As(err, &overflow) {
+		if overflow, ok := errors.AsType[*ThrottledNotificationsError](err); ok {
 			result.retry.throttledAlerts.merge(overflow)
 		}
 		summary := throttledNotificationSummary(&result.retry.throttledAlerts)

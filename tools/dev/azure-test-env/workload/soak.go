@@ -207,16 +207,14 @@ func runStream(st *streamStatus, rate float64, duration time.Duration) {
 		streamMu.Lock()
 		st.Emitted = seq
 		streamMu.Unlock()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for path, err := range sendSignal(s, st.Chunked) {
 				streamMu.Lock()
 				st.Failed[path] = append(st.Failed[path], s.Seq)
 				st.Errors[path+": "+errorClass(err)]++
 				streamMu.Unlock()
 			}
-		}()
+		})
 		<-ticker.C
 	}
 	wg.Wait()
@@ -318,8 +316,8 @@ func load() {
 	host, _ := os.Hostname()
 	base := "http://" + os.Getenv("HOST_IP") + ":3100"
 	var all [][]label
-	for t := 0; t < tables; t++ {
-		for i := 0; i < series; i++ {
+	for t := range tables {
+		for i := range series {
 			all = append(all, []label{{"__name__", fmt.Sprintf("e2e_load_%03d", t)}, {"pod", host}, {"series", strconv.Itoa(i)}})
 		}
 	}
@@ -333,7 +331,7 @@ func load() {
 				log.Printf("load remote write: %s", errorClass(err))
 			}
 		}
-		for t := 0; t < logTables; t++ {
+		for t := range logTables {
 			records := make([]*logdata.LogRecord, logs)
 			for i := range records {
 				records[i] = &logdata.LogRecord{TimeUnixNano: uint64(now) * 1e6, ObservedTimeUnixNano: uint64(now) * 1e6,

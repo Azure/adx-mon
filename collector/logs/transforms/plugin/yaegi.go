@@ -108,7 +108,7 @@ func NewTransform(config TransformConfig) (types.Transformer, error) {
 	}
 
 	var ok bool
-	transformer, ok := results[0].Interface().(types.Transformer)
+	transformer, ok := reflect.TypeAssert[types.Transformer](results[0])
 	if !ok {
 		return nil, fmt.Errorf("failed to cast %s.New() result to *logs.Transformer", baseName)
 	}

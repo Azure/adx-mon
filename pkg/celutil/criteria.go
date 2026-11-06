@@ -17,7 +17,7 @@ func EvaluateCriteriaExpression(clusterLabels map[string]string, expression stri
 	}
 	// Normalize and prepare declarations
 	decls := make([]cel.EnvOption, 0, len(clusterLabels))
-	activation := make(map[string]interface{}, len(clusterLabels))
+	activation := make(map[string]any, len(clusterLabels))
 	for k, v := range clusterLabels {
 		decls = append(decls, cel.Variable(k, cel.StringType))
 		activation[k] = v

@@ -690,7 +690,7 @@ func TestBatcher_RealtimeBatchesAreOwned(t *testing.T) {
 
 func TestBatcher_SplitBatchesKeepPriority(t *testing.T) {
 	idx := wal.NewIndex()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		addTestSegment(t, idx, "db", "Realtime", ingestpolicy.PriorityRealtime)
 	}
 
@@ -813,7 +813,7 @@ func TestBatcher_SplitPrefix(t *testing.T) {
 
 	idx := wal.NewIndex()
 	var segments []wal.SegmentInfo
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		segments = append(segments, addTestSegment(t, idx, "db", "Cpu", ingestpolicy.PriorityQueued))
 	}
 

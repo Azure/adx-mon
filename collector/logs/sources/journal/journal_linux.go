@@ -92,12 +92,10 @@ func (s *Source) Open(ctx context.Context) error {
 			streamPartials: make(map[string]string),
 		}
 
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 
 			tailer.ReadFromJournal(ctx)
-		}()
+		})
 
 		batchConfig := engine.BatchConfig{
 			MaxBatchSize: 1000,
@@ -106,18 +104,14 @@ func (s *Source) Open(ctx context.Context) error {
 			OutputQueue:  outputQueue,
 			AckGenerator: ackGenerator,
 		}
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			engine.BatchLogs(ctx, batchConfig)
-		}()
+		})
 
 		worker := s.workerCreator("journal", outputQueue)
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			worker.RunWaitingForStorage(ctx)
-		}()
+		})
 
 		tailers = append(tailers, tailer)
 	}

@@ -75,9 +75,7 @@ func (i *PodDiscovery) Open(ctx context.Context) error {
 		return err
 	}
 
-	i.wg.Add(1)
-	go func() {
-		defer i.wg.Done()
+	i.wg.Go(func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -88,7 +86,7 @@ func (i *PodDiscovery) Open(ctx context.Context) error {
 				i.cleanTombstonedTargets()
 			}
 		}
-	}()
+	})
 
 	return nil
 }
@@ -102,7 +100,7 @@ func (i *PodDiscovery) Close() error {
 }
 
 // OnAdd is called when an object is added. Expects a pod.
-func (i *PodDiscovery) OnAdd(obj interface{}, isInitialList bool) {
+func (i *PodDiscovery) OnAdd(obj any, isInitialList bool) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		return
@@ -157,7 +155,7 @@ func (i *PodDiscovery) OnAdd(obj interface{}, isInitialList bool) {
 }
 
 // OnUpdate is called when an object is updated. Expects a pod.
-func (i *PodDiscovery) OnUpdate(oldObj, newObj interface{}) {
+func (i *PodDiscovery) OnUpdate(oldObj, newObj any) {
 	p, ok := newObj.(*v1.Pod)
 	if !ok || p == nil {
 		return
@@ -171,7 +169,7 @@ func (i *PodDiscovery) OnUpdate(oldObj, newObj interface{}) {
 }
 
 // OnDelete is called when an object is deleted. Expects a pod.
-func (i *PodDiscovery) OnDelete(obj interface{}) {
+func (i *PodDiscovery) OnDelete(obj any) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		return

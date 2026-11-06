@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,9 +104,7 @@ func (e *forwardEnv) transfer(t *testing.T, table string, header http.Header) in
 	require.NoError(t, err)
 
 	r := httptest.NewRequest("POST", "/transfer?filename="+wal.Filename("DB", table, "", "2f2c74ffa19e6000"), bytes.NewReader(payload))
-	for k, v := range header {
-		r.Header[k] = v
-	}
+	maps.Copy(r.Header, header)
 	resp := httptest.NewRecorder()
 	e.s.HandleTransfer(resp, r)
 	return resp.Code

@@ -228,8 +228,8 @@ func decodeSchemaIDFromCacheKey(key, table string) string {
 		return ""
 	}
 
-	if idx := strings.Index(key, "@"); idx != -1 {
-		return key[idx+1:]
+	if _, after, ok := strings.Cut(key, "@"); ok {
+		return after
 	}
 
 	return key

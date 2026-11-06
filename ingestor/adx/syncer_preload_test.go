@@ -35,10 +35,10 @@ func (m *schemaMgmt) Mgmt(ctx context.Context, _ string, query azkustodata.State
 			{ColumnName: "Schema", DataType: "String", ColumnType: "string"},
 		}
 		for name, cols := range m.schemas {
-			table.Rows = append(table.Rows, kustov1.RawRow{Row: []interface{}{name, cols}})
+			table.Rows = append(table.Rows, kustov1.RawRow{Row: []any{name, cols}})
 		}
 	default:
-		table.Rows = []kustov1.RawRow{{Row: []interface{}{"ok"}}}
+		table.Rows = []kustov1.RawRow{{Row: []any{"ok"}}}
 	}
 	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{table}})
 }

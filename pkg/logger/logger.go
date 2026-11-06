@@ -29,7 +29,7 @@ func init() {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: levelVar, ReplaceAttr: replaceAttr}))
 	} else {
-		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: levelVar, TimeFormat: timeFormat}))
+		logger = slog.New(tint.NewTextHandler(os.Stdout, &tint.Options{Level: levelVar, TimeFormat: timeFormat}))
 	}
 	slog.SetDefault(logger)
 
@@ -85,7 +85,7 @@ func Logger() *slog.Logger {
 // For these wrappers, we need to capture the caller's PC to allow source line functionality to work.
 // This does not add any allocs and does not affect performance.
 
-func Debugf(format string, args ...interface{}) {
+func Debugf(format string, args ...any) {
 	logger := slog.Default()
 	if !logger.Enabled(context.Background(), slog.LevelDebug) {
 		return
@@ -97,7 +97,7 @@ func Debugf(format string, args ...interface{}) {
 	_ = logger.Handler().Handle(context.Background(), r)
 }
 
-func Infof(format string, args ...interface{}) {
+func Infof(format string, args ...any) {
 	logger := slog.Default()
 	if !logger.Enabled(context.Background(), slog.LevelInfo) {
 		return
@@ -109,7 +109,7 @@ func Infof(format string, args ...interface{}) {
 	_ = logger.Handler().Handle(context.Background(), r)
 }
 
-func Warnf(format string, args ...interface{}) {
+func Warnf(format string, args ...any) {
 	logger := slog.Default()
 	if !logger.Enabled(context.Background(), slog.LevelWarn) {
 		return
@@ -121,7 +121,7 @@ func Warnf(format string, args ...interface{}) {
 	_ = logger.Handler().Handle(context.Background(), r)
 }
 
-func Errorf(format string, args ...interface{}) {
+func Errorf(format string, args ...any) {
 	logger := slog.Default()
 	if !logger.Enabled(context.Background(), slog.LevelError) {
 		return
@@ -147,7 +147,7 @@ func Fatal(msg string, attrs ...slog.Attr) {
 	os.Exit(1)
 }
 
-func Fatalf(format string, args ...interface{}) {
+func Fatalf(format string, args ...any) {
 	logger := slog.Default()
 	if !logger.Enabled(context.Background(), slog.LevelError) {
 		return
@@ -187,12 +187,12 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 // controllerRuntimeLogSink implements logr.LogSink
 type controllerRuntimeLogSink struct{}
 
-func (l *controllerRuntimeLogSink) Init(info logr.RuntimeInfo)                 {}
-func (l *controllerRuntimeLogSink) Enabled(level int) bool                     { return true }
-func (l *controllerRuntimeLogSink) WithName(name string) logr.LogSink          { return l }
-func (l *controllerRuntimeLogSink) WithValues(kvs ...interface{}) logr.LogSink { return l }
+func (l *controllerRuntimeLogSink) Init(info logr.RuntimeInfo)         {}
+func (l *controllerRuntimeLogSink) Enabled(level int) bool             { return true }
+func (l *controllerRuntimeLogSink) WithName(name string) logr.LogSink  { return l }
+func (l *controllerRuntimeLogSink) WithValues(kvs ...any) logr.LogSink { return l }
 
-func (l *controllerRuntimeLogSink) Info(level int, msg string, keysAndValues ...interface{}) {
+func (l *controllerRuntimeLogSink) Info(level int, msg string, keysAndValues ...any) {
 	if len(keysAndValues) > 0 {
 		Info(msg, slog.Any("values", keysAndValues))
 	} else {
@@ -200,7 +200,7 @@ func (l *controllerRuntimeLogSink) Info(level int, msg string, keysAndValues ...
 	}
 }
 
-func (l *controllerRuntimeLogSink) Error(err error, msg string, keysAndValues ...interface{}) {
+func (l *controllerRuntimeLogSink) Error(err error, msg string, keysAndValues ...any) {
 	attrs := []any{slog.Any("error", err)}
 	if len(keysAndValues) > 0 {
 		attrs = append(attrs, slog.Any("values", keysAndValues))

@@ -111,7 +111,7 @@ func TestWorker_StatusUpdateIncludesLatestEvaluationDetails(t *testing.T) {
 	require.NoError(t, alertrulev1.AddToScheme(scheme))
 
 	alertRule := &alertrulev1.AlertRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "test-namespace", Name: "test-rule"},
+		Namespace: "test-namespace", Name: "test-rule",
 		Spec: alertrulev1.AlertRuleSpec{
 			Database:    "TestDB",
 			Query:       "Table | take 1",
@@ -158,7 +158,7 @@ func TestWorker_OverdueExecutionPersistsCurrentWindow(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, alertrulev1.AddToScheme(scheme))
 	alertRule := &alertrulev1.AlertRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "test-namespace", Name: "overdue-rule"},
+		Namespace: "test-namespace", Name: "overdue-rule",
 		Spec: alertrulev1.AlertRuleSpec{
 			Database:    "TestDB",
 			Interval:    metav1.Duration{Duration: interval},
@@ -218,7 +218,7 @@ func TestWorker_ThrottledStatusIncludesPartialAlerts(t *testing.T) {
 	require.NoError(t, alertrulev1.AddToScheme(scheme))
 
 	alertRule := &alertrulev1.AlertRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "test-namespace", Name: "throttled-rule"},
+		Namespace: "test-namespace", Name: "throttled-rule",
 		Spec: alertrulev1.AlertRuleSpec{
 			Database:    "TestDB",
 			Query:       "Table | take 2",

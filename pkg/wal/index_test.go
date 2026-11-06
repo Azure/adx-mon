@@ -274,11 +274,11 @@ func TestIndex_SubscribeConcurrent(t *testing.T) {
 	i.Subscribe(func(SegmentInfo) { count.Add(1) })
 
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for g := range 8 {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			for n := 0; n < 1000; n++ {
+			for n := range 1000 {
 				i.Add(SegmentInfo{Prefix: fmt.Sprintf("db_%d", g), Path: fmt.Sprintf("/%d/%d", g, n)})
 				if n%100 == 0 {
 					unsub := i.Subscribe(func(SegmentInfo) {})
@@ -297,14 +297,13 @@ func BenchmarkIndex_Add(b *testing.B) {
 	for _, subs := range []int{0, 1} {
 		b.Run(fmt.Sprintf("subscribers=%d", subs), func(b *testing.B) {
 			i := NewIndex()
-			for n := 0; n < subs; n++ {
+			for range subs {
 				i.Subscribe(func(SegmentInfo) {})
 			}
 			info := SegmentInfo{Prefix: "db_table", Path: "/p", Size: 1}
 
 			b.ReportAllocs()
-			b.ResetTimer()
-			for n := 0; n < b.N; n++ {
+			for b.Loop() {
 				i.Add(info)
 				if len(i.segments["db_table"]) > 1024 {
 					i.segments["db_table"] = i.segments["db_table"][:0]
@@ -361,7 +360,7 @@ func TestIndex_Prefixes(t *testing.T) {
 func newBenchmarkIndex(segments int) *Index {
 	i := NewIndex()
 	base := time.Now().Add(-time.Hour)
-	for n := 0; n < segments; n++ {
+	for n := range segments {
 		i.Add(SegmentInfo{
 			Prefix:    fmt.Sprintf("db_t%d", n%1000),
 			Path:      fmt.Sprintf("/wal/%d", n),
@@ -377,8 +376,7 @@ func BenchmarkIndex_OldestSegmentAge(b *testing.B) {
 		b.Run(fmt.Sprintf("segments=%d", segments), func(b *testing.B) {
 			i := newBenchmarkIndex(segments)
 			b.ReportAllocs()
-			b.ResetTimer()
-			for n := 0; n < b.N; n++ {
+			for b.Loop() {
 				_ = i.OldestSegmentAge()
 			}
 		})
@@ -389,8 +387,7 @@ func BenchmarkIndex_AddRemove(b *testing.B) {
 	i := newBenchmarkIndex(10000)
 	si := SegmentInfo{Prefix: "db_t1", Path: "/wal/new", Size: 1024, CreatedAt: time.Now()}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		i.Add(si)
 		i.Remove(si)
 	}
@@ -488,7 +485,7 @@ func TestIndex_OldestSegmentAgeMatchesScan(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 
 	var added []SegmentInfo
-	for op := 0; op < 5000; op++ {
+	for range 5000 {
 		if len(added) == 0 || r.Intn(3) != 0 {
 			si := SegmentInfo{
 				Prefix: fmt.Sprintf("db_t%d", r.Intn(5)),
@@ -517,11 +514,11 @@ func TestIndex_OldestSegmentAgeMatchesScan(t *testing.T) {
 func TestIndex_OldestSegmentAgeConcurrent(t *testing.T) {
 	i := NewIndex()
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for g := range 8 {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			for n := 0; n < 500; n++ {
+			for n := range 500 {
 				si := SegmentInfo{Prefix: "db_t", Path: fmt.Sprintf("/%d/%d", g, n), CreatedAt: time.Now()}
 				i.Add(si)
 				_ = i.OldestSegmentAge()

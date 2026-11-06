@@ -70,7 +70,7 @@ func (r *ShutDownRunner) Run(ctx context.Context) error {
 
 		logger.Infof("Service shutdown completed")
 		// Create a patch to set the shutdown-completed annotation
-		patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, SHUTDOWN_COMPLETED, time.Now().Format(time.RFC3339)))
+		patch := fmt.Appendf(nil, `{"metadata":{"annotations":{"%s":"%s"}}}`, SHUTDOWN_COMPLETED, time.Now().Format(time.RFC3339))
 		if _, err := r.k8sClient.CoreV1().Pods(r.namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("failed to patch shutdown-completed annotation: %v", err)
 		}

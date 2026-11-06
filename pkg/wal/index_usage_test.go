@@ -61,7 +61,7 @@ func TestIndexConcurrentAddRemove(t *testing.T) {
 	i.Admission = a
 
 	var wg sync.WaitGroup
-	for n := 0; n < 100; n++ {
+	for n := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()

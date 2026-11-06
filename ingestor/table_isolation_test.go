@@ -2,7 +2,6 @@ package ingestor
 
 import (
 	"bytes"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,8 +15,7 @@ import (
 )
 
 func TestTableOverloadDoesNotChangeReadinessAndRecoversAfterDrain(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	source, err := wal.NewSegment(t.TempDir(), "DB_A_s")
 	require.NoError(t, err)
 	_, err = source.Write(ctx, []byte("1,2,3\n"))
@@ -72,8 +70,7 @@ func TestIngestorWiresTableBudgetDefaults(t *testing.T) {
 	svc, err := NewService(ServiceOpts{StorageDir: t.TempDir(), MaxDiskUsage: 10000, MaxSegmentCount: 100, Uploader: tableTestUploader{queue: make(chan *cluster.Batch, 10)}, K8sCli: fake.NewSimpleClientset(), Hostname: "ingestor-0", Namespace: "adx-mon"})
 	require.NoError(t, err)
 	store := svc.store.(*storage.LocalStore)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, store.Open(ctx))
 	defer store.Close()
 	w, err := store.GetWAL(ctx, []byte("DB_A_s"))

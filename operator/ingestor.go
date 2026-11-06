@@ -23,7 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -150,7 +149,7 @@ func (r *IngestorReconciler) reconcileIngestorSecurity(ctx context.Context, inge
 	}
 
 	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: ingestorPodRoleName, Namespace: namespace},
+		Name: ingestorPodRoleName, Namespace: namespace,
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
 			Resources: []string{"pods"},
@@ -165,7 +164,7 @@ func (r *IngestorReconciler) reconcileIngestorSecurity(ctx context.Context, inge
 	}
 
 	roleBinding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: ingestorPodRoleName, Namespace: namespace},
+		Name: ingestorPodRoleName, Namespace: namespace,
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "Role",
@@ -185,7 +184,7 @@ func (r *IngestorReconciler) reconcileIngestorSecurity(ctx context.Context, inge
 
 func desiredIngestorClusterRole(namespace string) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor", Labels: map[string]string{ingestorManagedLabelKey: ingestorManagedLabelValue}},
+		Name: namespace + ":ingestor", Labels: map[string]string{ingestorManagedLabelKey: ingestorManagedLabelValue},
 		Rules: []rbacv1.PolicyRule{
 			{APIGroups: []string{"adx-mon.azure.com"}, Resources: []string{"functions"}, Verbs: []string{"get", "list", "update"}},
 			{APIGroups: []string{"adx-mon.azure.com"}, Resources: []string{"managementcommands", "summaryrules"}, Verbs: []string{"get", "list"}},
@@ -198,9 +197,9 @@ func desiredIngestorClusterRole(namespace string) *rbacv1.ClusterRole {
 func desiredIngestorClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
 	name := namespace + ":ingestor"
 	return &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{ingestorManagedLabelKey: ingestorManagedLabelValue}},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
+		Name: name, Labels: map[string]string{ingestorManagedLabelKey: ingestorManagedLabelValue},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
 	}
 }
 
@@ -288,8 +287,8 @@ func (r *IngestorReconciler) cleanupIngestorSecurity(ctx context.Context, ingest
 	}
 	name := ingestor.Namespace + ":ingestor"
 	for _, obj := range []client.Object{
-		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
-		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		&rbacv1.ClusterRoleBinding{Name: name},
+		&rbacv1.ClusterRole{Name: name},
 	} {
 		if err := r.Get(ctx, client.ObjectKey{Name: name}, obj); err != nil {
 			if errors.IsNotFound(err) {
@@ -508,10 +507,8 @@ func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			if selector.Matches(labels.Set(cluster.GetLabels())) {
 				// If the selector matches, enqueue a reconcile request for this Ingestor
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      ingestor.Name,
-						Namespace: ingestor.Namespace,
-					},
+					Name:      ingestor.Name,
+					Namespace: ingestor.Namespace,
 				})
 				logger.Infof("Enqueuing reconcile request for Ingestor %s/%s due to change in ADXCluster %s/%s", ingestor.Namespace, ingestor.Name, cluster.Namespace, cluster.Name)
 

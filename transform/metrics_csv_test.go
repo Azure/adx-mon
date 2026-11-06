@@ -180,7 +180,7 @@ func BenchmarkMetricsCSVWriter_MarshalCSV(b *testing.B) {
 	b.ResetTimer()
 	request := &prompb.WriteRequest{}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w.MarshalCSV(request, ts)
 		buf.Reset()
 	}

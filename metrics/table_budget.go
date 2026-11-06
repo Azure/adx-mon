@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"maps"
+
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -59,9 +61,7 @@ func (c *tableBudgetCollector) Describe(out chan<- *prometheus.Desc) {
 func (c *tableBudgetCollector) Collect(out chan<- prometheus.Metric) {
 	c.mu.Lock()
 	sources := make(map[string]*wal.Admission, len(c.sources))
-	for name, b := range c.sources {
-		sources[name] = b
-	}
+	maps.Copy(sources, c.sources)
 	c.mu.Unlock()
 	for component, budget := range sources {
 		for destination, s := range budget.Status() {

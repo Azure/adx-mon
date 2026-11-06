@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"slices"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -26,8 +27,8 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 	}
 
-	for i := len(s.Transforms) - 1; i >= 0; i-- {
-		if err := s.Transforms[i].Open(ctx); err != nil {
+	for _, v := range slices.Backward(s.Transforms) {
+		if err := v.Open(ctx); err != nil {
 			return err
 		}
 	}

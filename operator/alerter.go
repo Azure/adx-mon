@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -415,10 +414,8 @@ func (r *AlerterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			if selector.Matches(labels.Set(cluster.GetLabels())) {
 				// If the selector matches, enqueue a reconcile request for this Alerter
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      alerter.Name,
-						Namespace: alerter.Namespace,
-					},
+					Name:      alerter.Name,
+					Namespace: alerter.Namespace,
 				})
 				logger.Infof("Enqueuing reconcile request for Alerter %s/%s due to change in ADXCluster %s/%s", alerter.Namespace, alerter.Name, cluster.Namespace, cluster.Name)
 

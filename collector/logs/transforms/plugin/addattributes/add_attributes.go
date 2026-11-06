@@ -25,7 +25,7 @@ func NewTransform(config Config) *Transform {
 	}
 }
 
-func FromConfigMap(config map[string]interface{}) (types.Transformer, error) {
+func FromConfigMap(config map[string]any) (types.Transformer, error) {
 	resourceValues, ok := config["ResourceValues"].(map[string]string)
 	if !ok {
 		return nil, fmt.Errorf("ResourceValues is required")

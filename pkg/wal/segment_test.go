@@ -169,10 +169,11 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 			defer f.Close()
 
 			str := strings.Repeat("a", 8092)
-			_, err = f.Write([]byte(fmt.Sprintf("%s,", str)))
+			_, err = fmt.Fprintf(f, "%s,", str)
 			require.NoError(t, err)
 
 			s, err = wal.Open(s.Path())
+			require.NoError(t, err)
 			defer s.Close()
 
 			b, err := s.Bytes()
@@ -251,8 +252,8 @@ func TestSegment_LargeSegments(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			for i := 0; i < 100000; i++ {
-				n, err := s.Write(context.Background(), []byte(fmt.Sprintf("test%d %s\n", i, strings.Repeat("a", 1024))))
+			for i := range 100000 {
+				n, err := s.Write(context.Background(), fmt.Appendf(nil, "test%d %s\n", i, strings.Repeat("a", 1024)))
 				require.NoError(t, err)
 				require.True(t, n > 0)
 			}
@@ -339,7 +340,7 @@ func TestSegment_Size(t *testing.T) {
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
 
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				// Write random data to the segment, between 1 and 8k+1
 				n, err := s.Write(context.Background(), []byte(strings.Repeat("a", rand.Intn(8*1024)+1)))
 				require.NoError(t, err)
@@ -564,11 +565,11 @@ func TestSegment_Write_Concurrent(t *testing.T) {
 	s, err := wal.NewSegment(dir, "Foo")
 	require.NoError(t, err)
 	g, ctx := errgroup.WithContext(context.Background())
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		x := i
 		g.Go(func() error {
 			y := x
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				val := strconv.Itoa(y*j) + "," +
 					strings.Repeat("a", rand.Intn(1024)) + "," +
 					strings.Repeat("b", rand.Intn(1024)) + "," +
@@ -617,8 +618,7 @@ func BenchmarkSegment_Write(b *testing.B) {
 	defer s.Close()
 	buf := []byte("test")
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		n, err := s.Write(context.Background(), buf)
 		require.NoError(b, err)
 		require.True(b, n > 0)

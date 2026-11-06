@@ -29,15 +29,15 @@ import (
 )
 
 var (
-	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+	csvWriterPool = pool.NewGeneric(1000, func(sz int) any {
 		return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
-	nativeLogsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+	nativeLogsCSVWriterPool = pool.NewGeneric(1000, func(sz int) any {
 		return transform2.NewCSVNativeLogsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
-	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) any {
 		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 )
@@ -73,7 +73,7 @@ type LocalStore struct {
 	mu         sync.RWMutex
 	repository *wal.Repository
 
-	inflightWriteBytes int64
+	inflightWriteBytes atomic.Int64
 	unregisterBudget   func()
 	unregisterIntake   func()
 	intake             *MemoryLimiter
@@ -207,7 +207,7 @@ func (s *LocalStore) overBudget(tables int, size func(int) int64, key func(int) 
 		return nil, nil
 	}
 	var total int64
-	for i := 0; i < tables; i++ {
+	for i := range tables {
 		total += size(i)
 	}
 	if a.FitsAll(total) {
@@ -346,15 +346,15 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 			}
 		}
 
-		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
+		s.inflightWriteBytes.Add(int64(len(enc.Bytes())))
 
 		if s.diskUsageExceeded(w) {
-			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 			return wal.ErrMaxDiskUsageExceeded
 		}
 
 		if err := s.writeBlock(ctx, w, t.key, len(t.series), enc.Bytes()); err != nil {
-			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
 			if errors.Is(err, errBlockTooLarge) || errors.As(err, &quota) && blockTooLarge(quota, len(t.series)) {
 				accepted, rejected, err := s.writeEachSeries(ctx, w, enc, req, t.series, t.full)
@@ -383,7 +383,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		outcome.Accepted += samples
 		metrics.SamplesStored.Add(float64(samples))
 		// Decrement the inflight write bytes after writing to avoid double counting.
-		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+		s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 	}
 	if outcome.Rejected > 0 {
 		return &outcome
@@ -509,8 +509,8 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 		return err
 	}
 
-	atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
-	defer atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+	s.inflightWriteBytes.Add(int64(len(enc.Bytes())))
+	defer s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 
 	if s.diskUsageExceeded(w) {
 		return wal.ErrMaxDiskUsageExceeded
@@ -518,8 +518,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
 	if err := w.Write(ctx, enc.Bytes(), wo); err != nil {
-		var quota *wal.TableOverloadedError
-		if errors.As(err, &quota) {
+		if quota, ok := errors.AsType[*wal.TableOverloadedError](err); ok {
 			s.recordRejection(quota, int64(len(logs.Logs)), int64(len(enc.Bytes())), "logs")
 			return &WriteOutcome{Rejected: int64(len(logs.Logs))}
 		}
@@ -619,15 +618,15 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 				return err
 			}
 		}
-		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
+		s.inflightWriteBytes.Add(int64(len(enc.Bytes())))
 
 		if s.diskUsageExceeded(w) {
-			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 			return &PartialWriteError{Pending: pending(i), Err: wal.ErrMaxDiskUsageExceeded}
 		}
 
 		if err := s.writeBlock(ctx, w, t.key, len(t.logs), enc.Bytes()); err != nil {
-			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 			var quota *wal.TableOverloadedError
 			if errors.Is(err, errBlockTooLarge) || errors.As(err, &quota) && blockTooLarge(quota, len(t.logs)) {
 				accepted, rejected, unwritten, err := s.writeEachLog(ctx, w, enc, logs, t.logs)
@@ -654,7 +653,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		outcome.Accepted += n
 
 		// Decrement the inflight write bytes after writing to avoid double counting.
-		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+		s.inflightWriteBytes.Add(-int64(len(enc.Bytes())))
 	}
 
 	if noDestinationCount > 0 {
@@ -741,8 +740,8 @@ func (s *LocalStore) ImportWith(filename string, body io.ReadCloser, forward fun
 		return 0, err
 	}
 
-	atomic.AddInt64(&s.inflightWriteBytes, n)
-	defer atomic.AddInt64(&s.inflightWriteBytes, -n)
+	s.inflightWriteBytes.Add(n)
+	defer s.inflightWriteBytes.Add(-n)
 
 	if s.diskUsageExceeded(w) {
 		return 0, wal.ErrMaxDiskUsageExceeded
@@ -793,7 +792,7 @@ func (s *LocalStore) Size() int64 {
 	if s.opts.Admission != nil {
 		return s.opts.Admission.Usage().Bytes
 	}
-	return s.repository.Size() + atomic.LoadInt64(&s.inflightWriteBytes) + s.Index().TotalSize()
+	return s.repository.Size() + s.inflightWriteBytes.Load() + s.Index().TotalSize()
 }
 
 func (s *LocalStore) SegmentCount() int64 {
@@ -834,7 +833,7 @@ func (s *LocalStore) WriteDebug(w io.Writer) error {
 			return err
 		}
 		if !info.IsDir() {
-			tw.Write([]byte(fmt.Sprintf("%s\t%d\t%s\n", path, info.Size(), info.ModTime().Format(time.RFC3339))))
+			fmt.Fprintf(tw, "%s\t%d\t%s\n", path, info.Size(), info.ModTime().Format(time.RFC3339))
 			totalSize += info.Size()
 			totalSegments += 1
 		}

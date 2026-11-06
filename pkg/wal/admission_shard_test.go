@@ -52,7 +52,7 @@ func TestGlobalCapacityHoldsAcrossShards(t *testing.T) {
 	a := NewAdmission(AdmissionOpts{Global: Usage{Bytes: 1000, Segments: 100}})
 
 	var wg sync.WaitGroup
-	for n := 0; n < 200; n++ {
+	for n := range 200 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()

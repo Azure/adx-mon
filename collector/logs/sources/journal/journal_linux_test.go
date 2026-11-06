@@ -40,7 +40,7 @@ func TestJournalE2E(t *testing.T) {
 	matchTag := fmt.Sprintf("%s=%s", testtag, testValue)
 
 	numLogs := 1000
-	for i := 0; i < numLogs; i++ {
+	for i := range numLogs {
 		err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFields)
 		require.NoError(t, err)
 	}
@@ -77,7 +77,7 @@ func TestJournalE2E(t *testing.T) {
 	}
 
 	// Write logs with non-matching tags.
-	for i := 0; i < numLogs; i++ {
+	for range numLogs {
 		err := journal.Send("a", journal.PriInfo, map[string]string{"COLLECTORE2E": "OTHERTAG"})
 		require.NoError(t, err)
 	}
@@ -141,7 +141,7 @@ func TestJournalMulipleSources(t *testing.T) {
 	numLogs := 5000
 	errgrp, _ := errgroup.WithContext(context.Background())
 	errgrp.Go(func() error {
-		for i := 0; i < numLogs; i++ {
+		for i := range numLogs {
 			err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsOne)
 			if err != nil {
 				return err
@@ -150,7 +150,7 @@ func TestJournalMulipleSources(t *testing.T) {
 		return nil
 	})
 	errgrp.Go(func() error {
-		for i := 0; i < numLogs; i++ {
+		for i := range numLogs {
 			err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsTwo)
 			if err != nil {
 				return err
@@ -213,15 +213,15 @@ func TestJournalDisjunction(t *testing.T) {
 	matchB := fmt.Sprintf("%s=%s", branchBTag, testValue)
 
 	const numLogs = 50
-	for i := 0; i < numLogs; i++ {
+	for i := range numLogs {
 		err := journal.Send(fmt.Sprintf("a-%d", i), journal.PriInfo, map[string]string{branchATag: testValue})
 		require.NoError(t, err)
 	}
-	for i := 0; i < numLogs; i++ {
+	for i := range numLogs {
 		err := journal.Send(fmt.Sprintf("b-%d", i), journal.PriInfo, map[string]string{branchBTag: testValue})
 		require.NoError(t, err)
 	}
-	for i := 0; i < numLogs; i++ {
+	for i := range numLogs {
 		err := journal.Send(fmt.Sprintf("control-%d", i), journal.PriInfo, map[string]string{controlTag: testValue})
 		require.NoError(t, err)
 	}
@@ -270,7 +270,7 @@ func TestJournalInvalidCursor(t *testing.T) {
 
 	numLogs := 500
 	// Send logs first
-	for i := 0; i < numLogs; i++ {
+	for i := range numLogs {
 		err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFields)
 		require.NoError(t, err)
 	}
@@ -285,7 +285,7 @@ func TestJournalInvalidCursor(t *testing.T) {
 
 	// Write an invalid cursor with the correct format, but not from this system
 	invalidCursor := "s=65a1fbde9961443ab61e48f57b1e1cfb;i=32904c2;b=93046e4a5c424d96ad6e02659ce7dde9;m=7b29e77112;t=639d5fa6bb246;x=1cacd317ebe1eb33"
-	err := os.WriteFile(cursorFilePath, []byte(fmt.Sprintf(`{"cursor":"%s"}`, invalidCursor)), 0644)
+	err := os.WriteFile(cursorFilePath, fmt.Appendf(nil, `{"cursor":"%s"}`, invalidCursor), 0644)
 	require.NoError(t, err)
 
 	// Create the journal source with the invalid cursor

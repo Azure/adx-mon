@@ -38,11 +38,9 @@ func (s *ConstSource) Open(ctx context.Context) error {
 	ctx, closeFn := context.WithCancel(ctx)
 	s.closeFn = closeFn
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		s.generate(ctx)
-	}()
+	})
 	config := engine.BatchConfig{
 		MaxBatchSize: s.MaxBatchSize,
 		MaxBatchWait: s.FlushDuration,
@@ -53,18 +51,14 @@ func (s *ConstSource) Open(ctx context.Context) error {
 			}
 		},
 	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		engine.BatchLogs(ctx, config)
-	}()
+	})
 
 	worker := s.workerGenerator("ConstSource", s.outputQueue)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		worker.Run()
-	}()
+	})
 
 	return nil
 }

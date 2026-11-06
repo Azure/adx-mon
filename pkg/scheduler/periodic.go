@@ -63,9 +63,7 @@ func (s *Periodic) Close() error {
 //	    return nil
 //	})
 func (s *Periodic) ScheduleEvery(interval time.Duration, name string, fn func(ctx context.Context) error) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 
@@ -88,7 +86,7 @@ func (s *Periodic) ScheduleEvery(interval time.Duration, name string, fn func(ct
 				}
 			}
 		}
-	}()
+	})
 }
 
 type Runner interface {

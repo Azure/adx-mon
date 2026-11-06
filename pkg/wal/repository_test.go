@@ -48,7 +48,7 @@ func createBenchmarkSegments(ctx context.Context, dir string, count int, payload
 
 	g.Go(func() error {
 		defer close(jobs)
-		for i := 0; i < count; i++ {
+		for i := range count {
 			select {
 			case <-gctx.Done():
 				return gctx.Err()
@@ -64,10 +64,7 @@ func createBenchmarkSegments(ctx context.Context, dir string, count int, payload
 func createBenchmarkSegmentsParallel(b *testing.B, dir string, count int, payload []byte) {
 	b.Helper()
 
-	workers := runtime.NumCPU()
-	if workers > 50 {
-		workers = 50
-	}
+	workers := min(runtime.NumCPU(), 50)
 	require.NoError(b, createBenchmarkSegments(context.Background(), dir, count, payload, workers))
 }
 
@@ -95,9 +92,8 @@ func benchmarkRepositoryOpenStartup(b *testing.B, segmentCount int, payload []by
 
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
-			b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				ctx, cancel := context.WithCancel(context.Background())
 				r := NewRepository(RepositoryOpts{
 					StorageDir:             dir,
@@ -337,8 +333,8 @@ func TestRepository_RotatesWALsWithSharedScheduler(t *testing.T) {
 	require.NoError(t, r.Open(context.Background()))
 	defer r.Close()
 
-	for i := 0; i < 10; i++ {
-		w, err := r.Get(context.Background(), []byte(fmt.Sprintf("db_t%d", i)))
+	for i := range 10 {
+		w, err := r.Get(context.Background(), fmt.Appendf(nil, "db_t%d", i))
 		require.NoError(t, err)
 		require.Same(t, r.scheduler, w.scheduler)
 		require.False(t, w.ownsScheduler)
@@ -378,8 +374,8 @@ func TestRepository_CloseStopsRotationBeforeClosingWALs(t *testing.T) {
 	r := NewRepository(RepositoryOpts{StorageDir: dir, SegmentMaxAge: time.Millisecond})
 	require.NoError(t, r.Open(context.Background()))
 
-	for i := 0; i < 10; i++ {
-		w, err := r.Get(context.Background(), []byte(fmt.Sprintf("db_t%d", i)))
+	for i := range 10 {
+		w, err := r.Get(context.Background(), fmt.Appendf(nil, "db_t%d", i))
 		require.NoError(t, err)
 		require.NoError(t, w.Write(context.Background(), []byte("foo")))
 	}

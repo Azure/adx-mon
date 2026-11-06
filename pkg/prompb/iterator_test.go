@@ -432,7 +432,7 @@ func BenchmarkIterator_TimeSeries(b *testing.B) {
 	iter := NewIterator(io.NopCloser(strings.NewReader(sampleInput)))
 	require.True(b, iter.Next())
 	ts := &TimeSeries{}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ts.Reset()
 		_, err := iter.TimeSeriesInto(ts)
 		if err != nil {

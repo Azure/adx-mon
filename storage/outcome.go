@@ -57,8 +57,7 @@ func SplitOutcome(err error) (WriteOutcome, error) {
 	var result WriteOutcome
 	var failure error
 	for _, e := range multierr.Errors(err) {
-		var outcome *WriteOutcome
-		if errors.As(e, &outcome) {
+		if outcome, ok := errors.AsType[*WriteOutcome](e); ok {
 			result.add(outcome)
 			if e == error(outcome) {
 				continue

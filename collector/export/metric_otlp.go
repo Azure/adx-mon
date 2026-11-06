@@ -142,14 +142,14 @@ func NewPromToOtlpExporter(opts PromToOtlpExporterOpts) *PromToOtlpExporter {
 		transformer:        opts.Transformer,
 		resourceAttributes: attributes,
 
-		stringKVPool: pool.NewGeneric(4096, func(sz int) interface{} {
+		stringKVPool: pool.NewGeneric(4096, func(sz int) any {
 			return &commonv1.KeyValue{
 				Key:   "",
 				Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: ""}},
 			}
 		}),
 
-		datapointPool: pool.NewGeneric(4096, func(sz int) interface{} {
+		datapointPool: pool.NewGeneric(4096, func(sz int) any {
 			return &metricsv1.NumberDataPoint{
 				Attributes:   nil,
 				TimeUnixNano: 0,

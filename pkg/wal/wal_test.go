@@ -440,8 +440,7 @@ func BenchmarkWAL_RequiresRotation(b *testing.B) {
 	require.NoError(b, w.Write(context.Background(), []byte("foo")))
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = w.requiresRotation()
 	}
 }
@@ -510,10 +509,10 @@ func TestWAL_InflightWriteCreatesNextSegment(t *testing.T) {
 	require.NotNil(t, w.Segment())
 
 	// The new segment is empty, but a write is in flight so the WAL is not idle.
-	atomic.AddInt64(&w.inflightWriteBytes, 3)
+	w.inflightWriteBytes.Add(3)
 	expireSegment(w)
 	w.rotateSegmentIfNecessary()
-	atomic.AddInt64(&w.inflightWriteBytes, -3)
+	w.inflightWriteBytes.Add(-3)
 
 	require.NotNil(t, w.Segment())
 }
@@ -663,17 +662,15 @@ func TestWAL_ConcurrentWritesDuringRotation(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make(chan error, writers)
-	for i := 0; i < writers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < writes; j++ {
+	for range writers {
+		wg.Go(func() {
+			for range writes {
 				if err := w.Write(context.Background(), payload); err != nil {
 					errs <- err
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -742,19 +739,17 @@ func TestWAL_ConcurrentRotationDiscardsUnusedSegments(t *testing.T) {
 	require.NoError(t, w.Open(context.Background()))
 	defer w.Close()
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		require.NoError(t, w.Write(context.Background(), []byte("foo")))
 		expireSegment(w)
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
-		for g := 0; g < 8; g++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range 8 {
+			wg.Go(func() {
 				<-start
 				w.rotateSegmentIfNecessary()
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()
@@ -848,19 +843,17 @@ func TestWAL_ConcurrentRotationKeepsAdmissionInSyncWithDisk(t *testing.T) {
 	require.NoError(t, w.Open(context.Background()))
 	defer w.Close()
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		require.NoError(t, w.Write(context.Background(), []byte("foo")))
 		expireSegment(w)
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
-		for g := 0; g < 8; g++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range 8 {
+			wg.Go(func() {
 				<-start
 				w.rotateSegmentIfNecessary()
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()

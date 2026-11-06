@@ -100,16 +100,16 @@ func TestExecuteParsers(t *testing.T) {
 		name         string
 		parsers      []Parser
 		message      string
-		expectedBody map[string]interface{}
+		expectedBody map[string]any
 	}{
 		{
 			name:    "successful json parse",
 			parsers: []Parser{&JsonParser{}},
 			message: `{"a": 1, "b": "2", "c": {"d": 3}, "message": "hello"}`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"a": 1.0,
 				"b": "2",
-				"c": map[string]interface{}{
+				"c": map[string]any{
 					"d": 3.0,
 				},
 				"message": "hello",
@@ -119,7 +119,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "successful keyvalue parse",
 			parsers: []Parser{&KeyValueParser{}},
 			message: `a=1.1 b="abc" c=true message="hello"`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"a":       1.1,
 				"b":       "abc",
 				"c":       true,
@@ -130,10 +130,10 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "skips failing parser",
 			parsers: []Parser{&alwaysFailingParser{}, &JsonParser{}},
 			message: `{"a": 1, "b": "2", "c": {"d": 3}}`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"a": 1.0,
 				"b": "2",
-				"c": map[string]interface{}{
+				"c": map[string]any{
 					"d": 3.0,
 				},
 			},
@@ -142,10 +142,10 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "only executes the first successful parser",
 			parsers: []Parser{&alwaysFailingParser{}, &JsonParser{}, &alwaysSetsAFieldParser{}},
 			message: `{"a": 1, "b": "2", "c": {"d": 3}, "message": "hello"}`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"a": 1.0,
 				"b": "2",
-				"c": map[string]interface{}{
+				"c": map[string]any{
 					"d": 3.0,
 				},
 				"message": "hello",
@@ -156,7 +156,7 @@ func TestExecuteParsers(t *testing.T) {
 			parsers: []Parser{&JsonParser{}, &alwaysFailingParser{}},
 			// missing closing curly brace
 			message: `{"a": 1, "b": "2", "c": {"d": 3}`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				types.BodyKeyMessage: `{"a": 1, "b": "2", "c": {"d": 3}`,
 			},
 		},
@@ -164,7 +164,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "plain text, json should fail and body fall back to the message field",
 			parsers: []Parser{&JsonParser{}},
 			message: `Hello world`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				types.BodyKeyMessage: `Hello world`,
 			},
 		},
@@ -172,7 +172,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "empty parser list",
 			parsers: []Parser{},
 			message: `{"a": 1, "b": "2", "c": {"d": 3}}`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				types.BodyKeyMessage: `{"a": 1, "b": "2", "c": {"d": 3}}`,
 			},
 		},
@@ -180,7 +180,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "json and keyvalue parsers",
 			parsers: []Parser{&JsonParser{}, &KeyValueParser{}},
 			message: `a=b c=d`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"a": "b",
 				"c": "d",
 			},
@@ -189,7 +189,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "successful klog parse",
 			parsers: []Parser{&KlogParser{}},
 			message: `I0506 15:40:33.494743       1 bounded_frequency_runner.go:296] "sync-runner: ran, next possible in 1s, periodic in 1h0m0s"`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"filename":    "bounded_frequency_runner.go",
 				"line_number": "296",
 				"timestamp":   "15:40:33.494743",
@@ -200,7 +200,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "klog parse with key-value pairs",
 			parsers: []Parser{&KlogParser{}},
 			message: `I1025 00:15:15.525108       1 controller_utils.go:116] "Pod status updated" pod="kube-system/kubedns" status="ready"`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"timestamp":   "00:15:15.525108",
 				"filename":    "controller_utils.go",
 				"line_number": "116",
@@ -213,7 +213,7 @@ func TestExecuteParsers(t *testing.T) {
 			name:    "klog parse with unstructured message",
 			parsers: []Parser{&KlogParser{}},
 			message: `I0506 15:40:33.494743       1 bounded_frequency_runner.go:296] sync-runner: ran, next possible in 1s, periodic in 1h0m0s`,
-			expectedBody: map[string]interface{}{
+			expectedBody: map[string]any{
 				"timestamp":   "15:40:33.494743",
 				"filename":    "bounded_frequency_runner.go",
 				"line_number": "296",

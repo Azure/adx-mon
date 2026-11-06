@@ -2,6 +2,7 @@ package parser
 
 import (
 	jsonv1 "encoding/json"
+	"maps"
 	"strings"
 	"testing"
 
@@ -155,9 +156,7 @@ func checkJsonParseCompatibility(t *testing.T, p *JsonParser, msg string) {
 	} else {
 		require.NoError(t, err)
 		expected := map[string]any{"stream": "stdout"}
-		for k, v := range want {
-			expected[k] = v
-		}
+		maps.Copy(expected, want)
 		require.Equal(t, expected, log.GetBody())
 	}
 	require.Zero(t, p.reader.Size())

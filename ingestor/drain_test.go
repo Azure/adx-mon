@@ -40,7 +40,7 @@ func (b *drainBatcher) SegmentsTotal() int64 { return b.segments() }
 
 func newDrainService(queued int) *Service {
 	upload := make(chan *cluster.Batch, 16)
-	for n := 0; n < queued; n++ {
+	for range queued {
 		upload <- &cluster.Batch{}
 	}
 
@@ -113,8 +113,7 @@ func TestDrainReturnsWhenAlreadyEmpty(t *testing.T) {
 // for them to be uploaded rather than return as soon as the queue itself is empty.
 func TestDrainWaitsForBatchesHeldByScheduler(t *testing.T) {
 	const batches = 5
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Each queued batch is one closed segment that stays pending until a worker uploads it.
 	var segments atomic.Int64
@@ -128,7 +127,7 @@ func TestDrainWaitsForBatchesHeldByScheduler(t *testing.T) {
 			b.Release()
 		}
 	}()
-	for i := 0; i < batches; i++ {
+	for range batches {
 		upload <- &cluster.Batch{Database: "DB", Table: "Table", Segments: []wal.SegmentInfo{{Size: 1}}}
 	}
 	require.Eventually(t, func() bool { return len(upload) == 0 }, time.Second, time.Millisecond)

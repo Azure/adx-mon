@@ -50,7 +50,7 @@ func (s *oversizedServer) counts() (int, int) {
 func newOversizedBatch(t *testing.T, dir string, count int, payload []byte) *Batch {
 	t.Helper()
 	batch := &Batch{Database: "DB", Table: "A", Prefix: "DB_A_s", batcher: &fakeBatcher{}}
-	for n := 0; n < count; n++ {
+	for range count {
 		seg, err := wal.NewSegment(dir, "DB_A_s")
 		require.NoError(t, err)
 		_, err = seg.Write(context.Background(), payload)
@@ -85,8 +85,7 @@ func TestOversizedTransferIsSplitAndDelivered(t *testing.T) {
 		DisableGzip:            true,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 
@@ -116,8 +115,7 @@ func TestUndeliverableSegmentIsDroppedAndReported(t *testing.T) {
 		DisableGzip:            true,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 

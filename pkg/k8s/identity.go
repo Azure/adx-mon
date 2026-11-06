@@ -47,9 +47,9 @@ func LoadIdentity(path string) (Metadata, error) {
 
 	claims := tok.Claims.(jwt.MapClaims)
 	if v, ok := claims["kubernetes.io"]; ok {
-		if vv, ok := v.(map[string]interface{}); ok {
+		if vv, ok := v.(map[string]any); ok {
 			m.Namespace = vv["namespace"].(string)
-			if vvv, ok := vv["pod"].(map[string]interface{}); ok {
+			if vvv, ok := vv["pod"].(map[string]any); ok {
 				m.Pod = vvv["name"].(string)
 			}
 		}

@@ -55,7 +55,7 @@ func (s *Set) Next(timestamp time.Time) *prompb.TimeSeries {
 	})
 	ts.Labels = append(ts.Labels, &prompb.Label{
 		Name:  []byte("host"),
-		Value: []byte(fmt.Sprintf("host_%d", metric.n%metric.cardinality)),
+		Value: fmt.Appendf(nil, "host_%d", metric.n%metric.cardinality),
 	})
 	sort.Slice(ts.Labels, func(i, j int) bool {
 		return string(ts.Labels[i].Name) < string(ts.Labels[j].Name)
@@ -186,10 +186,10 @@ func NewDataSet(opts SetOptions) *Set {
 		},
 	}
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		s.metrics = append(s.metrics,
 			&Metric{Labels: []*prompb.Label{
-				{Name: []byte("__name__"), Value: []byte(fmt.Sprintf("metric%d", i))},
+				{Name: []byte("__name__"), Value: fmt.Appendf(nil, "metric%d", i)},
 				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,

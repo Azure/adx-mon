@@ -44,7 +44,7 @@ func openWriters(target destination, concurrency int) ([]batchWriter, error) {
 			return nil, fmt.Errorf("create output directory: %w", err)
 		}
 	}
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		if target.endpoint != "" {
 			writers = append(writers, &httpWriter{endpoint: target.endpoint, client: &http.Client{
 				Timeout: 30 * time.Second,

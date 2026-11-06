@@ -129,10 +129,10 @@ func TestPriorityQueues_NextDoesNotConsumeWorkAfterContextDone(t *testing.T) {
 
 func TestRunWorkers_QueuedNotStarvedByRealtime(t *testing.T) {
 	q := PriorityQueues{Realtime: make(chan *Batch, 1000), Queued: make(chan *Batch, 1000)}
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		q.Realtime <- &Batch{Priority: 1}
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		q.Queued <- &Batch{}
 	}
 
@@ -161,7 +161,7 @@ func TestRunWorkers_QueuedNotStarvedByRealtime(t *testing.T) {
 
 func TestRunWorkers_AllWorkersProcessQueuedWithoutRealtime(t *testing.T) {
 	q := PriorityQueues{Realtime: make(chan *Batch), Queued: make(chan *Batch, 100)}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		q.Queued <- &Batch{}
 	}
 

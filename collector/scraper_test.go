@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"testing"
 	"time"
@@ -29,12 +30,10 @@ func TestScraper_OnUpdatePodReplacement(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewScraper(&ScraperOpts{})
 			oldPod := &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace:   "default",
-					Name:        "pod",
-					UID:         "old-uid",
-					Annotations: map[string]string{"adx-mon/scrape": "true"},
-				},
+				Namespace:   "default",
+				Name:        "pod",
+				UID:         "old-uid",
+				Annotations: map[string]string{"adx-mon/scrape": "true"},
 				Spec: v1.PodSpec{
 					Containers: []v1.Container{{
 						Name:  "container",
@@ -76,12 +75,10 @@ func TestScraper_OnUpdatePodReplacement(t *testing.T) {
 func TestScraper_LogOnlyPodHasNoMetricsTargets(t *testing.T) {
 	s := NewScraper(&ScraperOpts{})
 	p := &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "log-only",
-			Annotations: map[string]string{
-				"adx-mon/log-destination": "Logs:MyApp",
-			},
+		Namespace: "default",
+		Name:      "log-only",
+		Annotations: map[string]string{
+			"adx-mon/log-destination": "Logs:MyApp",
 		},
 		Spec: v1.PodSpec{Containers: []v1.Container{{
 			Name:  "app",
@@ -326,9 +323,7 @@ func TestMakeTargets_ScrapeInterval(t *testing.T) {
 					p.Annotations = map[string]string{
 						"adx-mon/scrape": "true", "adx-mon/scrape-interval": tt.value,
 					}
-					for key, value := range mode.annotations {
-						p.Annotations[key] = value
-					}
+					maps.Copy(p.Annotations, mode.annotations)
 					p.Status.PodIP = "1.2.3.4"
 					p.Spec.Containers = []v1.Container{{Name: "app", Ports: []v1.ContainerPort{
 						{Name: "metrics", ContainerPort: 8080}, {ContainerPort: 9090},

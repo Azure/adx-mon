@@ -169,7 +169,7 @@ func TestAsyncOperations(t *testing.T) {
 	require.NotZero(t, c.LastTransitionTime)
 
 	// Create a thousand AsyncOperations, get them, ensure the array is of size 200, which is our max
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		sr.SetAsyncOperation(AsyncOperation{OperationId: strconv.Itoa(i)})
 	}
 	ops = sr.GetAsyncOperations()
@@ -211,9 +211,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 	t.Run("should submit on first execution - no condition", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -225,9 +223,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 	t.Run("should submit on first execution - condition with old timestamp", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -247,9 +243,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 	t.Run("should not submit - recent condition, no last execution time", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -269,9 +263,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 	t.Run("should submit when interval has elapsed since last execution", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -295,9 +287,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 	t.Run("should not submit when interval has not elapsed since last execution", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -351,10 +341,8 @@ func TestShouldSubmitRule(t *testing.T) {
 	t.Run("should submit when rule is being deleted", func(t *testing.T) {
 		deletionTime := metav1.Time{Time: fixedTime}
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation:        1,
-				DeletionTimestamp: &deletionTime,
-			},
+			Generation:        1,
+			DeletionTimestamp: &deletionTime,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -412,9 +400,7 @@ func TestShouldSubmitRule(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				rule := &SummaryRule{
-					ObjectMeta: metav1.ObjectMeta{
-						Generation: 1,
-					},
+					Generation: 1,
 					Spec: SummaryRuleSpec{
 						Interval: metav1.Duration{Duration: tc.interval},
 					},
@@ -439,9 +425,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 	t.Run("edge case - exactly at interval boundary", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -503,9 +487,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("first execution - no last execution time", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -524,9 +506,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("subsequent execution - continues from last execution", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -546,9 +526,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("future last execution produces full future interval", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -570,9 +548,7 @@ func TestNextExecutionWindow(t *testing.T) {
 	t.Run("should correct a wrongly set last execution time", func(t *testing.T) {
 		// fixedTime := time.Date(2025, 6, 23, 12, 1, 2, 3, time.UTC)
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -654,9 +630,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				rule := &SummaryRule{
-					ObjectMeta: metav1.ObjectMeta{
-						Generation: 1,
-					},
+					Generation: 1,
 					Spec: SummaryRuleSpec{
 						Interval: metav1.Duration{Duration: tc.interval},
 					},
@@ -681,9 +655,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("time alignment to minute boundary", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -702,9 +674,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("UTC timezone consistency", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -718,9 +688,7 @@ func TestNextExecutionWindow(t *testing.T) {
 	})
 	t.Run("sequential execution windows", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},
@@ -758,9 +726,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("handles very short intervals", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: 30 * time.Second},
 			},
@@ -780,9 +746,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("handles very long intervals", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: 7 * 24 * time.Hour}, // 1 week
 			},
@@ -802,9 +766,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("edge case - last execution exactly at current time returns next full minute", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Minute},
 			},
@@ -823,9 +785,7 @@ func TestNextExecutionWindow(t *testing.T) {
 
 	t.Run("window calculation with past execution that extends past now returns full interval", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: 2 * time.Hour},
 			},
@@ -899,9 +859,7 @@ spec:
 
 	t.Run("NextExecutionWindow with ingestion delay - first execution", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval:       metav1.Duration{Duration: time.Hour},
 				IngestionDelay: &metav1.Duration{Duration: 10 * time.Minute},
@@ -923,9 +881,7 @@ spec:
 
 	t.Run("NextExecutionWindow with ingestion delay - subsequent execution", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval:       metav1.Duration{Duration: time.Hour},
 				IngestionDelay: &metav1.Duration{Duration: 15 * time.Minute},
@@ -949,9 +905,7 @@ spec:
 
 	t.Run("NextExecutionWindow with zero ingestion delay", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval:       metav1.Duration{Duration: time.Hour},
 				IngestionDelay: &metav1.Duration{Duration: 0},
@@ -970,9 +924,7 @@ spec:
 
 	t.Run("NextExecutionWindow with very large ingestion delay", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval:       metav1.Duration{Duration: time.Hour},
 				IngestionDelay: &metav1.Duration{Duration: 2 * time.Hour},
@@ -993,9 +945,7 @@ spec:
 
 	t.Run("NextExecutionWindow with ingestion delay ignores future capping (full interval)", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval:       metav1.Duration{Duration: time.Hour},
 				IngestionDelay: &metav1.Duration{Duration: 30 * time.Minute},
@@ -1050,9 +1000,7 @@ spec:
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				rule := &SummaryRule{
-					ObjectMeta: metav1.ObjectMeta{
-						Generation: 1,
-					},
+					Generation: 1,
 					Spec: SummaryRuleSpec{
 						Interval:       metav1.Duration{Duration: tc.interval},
 						IngestionDelay: &metav1.Duration{Duration: tc.ingestionDelay},
@@ -1077,9 +1025,7 @@ spec:
 	// Delay does not mutate the window shape.
 	t.Run("Status conditions unchanged by ingestion delay", func(t *testing.T) {
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
+			Generation: 1,
 			Spec: SummaryRuleSpec{
 				Interval:       metav1.Duration{Duration: time.Hour},
 				IngestionDelay: &metav1.Duration{Duration: 10 * time.Minute},
@@ -1286,7 +1232,7 @@ func TestBackfillAsyncOperations(t *testing.T) {
 		}
 
 		// Add 199 existing operations
-		for i := 0; i < 199; i++ {
+		for i := range 199 {
 			rule.SetAsyncOperation(AsyncOperation{
 				OperationId: strconv.Itoa(i),
 				StartTime:   baseTime.Add(time.Duration(i) * time.Hour).Format(time.RFC3339),
@@ -1314,7 +1260,7 @@ func TestBackfillAsyncOperations(t *testing.T) {
 		}
 
 		// Add existing operations with times that would make them older
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			rule.SetAsyncOperation(AsyncOperation{
 				OperationId: "old-" + strconv.Itoa(i),
 				StartTime:   baseTime.Add(time.Duration(i-100) * time.Hour).Format(time.RFC3339),
@@ -1410,9 +1356,7 @@ func TestBackfillAsyncOperations(t *testing.T) {
 	t.Run("preserves existing async operations condition fields", func(t *testing.T) {
 		baseTime := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
 		rule := &SummaryRule{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 5,
-			},
+			Generation: 5,
 			Spec: SummaryRuleSpec{
 				Interval: metav1.Duration{Duration: time.Hour},
 			},

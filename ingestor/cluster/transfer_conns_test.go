@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -43,15 +42,14 @@ func TestReplicatorReusesConnectionsAcrossBursts(t *testing.T) {
 		DisableGzip:            true,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 
 	dir := t.TempDir()
 	burst := func(n int) {
 		var batches []*Batch
-		for i := 0; i < workers; i++ {
+		for i := range workers {
 			table := fmt.Sprintf("Burst%dTable%d", n, i)
 			seg, err := wal.NewSegment(dir, "DB_"+table)
 			require.NoError(t, err)

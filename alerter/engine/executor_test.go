@@ -683,7 +683,7 @@ func (unsupportedKustoValue) Convert(reflect.Value) error {
 	return nil
 }
 
-func (unsupportedKustoValue) GetValue() interface{} {
+func (unsupportedKustoValue) GetValue() any {
 	return nil
 }
 
@@ -691,13 +691,12 @@ func (unsupportedKustoValue) GetType() aztypes.Column {
 	return aztypes.Bool
 }
 
-func (unsupportedKustoValue) Unmarshal(interface{}) error {
+func (unsupportedKustoValue) Unmarshal(any) error {
 	return nil
 }
 
 func TestExecutor_RunOnce(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	e := Executor{
 		ruleStore: &fakeRuleStore{},
 	}
@@ -710,8 +709,7 @@ func TestExecutor_RunOnce(t *testing.T) {
 }
 
 func TestExecutor_syncWorkers_Remove(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	e := Executor{
 		ruleStore: &fakeRuleStore{},
 		workers: map[string]*worker{

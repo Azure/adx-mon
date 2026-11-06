@@ -16,7 +16,7 @@ import (
 
 var (
 	bytesPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return make([]byte, 0, 32*1024)
 		},
 	}

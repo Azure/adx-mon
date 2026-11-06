@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,8 +62,7 @@ func TestTableOverloadOnOnePeerDoesNotBlockAnother(t *testing.T) {
 		DisableGzip:            true,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 
@@ -110,13 +108,12 @@ func TestOverloadedPeerIsNotRetriedImmediately(t *testing.T) {
 		DisableGzip:            true,
 	})
 	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 
 	dir := t.TempDir()
-	for n := 0; n < 3; n++ {
+	for range 3 {
 		seg, err := wal.NewSegment(dir, "DB_A_s")
 		require.NoError(t, err)
 		_, err = seg.Write(ctx, []byte("payload"))

@@ -52,7 +52,7 @@ func TestUnknownDBError_NoDatabases(t *testing.T) {
 
 func TestUnknownDBError_TruncateOver10(t *testing.T) {
 	dbs := make([]string, 15)
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		dbs[i] = "db" + string(rune('a'+i))
 	}
 
@@ -66,7 +66,7 @@ func TestUnknownDBError_TruncateOver10(t *testing.T) {
 	require.Contains(t, errMsg, "--kusto-endpoint")
 
 	// Should contain first 10 databases
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.Contains(t, errMsg, dbs[i])
 	}
 
@@ -81,7 +81,7 @@ func TestUnknownDBError_TruncateOver10(t *testing.T) {
 
 func TestUnknownDBError_Exactly10Databases(t *testing.T) {
 	dbs := make([]string, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		dbs[i] = "db" + string(rune('a'+i))
 	}
 
@@ -93,7 +93,7 @@ func TestUnknownDBError_Exactly10Databases(t *testing.T) {
 	errMsg := err.Error()
 
 	// Should contain all 10 databases
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.Contains(t, errMsg, dbs[i])
 	}
 

@@ -60,15 +60,14 @@ func TestWorkerWaitsForStorage(t *testing.T) {
 
 	var acks atomic.Int64
 	batch := &types.LogBatch{Ack: func() { acks.Add(1) }}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		batch.Logs = append(batch.Logs, types.NewLog())
 	}
 	input := make(chan *types.LogBatch, 1)
 	input <- batch
 	close(input)
 
-	stop, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	stop := t.Context()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

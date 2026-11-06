@@ -159,13 +159,13 @@ func TestQueuedBatcher_MatchesScan(t *testing.T) {
 	}
 
 	// Exercise every splitting rule and both ownership outcomes.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		add("Count", 10, 0, ingestpolicy.PriorityQueued) // split by max segment count
 	}
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		add("Upload", 120, 0, ingestpolicy.PriorityQueued) // split by min upload size
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		add("Transfer", 90, 0, ingestpolicy.PriorityQueued) // split by max transfer size
 	}
 	add("Old", 10, time.Hour, ingestpolicy.PriorityQueued) // split by max transfer age
@@ -253,14 +253,14 @@ func newBenchmarkBatcher(b *testing.B, prefixes, fresh int) (*batcher, []wal.Seg
 		}
 	}
 
-	for i := 0; i < prefixes; i++ {
+	for i := range prefixes {
 		si := newSegment(fmt.Sprintf("T%d", i))
 		idx.Add(si)
 		_ = bt.segments.Mutate(si.Path, func(n int) (int, error) { return n + 1, nil })
 	}
 
 	var freshSegments []wal.SegmentInfo
-	for i := 0; i < fresh; i++ {
+	for i := range fresh {
 		si := newSegment(fmt.Sprintf("T%d", i))
 		idx.Add(si)
 		freshSegments = append(freshSegments, si)
@@ -290,8 +290,7 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 		b.Run(fmt.Sprintf("mode=scan/prefixes=%d", prefixes), func(b *testing.B) {
 			bt, freshSegments := newBenchmarkBatcher(b, prefixes, fresh)
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				owned, notOwned, err := bt.processSegments()
 				if err != nil || len(owned)+len(notOwned) != fresh {
 					b.Fatalf("unexpected batches %d %v", len(owned)+len(notOwned), err)
@@ -307,8 +306,7 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 			e := newQueuedBatcher(bt, time.Hour)
 			ctx := context.Background()
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				bt.updateSegmentMetrics()
 				for _, si := range freshSegments {
 					e.onSegment(si)
@@ -331,7 +329,7 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			ctx := context.Background()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				e.sweep()
 				e.process(ctx, time.Now(), true)
 				b.StopTimer()
@@ -343,8 +341,7 @@ func BenchmarkBatcherPeriod(b *testing.B) {
 		b.Run(fmt.Sprintf("metrics/prefixes=%d", prefixes), func(b *testing.B) {
 			bt, _ := newBenchmarkBatcher(b, prefixes, fresh)
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				bt.updateSegmentMetrics()
 			}
 		})

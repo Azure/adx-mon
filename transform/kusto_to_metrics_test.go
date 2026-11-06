@@ -1095,7 +1095,7 @@ func TestNormalizeColumnNamePerformance(t *testing.T) {
 
 	// Run multiple iterations to ensure consistent behavior
 	var results []string
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		result, err := normalizeColumnName(input)
 		require.NoError(t, err, "normalizeColumnName should not return error for valid input")
 		results = append(results, result)
@@ -1124,7 +1124,7 @@ func BenchmarkNormalizeColumnName(b *testing.B) {
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _ = normalizeColumnName(tc.input)
 			}
 		})
@@ -1435,7 +1435,7 @@ func TestConstructMetricNamePerformance(t *testing.T) {
 	// Run multiple iterations to ensure consistent behavior
 	for _, scenario := range scenarios {
 		var results []string
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			result, err := constructMetricName(scenario.baseName, scenario.prefix, scenario.columnName)
 			require.NoError(t, err, "constructMetricName should not return error for valid inputs")
 			results = append(results, result)
@@ -1465,7 +1465,7 @@ func BenchmarkConstructMetricName(b *testing.B) {
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _ = constructMetricName(tc.baseName, tc.prefix, tc.columnName)
 			}
 		})
@@ -1789,7 +1789,7 @@ func TestExtractValuesPerformance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Run multiple iterations to ensure consistent behavior
 			var results []map[string]float64
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				result, err := transformer.extractValues(row, tc.columns)
 				require.NoError(t, err)
 				results = append(results, result)
@@ -1842,7 +1842,7 @@ func BenchmarkExtractValues(b *testing.B) {
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, _ = transformer.extractValues(tc.row, tc.columns)
 			}
 		})
@@ -1967,7 +1967,7 @@ func TestToWriteRequest(t *testing.T) {
 			metrics: func() []MetricData {
 				// Simulate high cardinality with many unique label combinations
 				var metrics []MetricData
-				for i := 0; i < 1000; i++ {
+				for i := range 1000 {
 					metrics = append(metrics, MetricData{
 						Name:      "high_cardinality_metric",
 						Value:     float64(i),
@@ -2016,7 +2016,7 @@ func TestToWriteRequestPoolUsage(t *testing.T) {
 	}
 
 	// Run multiple times to exercise pool
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wr := ToWriteRequest(metrics)
 		require.NotNil(t, wr)
 		require.Len(t, wr.Timeseries, 1)
@@ -2051,7 +2051,7 @@ func TestToWriteRequestLabelSorting(t *testing.T) {
 
 	// Run multiple times to ensure consistent ordering
 	var firstOrder []string
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wr := ToWriteRequest(metrics)
 
 		var labelOrder []string
@@ -2097,7 +2097,7 @@ func BenchmarkToWriteRequest(b *testing.B) {
 			name: "ten_metrics",
 			metrics: func() []MetricData {
 				var m []MetricData
-				for i := 0; i < 10; i++ {
+				for i := range 10 {
 					m = append(m, MetricData{
 						Name:      "metric_" + string(rune('a'+i)),
 						Value:     float64(i),
@@ -2112,7 +2112,7 @@ func BenchmarkToWriteRequest(b *testing.B) {
 			name: "hundred_metrics_with_labels",
 			metrics: func() []MetricData {
 				var m []MetricData
-				for i := 0; i < 100; i++ {
+				for i := range 100 {
 					m = append(m, MetricData{
 						Name:      "high_cardinality",
 						Value:     float64(i),
@@ -2131,7 +2131,7 @@ func BenchmarkToWriteRequest(b *testing.B) {
 			name: "thousand_metrics",
 			metrics: func() []MetricData {
 				var m []MetricData
-				for i := 0; i < 1000; i++ {
+				for i := range 1000 {
 					m = append(m, MetricData{
 						Name:      "bulk_metric",
 						Value:     float64(i),
@@ -2149,7 +2149,7 @@ func BenchmarkToWriteRequest(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				wr := ToWriteRequest(tc.metrics)
 				wr.Reset()
 				prompb.WriteRequestPool.Put(wr)

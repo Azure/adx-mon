@@ -70,11 +70,9 @@ func TestWorker_BasicProcessing(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		w.Run()
-	}()
+	})
 
 	// Send a test batch
 	batch := types.LogBatchPool.Get()
@@ -115,11 +113,9 @@ func TestWorker_TransformError(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		w.Run()
-	}()
+	})
 
 	batch := types.LogBatchPool.Get()
 	log := types.LogPool.Get()
@@ -153,11 +149,9 @@ func TestWorker_SinkError(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		w.Run()
-	}()
+	})
 
 	batch := types.LogBatchPool.Get()
 	log := types.LogPool.Get()
@@ -192,11 +186,9 @@ func TestWorker_MultipleSinksConcurrent(t *testing.T) {
 		}
 
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w.Run()
-		}()
+		})
 
 		batch := types.LogBatchPool.Get()
 		log := types.LogPool.Get()
@@ -235,11 +227,9 @@ func TestWorker_MultipleSinksConcurrent(t *testing.T) {
 		}
 
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w.Run()
-		}()
+		})
 
 		batch := types.LogBatchPool.Get()
 		log := types.LogPool.Get()

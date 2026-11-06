@@ -46,13 +46,11 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 	var req testcontainers.ContainerRequest
 	if img == "" {
 		req = testcontainers.ContainerRequest{
-			FromDockerfile: testcontainers.FromDockerfile{
-				Repo:       DefaultImage,
-				Tag:        DefaultTag,
-				Context:    relative, // repo base
-				Dockerfile: "build/images/Dockerfile.collector",
-				KeepImage:  true,
-			},
+			Repo:       DefaultImage,
+			Tag:        DefaultTag,
+			Context:    relative, // repo base
+			Dockerfile: "build/images/Dockerfile.collector",
+			KeepImage:  true,
 		}
 	} else {
 		req = testcontainers.ContainerRequest{
@@ -232,14 +230,10 @@ func (k *KustoTableSchema) CslColumns() []string {
 
 func makeCollectorFunction() *adxmonv1.Function {
 	return &adxmonv1.Function{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "adx-mon.azure.com/v1",
-			Kind:       "Function",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "collector",
-			Namespace: "adx-mon",
-		},
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Function",
+		Name:       "collector",
+		Namespace:  "adx-mon",
 		Spec: adxmonv1.FunctionSpec{
 			Database: "Logs",
 			Body: `.create-or-alter function with (view=true, folder='views') Collector () {
@@ -260,14 +254,10 @@ func makeCollectorFunction() *adxmonv1.Function {
 // collectorConfigMap is a minimal config suitable for use by kustainer
 func makeCollectorConfigMap() *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "ConfigMap",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "collector-config",
-			Namespace: "adx-mon",
-		},
+		APIVersion: "v1",
+		Kind:       "ConfigMap",
+		Name:       "collector-config",
+		Namespace:  "adx-mon",
 		Data: map[string]string{
 			"config.toml": `
 # We have to keep our scape targets very light due to the capacity

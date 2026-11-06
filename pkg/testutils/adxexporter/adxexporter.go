@@ -33,13 +33,11 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*ADXE
 	}
 
 	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:       DefaultImage,
-			Tag:        DefaultTag,
-			Context:    relative,
-			Dockerfile: "build/images/Dockerfile.adxexporter",
-			KeepImage:  true,
-		},
+		Repo:       DefaultImage,
+		Tag:        DefaultTag,
+		Context:    relative,
+		Dockerfile: "build/images/Dockerfile.adxexporter",
+		KeepImage:  true,
 	}
 
 	genericContainerReq := testcontainers.GenericContainerRequest{ContainerRequest: req}

@@ -237,8 +237,7 @@ func TestLogBatch(t *testing.T) {
 func BenchmarkLogWrites(b *testing.B) {
 	log := LogPool.Get()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		log.Reset()
 		log.SetTimestamp(12345)
 		log.SetObservedTimestamp(67890)

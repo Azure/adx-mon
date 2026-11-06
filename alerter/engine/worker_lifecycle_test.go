@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
@@ -333,9 +332,9 @@ func TestWorker_ReportingHandoffCancellation(t *testing.T) {
 			scheme := runtime.NewScheme()
 			require.NoError(t, alertrulev1.AddToScheme(scheme))
 			cr := &alertrulev1.AlertRule{
-				ObjectMeta: metav1.ObjectMeta{Namespace: w.rule.Namespace, Name: w.rule.Name},
-				Spec:       alertrulev1.AlertRuleSpec{Database: "TestDB", Query: "Table | take 1", Destination: "owning-team"},
-				Status:     alertrulev1.AlertRuleStatus{Status: "Success", Message: "previous evaluation"},
+				Namespace: w.rule.Namespace, Name: w.rule.Name,
+				Spec:   alertrulev1.AlertRuleSpec{Database: "TestDB", Query: "Table | take 1", Destination: "owning-team"},
+				Status: alertrulev1.AlertRuleStatus{Status: "Success", Message: "previous evaluation"},
 			}
 			w.ctrlCli = fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cr).WithObjects(cr).Build()
 			cancel()
