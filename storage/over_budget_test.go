@@ -20,8 +20,11 @@ func newOverBudgetStore(t *testing.T, global, reserved int64) *LocalStore {
 // realtime part is written, never the other way around.
 func TestOverBudgetKeepsRealtimeWhenBothDoNotFitTogether(t *testing.T) {
 	s := newOverBudgetStore(t, 64<<10, 32<<10)
+	r, err := s.opts.Admission.Reserve("DB_Other_1.wal", wal.Destination{Database: "DB", Table: "Other"}, 10<<10, 0)
+	require.NoError(t, err)
+	defer r.Release()
 	keys := [][]byte{[]byte("DB_Fast"), []byte("DB_Slow")}
-	sizes := []int64{40 << 10, 30 << 10} // realtime fits the whole budget, queued fits its share, but not both.
+	sizes := []int64{40 << 10, 20 << 10} // realtime fits the whole budget, queued fits its share, but not both.
 
 	full, err := s.overBudget(2, func(i int) int64 { return sizes[i] }, func(i int) []byte { return keys[i] })
 	require.NoError(t, err)
