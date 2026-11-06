@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -270,4 +272,26 @@ func (w *conflictStatusWriter) Update(ctx context.Context, obj client.Object, op
 	}
 
 	return apierrors.NewConflict(schema.GroupResource{Group: "adx-mon.azure.com", Resource: "functions"}, obj.GetName(), nil)
+}
+
+func TestBackoffExhausted(t *testing.T) {
+	steps := wait.Backoff{Steps: 2, Duration: time.Millisecond}
+	notDone := func(context.Context) (bool, error) { return false, nil }
+
+	exhausted := wait.ExponentialBackoffWithContext(t.Context(), steps, notDone)
+	require.True(t, backoffExhausted(exhausted))
+
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	canceled := wait.ExponentialBackoffWithContext(canceledCtx, steps, notDone)
+	require.False(t, backoffExhausted(canceled))
+
+	requestTimeout := fmt.Errorf("update status: %w", context.DeadlineExceeded)
+	conditionErr := wait.ExponentialBackoffWithContext(t.Context(), steps, func(context.Context) (bool, error) {
+		return false, requestTimeout
+	})
+	require.ErrorIs(t, conditionErr, context.DeadlineExceeded)
+	require.False(t, backoffExhausted(conditionErr))
+
+	require.False(t, backoffExhausted(nil))
 }

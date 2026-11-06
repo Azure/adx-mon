@@ -131,7 +131,7 @@ func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) err
 		return true, nil
 	})
 	if err != nil {
-		if lastConflict != nil && backoffExhausted(ctx, err) {
+		if lastConflict != nil && backoffExhausted(err) {
 			return lastConflict
 		}
 		return err
@@ -172,7 +172,7 @@ func (f *functions) removeFinalizer(ctx context.Context, fn *adxmonv1.Function) 
 		return true, nil
 	})
 	if err != nil {
-		if lastConflict != nil && backoffExhausted(ctx, err) {
+		if lastConflict != nil && backoffExhausted(err) {
 			return lastConflict
 		}
 		return err
@@ -309,7 +309,10 @@ func logConditionStatusUpdate(fn *adxmonv1.Function, previous *metav1.Condition,
 }
 
 // backoffExhausted reports whether a wait backoff gave up because it ran out of
-// steps, as opposed to the condition failing or ctx being canceled.
-func backoffExhausted(ctx context.Context, err error) bool {
-	return wait.Interrupted(err) && ctx.Err() == nil
+// steps. wait.Interrupted also matches context errors, whether from canceling the
+// backoff context or returned by a request inside the condition, so exclude them.
+func backoffExhausted(err error) bool {
+	return wait.Interrupted(err) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded)
 }
