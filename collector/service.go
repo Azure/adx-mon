@@ -70,6 +70,9 @@ type Service struct {
 	replicator service.Component
 }
 
+// DefaultTransferBatchSize is the size at which the segments of a table are sent to the ingestor as a batch.
+const DefaultTransferBatchSize = 4 * 1024 * 1024
+
 type ServiceOpts struct {
 	ListenAddr     string
 	NodeName       string
@@ -460,7 +463,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		Partitioner:             partitioner,
 		Segmenter:               store.Index(),
 		Usage:                   store,
-		MinUploadSize:           4 * 1024 * 1024,
+		MinUploadSize:           DefaultTransferBatchSize,
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		MaxTableBatches:         max(10, opts.MaxTransferConcurrency*2),
 		UploadQueue:             transferQueue,
