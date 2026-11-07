@@ -23,7 +23,7 @@ func NewSegmentReader(path string, opts ...Option) (*SegmentReader, error) {
 		f.Close()
 		return nil, err
 	}
-	r := &SegmentReader{f: f, iter: iter}
+	r := &SegmentReader{f: f, path: path, iter: iter}
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -32,13 +32,25 @@ func NewSegmentReader(path string, opts ...Option) (*SegmentReader, error) {
 
 type SegmentReader struct {
 	f    *os.File
+	path string
 	iter Iterator
 
 	buf        []byte
 	skipHeader bool
+
+	// eof is set once the segment is read to its end.  The file is closed and the iterator's buffers released then,
+	// so a reader that is done does not hold them while later readers of the same upload are read.
+	eof        bool
+	sampleType SampleType
+	samples    uint32
+	// closed is set by Close.
+	closed bool
 }
 
 func (s *SegmentReader) Read(p []byte) (n int, err error) {
+	if s.eof {
+		return 0, io.EOF
+	}
 	if len(s.buf) > 0 {
 		n := copy(p, s.buf)
 		s.buf = s.buf[n:]
@@ -51,6 +63,7 @@ func (s *SegmentReader) Read(p []byte) (n int, err error) {
 	}
 
 	if !next {
+		s.release()
 		return 0, io.EOF
 	}
 
@@ -66,14 +79,35 @@ func (s *SegmentReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
+// release closes the segment's file and drops the iterator and its buffers once the segment is read to its end.  The
+// sample metadata is kept.
+func (s *SegmentReader) release() {
+	s.sampleType, s.samples = s.iter.Metadata()
+	s.eof = true
+	_ = s.iter.Close()
+	s.iter = nil
+	s.buf = nil
+}
+
+// Close closes the segment's file.  It returns nil if the reader already closed it at the end of the segment.
 func (s *SegmentReader) Close() error {
+	if s.closed {
+		return os.ErrClosed
+	}
+	s.closed = true
+	if s.eof {
+		return nil
+	}
 	return s.f.Close()
 }
 
 func (s *SegmentReader) SampleMetadata() (t SampleType, sampleCount uint32) {
+	if s.eof {
+		return s.sampleType, s.samples
+	}
 	return s.iter.Metadata()
 }
 
 func (s *SegmentReader) Path() string {
-	return s.f.Name()
+	return s.path
 }
