@@ -61,22 +61,65 @@ func TestBatcher_SplitPrefixWithoutTransferAge(t *testing.T) {
 	require.Equal(t, [][]string{names(segments, 0, 1, 2)}, batchPaths(notOwned))
 }
 
-// Segments older than the transfer age are uploaded here rather than transferred; younger ones are transferred.
+// Segments older than the transfer age are uploaded here in one batch rather than transferred; younger ones are
+// transferred.
 func TestBatcher_SplitPrefixUploadsSegmentsPastTransferAge(t *testing.T) {
 	b := newPriorityTestBatcher(t, wal.NewIndex(), "node2")
 	segments := agedSegments(t, time.Hour, time.Hour, time.Hour, time.Second, time.Second)
 
 	owned, notOwned := b.splitPrefix("db_Cpu", segments)
-	require.Equal(t, [][]string{names(segments, 0), names(segments, 1), names(segments, 2)}, batchPaths(owned))
+	require.Equal(t, [][]string{names(segments, 0, 1, 2)}, batchPaths(owned))
 	require.Equal(t, [][]string{names(segments, 3, 4)}, batchPaths(notOwned))
 }
 
-// A table owned here is uploaded here, and its segments past the transfer age are each uploaded alone.
+// A table owned here is uploaded here, its segments past the transfer age in one batch and its younger ones in
+// another.
 func TestBatcher_SplitPrefixOwnedSegmentsPastTransferAge(t *testing.T) {
 	b := newPriorityTestBatcher(t, wal.NewIndex(), "node1")
 	segments := agedSegments(t, time.Hour, time.Hour, time.Second, time.Second)
 
 	owned, notOwned := b.splitPrefix("db_Cpu", segments)
 	require.Empty(t, notOwned)
-	require.Equal(t, [][]string{names(segments, 0), names(segments, 1), names(segments, 2, 3)}, batchPaths(owned))
+	require.Equal(t, [][]string{names(segments, 0, 1), names(segments, 2, 3)}, batchPaths(owned))
+}
+
+// A batch of segments past the transfer age is still bounded by the segment count and size limits.
+func TestBatcher_SplitPrefixLimitsSegmentsPastTransferAge(t *testing.T) {
+	segments := agedSegments(t, time.Hour, time.Hour, time.Hour, time.Hour, time.Hour, time.Second)
+
+	b := newPriorityTestBatcher(t, wal.NewIndex(), "node2")
+	b.maxBatchSegments = 2
+	owned, notOwned := b.splitPrefix("db_Cpu", segments)
+	require.Equal(t, [][]string{names(segments, 0, 1), names(segments, 2, 3), names(segments, 4)}, batchPaths(owned))
+	require.Equal(t, [][]string{names(segments, 5)}, batchPaths(notOwned))
+
+	for name, set := range map[string]func(*batcher){
+		"upload size":   func(b *batcher) { b.minUploadSize = 300 },
+		"transfer size": func(b *batcher) { b.maxTransferSize = 300 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newPriorityTestBatcher(t, wal.NewIndex(), "node2")
+			set(b)
+			owned, notOwned := b.splitPrefix("db_Cpu", agedSegmentsLike(segments))
+			require.Equal(t, [][]string{names(segments, 0, 1, 2), names(segments, 3, 4)}, batchPaths(owned))
+			require.Equal(t, [][]string{names(segments, 5)}, batchPaths(notOwned))
+		})
+	}
+}
+
+// Only the segments past the transfer age are uploaded here; a younger batch after them is still transferred
+// whole.
+func TestBatcher_SplitPrefixTransfersSegmentsAfterOldOnes(t *testing.T) {
+	b := newPriorityTestBatcher(t, wal.NewIndex(), "node2")
+	b.maxBatchSegments = 3
+	segments := agedSegments(t, time.Hour, time.Second, time.Second, time.Second, time.Second)
+
+	owned, notOwned := b.splitPrefix("db_Cpu", segments)
+	require.Equal(t, [][]string{names(segments, 0), names(segments, 1, 2, 3)}, batchPaths(owned))
+	require.Equal(t, [][]string{names(segments, 4)}, batchPaths(notOwned))
+}
+
+// agedSegmentsLike copies segments so a test can split them again.
+func agedSegmentsLike(segments []wal.SegmentInfo) []wal.SegmentInfo {
+	return append([]wal.SegmentInfo(nil), segments...)
 }
