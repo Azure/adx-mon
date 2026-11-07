@@ -83,12 +83,13 @@ func newApp() *cli.App {
 			&cli.GenericFlag{Name: "table-limit", Value: &tableLimitValues{}, Usage: "Repeatable normalized table override as JSON: {\"database\":\"Logs\",\"table\":\"App\",\"max-bytes\":1073741824,\"max-segments\":1000}"},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
+			&cli.DurationFlag{Name: "unowned-segment-max-age", Usage: "Maximum segment age of tables owned by another ingestor, whose segments are transferred to the owner.  0 uses --max-segment-age", Value: ingestor.DefaultUnownedSegmentMaxAge},
 			&cli.StringSliceFlag{Name: "drop-prefix", Usage: "Drop transfers that match the file prefix. Transfer filenames are in the form of DestinationDB_Table_..."},
 			&cli.IntFlag{Name: "max-batch-segments", Usage: "Maximum number of segments per batch", Value: 25},
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "max-transfers-per-table", Usage: "Maximum transfers of one table in flight.  Batches of a table waiting behind its running transfers are merged into one, so the owner receives fewer, larger transfers.  0 allows every transfer worker but the reserved ones"},
-			&cli.DurationFlag{Name: "transfer-linger", Usage: "How long a closed segment of a table owned by another ingestor waits to be batched with others before it is transferred.  0 waits --upload-linger"},
+			&cli.DurationFlag{Name: "transfer-linger", Usage: "How long a closed segment of a table owned by another ingestor waits to be batched with others before it is transferred.  0 waits --upload-linger", Value: ingestor.DefaultTransferLinger},
 			&cli.IntFlag{Name: "max-uploads-per-table", Usage: "Maximum queued uploads of one table in flight.  Batches of a table waiting behind its running uploads are merged into one, so Kusto receives fewer, larger ingestions.  0 allows every upload worker but the reserved ones"},
 			&cli.IntFlag{Name: "max-upload-merge-segments", Usage: "Maximum segments in a batch made by merging the batches waiting to upload a table", Value: adx.DefaultMaxUploadMergeSegments},
 			&cli.Int64Flag{Name: "max-upload-merge-size", Usage: "Maximum uncompressed size in bytes of a batch made by merging the batches waiting to upload a table", Value: adx.DefaultMaxUploadMergeSize},
@@ -146,6 +147,7 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
+	unownedSegmentMaxAge := ctx.Duration("unowned-segment-max-age")
 	maxTransferSize = ctx.Int64("max-transfer-size")
 	maxTransferAge = ctx.Duration("max-transfer-age")
 	maxSegmentCount := ctx.Int64("max-segment-count")
@@ -349,6 +351,7 @@ func realMain(ctx *cli.Context) error {
 		PartitionSize:                partitionSize,
 		MaxSegmentSize:               maxSegmentSize,
 		MaxSegmentAge:                maxSegmentAge,
+		UnownedSegmentMaxAge:         unownedSegmentMaxAge,
 		MaxTransferSize:              maxTransferSize,
 		MaxTransferAge:               maxTransferAge,
 		MaxSegmentCount:              maxSegmentCount,

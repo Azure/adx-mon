@@ -99,6 +99,13 @@ type StoreOpts struct {
 	// Realtime overrides segment rotation settings for realtime tables.
 	Realtime wal.RotationPolicy
 
+	// UnownedSegmentMaxAge, when positive, replaces SegmentMaxAge for queued tables that Owned reports are owned by
+	// another node.
+	UnownedSegmentMaxAge time.Duration
+
+	// Owned reports whether this node owns the table of a WAL prefix.  When nil, every table is owned.
+	Owned func(prefix string) bool
+
 	// RealtimeReservedDiskBytes is disk space reserved for realtime tables.  Queued writes are rejected once disk
 	// usage reaches MaxDiskUsage minus this value.
 	RealtimeReservedDiskBytes int64
@@ -132,6 +139,8 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			EnableWALFsync:            opts.EnableWALFsync,
 			Policy:                    opts.Policy,
 			Realtime:                  opts.Realtime,
+			UnownedSegmentMaxAge:      opts.UnownedSegmentMaxAge,
+			Owned:                     opts.Owned,
 			RealtimeReservedDiskBytes: opts.RealtimeReservedDiskBytes,
 			Admission:                 opts.Admission,
 		}),

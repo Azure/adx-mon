@@ -24,9 +24,10 @@ func flagDefaults(t *testing.T, names ...string) map[string]time.Duration {
 }
 
 func TestRotationAndLingerFlagDefaults(t *testing.T) {
-	got := flagDefaults(t, "max-segment-age", "transfer-linger", "upload-linger", "max-transfer-age")
+	got := flagDefaults(t, "max-segment-age", "unowned-segment-max-age", "transfer-linger", "upload-linger", "max-transfer-age")
 	require.Equal(t, 5*time.Minute, got["max-segment-age"])
 	require.Equal(t, 5*time.Second, got["upload-linger"])
 	require.Equal(t, 90*time.Second, got["max-transfer-age"])
-	require.Equal(t, time.Duration(0), got["transfer-linger"], "0 falls back to --upload-linger")
+	require.Equal(t, time.Second, got["unowned-segment-max-age"])
+	require.Equal(t, time.Second, got["transfer-linger"])
 }

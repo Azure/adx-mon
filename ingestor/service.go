@@ -74,11 +74,25 @@ type Service struct {
 	forwarder *transferForwarder
 }
 
+const (
+	// DefaultUnownedSegmentMaxAge is the default max age of segments of tables owned by another ingestor.
+	DefaultUnownedSegmentMaxAge = time.Second
+
+	// DefaultTransferLinger is the default time a closed segment of a table owned by another ingestor waits to be
+	// batched with others before it is transferred.  Transfers waiting for the owner are merged, so it can be shorter
+	// than the upload linger.
+	DefaultTransferLinger = time.Second
+)
+
 type ServiceOpts struct {
 	StorageDir     string
 	Uploader       Uploader
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
+
+	// UnownedSegmentMaxAge, when positive, replaces MaxSegmentAge for queued tables owned by another ingestor while
+	// peer transfers are enabled, so their data reaches the owner sooner.
+	UnownedSegmentMaxAge time.Duration
 
 	K8sCli     kubernetes.Interface
 	K8sCtrlCli client.Client
@@ -236,6 +250,16 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		budgetOpts.RealtimeReservedBytes = opts.Realtime.ReservedDiskBytes
 	}
 
+	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
+		K8sCli:        opts.K8sCli,
+		Hostname:      opts.Hostname,
+		Namespace:     opts.Namespace,
+		PartitionSize: opts.PartitionSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	storeOpts := storage.StoreOpts{
 		StorageDir:             opts.StorageDir,
 		SegmentMaxSize:         opts.MaxSegmentSize,
@@ -246,6 +270,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Admission:              wal.NewAdmission(budgetOpts),
 		MetricComponent:        "ingestor",
 		StartupOpenConcurrency: opts.ConcurrentUploads,
+	}
+	if !opts.DisablePeerTransfer && opts.UnownedSegmentMaxAge > 0 {
+		storeOpts.UnownedSegmentMaxAge = opts.UnownedSegmentMaxAge
+		storeOpts.Owned = ownedBy(coord, opts.Hostname)
 	}
 	var realtimeBatch cluster.RealtimeBatchOpts
 	if opts.Realtime.enabled() {
@@ -258,16 +286,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		}
 	}
 	store := storage.NewLocalStore(storeOpts)
-
-	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
-		K8sCli:        opts.K8sCli,
-		Hostname:      opts.Hostname,
-		Namespace:     opts.Namespace,
-		PartitionSize: opts.PartitionSize,
-	})
-	if err != nil {
-		return nil, err
-	}
 
 	health := cluster.NewHealth(cluster.HealthOpts{
 		UnhealthyTimeout: time.Minute,
@@ -385,6 +403,15 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		dropFilePrefixes: opts.DropFilePrefixes,
 		forwarder:        forwarder,
 	}, nil
+}
+
+// ownedBy returns a func that reports whether hostname owns the table of a WAL prefix.  A table is treated as owned
+// while its owner is unknown, before the peers are known.
+func ownedBy(p cluster.MetricPartitioner, hostname string) func(prefix string) bool {
+	return func(prefix string) bool {
+		owner, _ := p.Owner([]byte(prefix))
+		return owner == "" || owner == hostname
+	}
 }
 
 func (s *Service) Open(ctx context.Context) error {
