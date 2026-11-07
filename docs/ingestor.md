@@ -46,8 +46,16 @@ limits how many transfers of one table run at once; later batches wait behind th
 sets no per-table limit, but at most 5 transfers run at once to each owner, one per connection to it, shared across
 the tables it owns.  `--transfer-linger` sets how long a
 closed segment of a table owned by another ingestor waits to be batched with others before it is transferred, which
-defaults to the 5 seconds owned segments wait.  If the owner answers that the table's segment is busy (423), the
-batch is retried after 100–300 ms rather than after the usual retry backoff.
+defaults to `--upload-linger`.  If the owner answers that the table's segment is busy (423), the batch is retried
+after 100–300 ms rather than after the usual retry backoff.
+
+Uploads are merged the same way.  A closed segment of a table the ingestor owns waits `--upload-linger` (5 seconds
+by default) to be batched with others.  Batches of a table that are waiting for an upload worker are merged into one
+ingestion, up to `--max-batch-segments` segments and `--max-upload-merge-size` bytes (1 GiB, Kusto's recommended
+ingestion size, measured as compressed segment bytes).  `--max-uploads-per-table` limits how many uploads of one
+table run at once; later batches wait behind them and are merged.  By default a table may use every upload worker
+but the reserved ones, so batches only merge when Kusto is slow enough that they wait.  If a merged ingestion fails,
+every segment in it is retried.
 
 With `--forward-transfers`, a collector transfer for a table owned by another ingestor is forwarded to the owner as
 it is received, so it waits for one segment rotation instead of one on each ingestor.  The transfer is stored locally

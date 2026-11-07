@@ -30,6 +30,10 @@ import (
 const (
 	ConcurrentUploads  = 50
 	batchUploadTimeout = 10 * time.Minute
+
+	// DefaultMaxUploadMergeSize bounds a batch made by merging the batches waiting for a table.  It is Kusto's
+	// recommended ingestion size.
+	DefaultMaxUploadMergeSize = 1024 * 1024 * 1024
 )
 
 // schemaMgmtTimeout bounds the table and mapping management commands so a stalled command releases the batch for
@@ -93,6 +97,36 @@ type UploaderOpts struct {
 
 	// Realtime enables streaming ingestion of realtime batches.  When nil, realtime batches use queued ingestion.
 	Realtime *RealtimeUploadOpts
+
+	// MaxUploadsPerTable, when positive, is how many queued uploads of one table run at once.  Batches of a table wait
+	// behind its running uploads, where they are merged, so Kusto receives fewer, larger ingestions.  When zero, a
+	// table may use every upload worker but the reserved ones.
+	MaxUploadsPerTable int
+
+	// MaxBatchSegments and MaxMergeSize bound a batch made by merging the queued batches waiting for a table.
+	// MaxBatchSegments defaults to cluster.DefaultMaxSegmentCount and MaxMergeSize to DefaultMaxUploadMergeSize; a
+	// negative MaxBatchSegments disables merging.
+	MaxBatchSegments int
+	MaxMergeSize     int64
+}
+
+// queueOpts returns how queued batches are scheduled across the upload workers.
+func (o UploaderOpts) queueOpts() cluster.FairQueueOpts {
+	segments := cluster.DefaultMaxSegmentCount
+	if o.MaxBatchSegments != 0 {
+		segments = max(0, o.MaxBatchSegments)
+	}
+	size := o.MaxMergeSize
+	if size <= 0 {
+		size = DefaultMaxUploadMergeSize
+	}
+	return cluster.FairQueueOpts{
+		Workers:            o.ConcurrentUploads,
+		Pipeline:           "adx:" + o.Database,
+		MaxRunningPerTable: o.MaxUploadsPerTable,
+		MergeSegments:      segments,
+		MergeBytes:         size,
+	}
 }
 
 func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
@@ -154,12 +188,9 @@ func (n *uploader) Open(ctx context.Context) error {
 func (n *uploader) startWorkers(ctx context.Context) {
 	workerCtx, closeFn := context.WithCancel(ctx)
 	n.closeFn = closeFn
-	// Schedule queued uploads fairly across destinations while preserving the
-	// realtime path and the shutdown behavior for active batches.
-	queued := cluster.FairQueue(workerCtx, n.queue, cluster.FairQueueOpts{
-		Workers:  n.opts.ConcurrentUploads,
-		Pipeline: "adx:" + n.database,
-	})
+	// Schedule queued uploads fairly across destinations while preserving the realtime path and the shutdown
+	// behavior for active batches.  Batches of a table waiting for a worker are merged into one ingestion.
+	queued := cluster.FairQueue(workerCtx, n.queue, n.opts.queueOpts())
 	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: queued}
 	n.wg.Add(n.opts.ConcurrentUploads)
 	cluster.RunWorkers(workerCtx, queues, n.opts.ConcurrentUploads, n.opts.QueuedReservedWorkersPercent, func(batch *cluster.Batch) {

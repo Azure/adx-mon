@@ -31,6 +31,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/clickhouse"
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	ingestormetrics "github.com/Azure/adx-mon/ingestor/metrics"
 	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
 	monhttp "github.com/Azure/adx-mon/pkg/http"
@@ -87,7 +88,10 @@ func newApp() *cli.App {
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "max-transfers-per-table", Usage: "Maximum transfers of one table in flight.  Batches of a table waiting behind its running transfers are merged into one, so the owner receives fewer, larger transfers.  0 allows every transfer worker but the reserved ones"},
-			&cli.DurationFlag{Name: "transfer-linger", Usage: "How long a closed segment of a table owned by another ingestor waits to be batched with others before it is transferred.  0 waits as long as segments of owned tables (5s)"},
+			&cli.DurationFlag{Name: "transfer-linger", Usage: "How long a closed segment of a table owned by another ingestor waits to be batched with others before it is transferred.  0 waits --upload-linger"},
+			&cli.IntFlag{Name: "max-uploads-per-table", Usage: "Maximum queued uploads of one table in flight.  Batches of a table waiting behind its running uploads are merged into one, so Kusto receives fewer, larger ingestions.  0 allows every upload worker but the reserved ones"},
+			&cli.Int64Flag{Name: "max-upload-merge-size", Usage: "Maximum size in bytes of a batch made by merging the batches waiting to upload a table", Value: adx.DefaultMaxUploadMergeSize},
+			&cli.DurationFlag{Name: "upload-linger", Usage: "How long a closed segment of a table this ingestor owns waits to be batched with others before it is uploaded.  0 uses the default", Value: cluster.DefaultQueuedLinger},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
 			&cli.DurationFlag{Name: "slow-request-threshold", Usage: "Threshold for slow requests. Set to 0 to disable.", Value: 10 * time.Second},
 
@@ -164,6 +168,13 @@ func realMain(ctx *cli.Context) error {
 	maxTransferConcurrency := ctx.Int("max-transfer-concurrency")
 	maxTransfersPerTable := ctx.Int("max-transfers-per-table")
 	transferLinger := ctx.Duration("transfer-linger")
+	uploadLinger := ctx.Duration("upload-linger")
+	uploadSchedule := adx.UploaderOpts{
+		ConcurrentUploads:  concurrentUploads,
+		MaxUploadsPerTable: ctx.Int("max-uploads-per-table"),
+		MaxBatchSegments:   maxBatchSegments,
+		MaxMergeSize:       ctx.Int64("max-upload-merge-size"),
+	}
 	enableWALFsync := ctx.Bool("enable-wal-fsync")
 	slowRequestThreshold := ctx.Duration("slow-request-threshold")
 
@@ -259,14 +270,14 @@ func realMain(ctx *cli.Context) error {
 	switch backend {
 	case storage.BackendADX:
 		metricsUploaders, md, err := newUploaders(
-			metricsEndpoints, storageDir, concurrentUploads,
+			metricsEndpoints, storageDir, uploadSchedule,
 			schema.DefaultMetricsMapping, adx.PromMetrics, realtimeCfg, streamingSlots)
 		if err != nil {
 			logger.Fatalf("Failed to create metrics uploader: %s", err)
 		}
 		metricsDatabases = md
 		logsUploaders, ld, err := newUploaders(
-			logsEndpoints, storageDir, concurrentUploads,
+			logsEndpoints, storageDir, uploadSchedule,
 			schema.DefaultLogsMapping, adx.OTLPLogs, realtimeCfg, streamingSlots)
 		if err != nil {
 			logger.Fatalf("Failed to create logs uploader: %s", err)
@@ -347,6 +358,7 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferConcurrency:       maxTransferConcurrency,
 		MaxTransfersPerTable:         maxTransfersPerTable,
 		TransferLinger:               transferLinger,
+		UploadLinger:                 uploadLinger,
 		InsecureSkipVerify:           insecureSkipVerify,
 		DropFilePrefixes:             dropPrefixes,
 		SlowRequestThreshold:         slowRequestThreshold.Seconds(),
@@ -545,7 +557,8 @@ func parseStorageEndpoint(endpoint string) (string, string, error) {
 	return target, database, nil
 }
 
-func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
+// newUploaders returns an uploader for each endpoint, scheduled as schedule says.
+func newUploaders(endpoints []string, storageDir string, schedule adx.UploaderOpts,
 	defaultMapping schema.SchemaMapping, sampleType adx.SampleType,
 	realtimeCfg *realtimeConfig, streamingSlots map[string]*adx.StreamingSlots) ([]adx.Uploader, []string, error) {
 
@@ -584,12 +597,16 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 		uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
 			StorageDir:        storageDir,
 			Database:          database,
-			ConcurrentUploads: concurrentUploads,
+			ConcurrentUploads: schedule.ConcurrentUploads,
 			DefaultMapping:    defaultMapping,
 			SampleType:        sampleType,
 
 			QueuedReservedWorkersPercent: realtimeCfg.QueuedReservedWorkersPercent,
 			Realtime:                     realtimeCfg.uploadOpts(database, addr, streamingSlots),
+
+			MaxUploadsPerTable: schedule.MaxUploadsPerTable,
+			MaxBatchSegments:   schedule.MaxBatchSegments,
+			MaxMergeSize:       schedule.MaxMergeSize,
 		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
