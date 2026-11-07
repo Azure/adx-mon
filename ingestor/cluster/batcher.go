@@ -515,6 +515,8 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 	var (
 		batchSize int64
 		batch     *Batch
+		// local is set when the batch holds a segment past the transfer age, so it is uploaded here.
+		local bool
 	)
 
 	db, table, _, _, err := wal.ParseFilename(v[0].Path)
@@ -537,6 +539,18 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 	batch = newBatch()
 
 	for _, si := range v {
+		// If the file has been on disk for more than the transfer age, we're behind on uploading so upload it directly
+		// ourselves vs transferring it to another node, rather than have a node that's behind on uploading.  Segments
+		// past the transfer age are batched together, so a backlog is uploaded in batches as large as the limits
+		// allow rather than one segment at a time.  A batch of them ends before a segment young enough to transfer.
+		old := b.maxTransferAge > 0 && time.Since(si.CreatedAt) > b.maxTransferAge
+		if local && !old && len(batch.Segments) > 0 {
+			owned = append(owned, batch)
+			batch = newBatch()
+			batchSize = 0
+		}
+		local = old
+
 		batch.Segments = append(batch.Segments, si)
 		batchSize += si.Size
 
@@ -555,6 +569,7 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 			owned = append(owned, batch)
 			batch = newBatch()
 			batchSize = 0
+			local = false
 			continue
 		}
 
@@ -567,6 +582,7 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 			owned = append(owned, batch)
 			batch = newBatch()
 			batchSize = 0
+			local = false
 			continue
 		}
 
@@ -578,23 +594,8 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 			owned = append(owned, batch)
 			batch = newBatch()
 			batchSize = 0
+			local = false
 			continue
-		}
-
-		createdAt := si.CreatedAt
-
-		// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
-		// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
-		// rather take that hit than have b node that's behind on uploading.
-		if b.maxTransferAge > 0 && time.Since(createdAt) > b.maxTransferAge {
-			if logger.IsDebug() {
-				logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
-			}
-			owned = append(owned, batch)
-			batch = newBatch()
-			batchSize = 0
-			continue
-
 		}
 	}
 
@@ -609,7 +610,7 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 
 	// Realtime batches are uploaded by the node that has them rather than transferred to a peer to avoid the added
 	// latency.
-	if owner == b.hostname || !peerHealthy || b.transferDisabled || priority == ingestpolicy.PriorityRealtime {
+	if local || owner == b.hostname || !peerHealthy || b.transferDisabled || priority == ingestpolicy.PriorityRealtime {
 		owned = append(owned, batch)
 	} else {
 		notOwned = append(notOwned, batch)
