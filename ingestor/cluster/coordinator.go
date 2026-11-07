@@ -330,9 +330,13 @@ func (c *coordinator) computePeerInfo() PeerInfo {
 	return PeerInfo{Count: len(names), Rank: sort.SearchStrings(names, c.hostname)}
 }
 
+// Owner returns the node that owns b and its address, or empty strings before the peers are known.
 func (c *coordinator) Owner(b []byte) (string, string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.part == nil {
+		return "", ""
+	}
 	return c.part.Owner(b)
 }
 
