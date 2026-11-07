@@ -73,6 +73,13 @@ type Service struct {
 // DefaultTransferBatchSize is the size at which the segments of a table are sent to the ingestor as a batch.
 const DefaultTransferBatchSize = 4 * 1024 * 1024
 
+func (o *ServiceOpts) transferBatchSize() int64 {
+	if o.TransferBatchSize > 0 {
+		return o.TransferBatchSize
+	}
+	return DefaultTransferBatchSize
+}
+
 type ServiceOpts struct {
 	ListenAddr     string
 	NodeName       string
@@ -154,6 +161,10 @@ type ServiceOpts struct {
 	// size of segments on the receiving size.  A lower number creates more batches and high remote transfer calls.  If
 	// not specified, the default is 25.
 	MaxBatchSegments int
+
+	// TransferBatchSize is the size at which the segments of a table are sent to the ingestor as a batch.  When zero,
+	// it is DefaultTransferBatchSize.
+	TransferBatchSize int64
 
 	// DisableGzip disables gzip compression for the transfer endpoint.
 	DisableGzip bool
@@ -463,7 +474,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		Partitioner:             partitioner,
 		Segmenter:               store.Index(),
 		Usage:                   store,
-		MinUploadSize:           DefaultTransferBatchSize,
+		MinUploadSize:           opts.transferBatchSize(),
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		MaxTableBatches:         max(10, opts.MaxTransferConcurrency*2),
 		UploadQueue:             transferQueue,
