@@ -10,6 +10,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
+	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -215,7 +216,34 @@ func TestUploaderUploadsWaitingBatchesSeparatelyWithoutMerging(t *testing.T) {
 	require.True(t, second.IsRemoved())
 }
 
-// A merged batch stays within MaxMergeSize and MaxBatchSegments.
+// Merges are bounded by the uncompressed size of segments, or ten times their size on disk when it is not known.
+func TestUploadSize(t *testing.T) {
+	require.Equal(t, int64(500), uploadSize(wal.SegmentInfo{Size: 100, RawSize: 500}))
+	require.Equal(t, int64(1000), uploadSize(wal.SegmentInfo{Size: 100}))
+}
+
+// The uncompressed size a segment reports is the size of the data ingested from it.
+func TestUploaderRawSizeIsIngestedSize(t *testing.T) {
+	rec := newUploadRecorder(false)
+	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 2}, rec)
+
+	seg, err := wal.NewSegment(env.dir, "db_Cpu")
+	require.NoError(t, err)
+	for _, v := range []string{"1", "2", "3"} {
+		_, err = seg.Write(context.Background(), csvRow(v))
+		require.NoError(t, err)
+	}
+	info := seg.Info()
+	require.NoError(t, seg.Close())
+	info.Priority = ingestpolicy.PriorityQueued
+	env.idx.Add(info)
+	env.u.UploadQueue() <- env.nextBatch(t, ingestpolicy.PriorityQueued)
+
+	require.Equal(t, info.RawSize, int64(len(rec.waitStarted(t))))
+	require.Less(t, info.RawSize, uploadSize(wal.SegmentInfo{Size: info.Size}))
+}
+
+// A merged batch stays within MaxMergeSize, in uncompressed bytes, and MaxBatchSegments.
 func TestUploaderMergeLimits(t *testing.T) {
 	row := int64(len(csvRow("1")))
 	for name, opts := range map[string]UploaderOpts{
@@ -300,6 +328,8 @@ func TestUploaderLimitsUploadsPerTable(t *testing.T) {
 
 func TestUploaderOptsQueueOpts(t *testing.T) {
 	opts := UploaderOpts{Database: "db", ConcurrentUploads: 10}.queueOpts()
+	require.NotNil(t, opts.MergeSize)
+	opts.MergeSize = nil
 	require.Equal(t, cluster.FairQueueOpts{
 		Workers: 10, Pipeline: "adx:db", MergeSegments: cluster.DefaultMaxSegmentCount, MergeBytes: DefaultMaxUploadMergeSize,
 	}, opts)

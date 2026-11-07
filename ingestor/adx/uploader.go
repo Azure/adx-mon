@@ -31,10 +31,23 @@ const (
 	ConcurrentUploads  = 50
 	batchUploadTimeout = 10 * time.Minute
 
-	// DefaultMaxUploadMergeSize bounds a batch made by merging the batches waiting for a table.  It is Kusto's
-	// recommended ingestion size.
+	// DefaultMaxUploadMergeSize bounds the uncompressed size of a batch made by merging the batches waiting for a
+	// table.  It is Kusto's recommended ingestion size.
 	DefaultMaxUploadMergeSize = 1024 * 1024 * 1024
+
+	// unknownCompressionRatio estimates the uncompressed size of a segment that does not report one.  It is above
+	// the ratios segments usually compress by, so such segments merge into smaller ingestions rather than larger
+	// ones.
+	unknownCompressionRatio = 10
 )
+
+// uploadSize returns the uncompressed size of a segment as it is ingested, or an estimate when it is not known.
+func uploadSize(s wal.SegmentInfo) int64 {
+	if s.RawSize > 0 {
+		return s.RawSize
+	}
+	return s.Size * unknownCompressionRatio
+}
 
 // schemaMgmtTimeout bounds the table and mapping management commands so a stalled command releases the batch for
 // retry instead of holding an upload worker for the full batchUploadTimeout.
@@ -104,8 +117,9 @@ type UploaderOpts struct {
 	MaxUploadsPerTable int
 
 	// MaxBatchSegments and MaxMergeSize bound a batch made by merging the queued batches waiting for a table.
-	// MaxBatchSegments defaults to cluster.DefaultMaxSegmentCount and MaxMergeSize to DefaultMaxUploadMergeSize; a
-	// negative MaxBatchSegments disables merging.
+	// MaxMergeSize is in uncompressed bytes, as they are ingested.  MaxBatchSegments defaults to
+	// cluster.DefaultMaxSegmentCount and MaxMergeSize to DefaultMaxUploadMergeSize; a negative MaxBatchSegments
+	// disables merging.
 	MaxBatchSegments int
 	MaxMergeSize     int64
 }
@@ -126,6 +140,7 @@ func (o UploaderOpts) queueOpts() cluster.FairQueueOpts {
 		MaxRunningPerTable: o.MaxUploadsPerTable,
 		MergeSegments:      segments,
 		MergeBytes:         size,
+		MergeSize:          uploadSize,
 	}
 }
 
