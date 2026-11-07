@@ -198,7 +198,7 @@ func TestUploaderMergesWaitingBatches(t *testing.T) {
 // With merging disabled, waiting batches are uploaded one at a time, in order.
 func TestUploaderUploadsWaitingBatchesSeparatelyWithoutMerging(t *testing.T) {
 	rec := newUploadRecorder(true)
-	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 2, MaxBatchSegments: -1}, rec)
+	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 2, MaxMergeSegments: -1}, rec)
 
 	first, _ := env.queuedBatch(t, "Cpu", "1")
 	env.u.UploadQueue() <- first
@@ -243,12 +243,12 @@ func TestUploaderRawSizeIsIngestedSize(t *testing.T) {
 	require.Less(t, info.RawSize, uploadSize(wal.SegmentInfo{Size: info.Size}))
 }
 
-// A merged batch stays within MaxMergeSize, in uncompressed bytes, and MaxBatchSegments.
+// A merged batch stays within MaxMergeSize, in uncompressed bytes, and MaxMergeSegments.
 func TestUploaderMergeLimits(t *testing.T) {
 	row := int64(len(csvRow("1")))
 	for name, opts := range map[string]UploaderOpts{
 		"size":     {MaxMergeSize: 2 * row},
-		"segments": {MaxBatchSegments: 2},
+		"segments": {MaxMergeSegments: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := newUploadRecorder(true)
@@ -331,13 +331,13 @@ func TestUploaderOptsQueueOpts(t *testing.T) {
 	require.NotNil(t, opts.MergeSize)
 	opts.MergeSize = nil
 	require.Equal(t, cluster.FairQueueOpts{
-		Workers: 10, Pipeline: "adx:db", MergeSegments: cluster.DefaultMaxSegmentCount, MergeBytes: DefaultMaxUploadMergeSize,
+		Workers: 10, Pipeline: "adx:db", MergeSegments: DefaultMaxUploadMergeSegments, MergeBytes: DefaultMaxUploadMergeSize,
 	}, opts)
 
-	opts = UploaderOpts{Database: "db", ConcurrentUploads: 10, MaxUploadsPerTable: 2, MaxBatchSegments: 5, MaxMergeSize: 7}.queueOpts()
+	opts = UploaderOpts{Database: "db", ConcurrentUploads: 10, MaxUploadsPerTable: 2, MaxMergeSegments: 5, MaxMergeSize: 7}.queueOpts()
 	require.Equal(t, 2, opts.MaxRunningPerTable)
 	require.Equal(t, 5, opts.MergeSegments)
 	require.Equal(t, int64(7), opts.MergeBytes)
 
-	require.Zero(t, UploaderOpts{MaxBatchSegments: -1}.queueOpts().MergeSegments)
+	require.Zero(t, UploaderOpts{MaxMergeSegments: -1}.queueOpts().MergeSegments)
 }
