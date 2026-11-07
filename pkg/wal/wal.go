@@ -93,6 +93,9 @@ type SegmentInfo struct {
 	Size      int64
 	CreatedAt time.Time
 
+	// RawSize is the uncompressed size of the segment's values, as they are ingested, or zero when it is not known.
+	RawSize int64
+
 	// Priority is the ingestion priority of the segment's table.
 	Priority ingestpolicy.Priority
 }

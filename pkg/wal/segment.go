@@ -93,6 +93,9 @@ type segment struct {
 	prefix    string
 	filePos   uint64
 
+	// rawSize is the uncompressed size of the values in the segment's blocks.
+	rawSize atomic.Int64
+
 	wg sync.WaitGroup
 	mu *adxsync.RWMutex
 
@@ -326,6 +329,7 @@ func (s *segment) Info() SegmentInfo {
 		Prefix:    s.prefix,
 		Ulid:      s.id,
 		Size:      sz,
+		RawSize:   s.rawSize.Load(),
 		CreatedAt: s.createdAt,
 		Path:      s.path,
 	}
@@ -369,6 +373,10 @@ func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 	} else if n == 0 {
 		return 0, nil
 	}
+	raw, err := blocksRawSize(buf[8:])
+	if err != nil {
+		return 0, err
+	}
 
 	if !s.mu.TryLockFor(ctx, appendLockWait) {
 		return 0, ErrSegmentLocked
@@ -391,6 +399,7 @@ func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 		return 0, err
 	}
 	atomic.AddUint64(&s.filePos, uint64(n))
+	s.rawSize.Add(raw)
 	return n, nil
 }
 
@@ -409,7 +418,39 @@ func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) (
 	}
 
 	atomic.AddUint64(&s.filePos, uint64(written))
+	s.rawSize.Add(int64(len(buf)))
 	return written, err
+}
+
+// blocksRawSize returns the uncompressed size of the values in a sequence of length and CRC prefixed blocks, read
+// from each block's encoded length without decompressing it.
+func blocksRawSize(blocks []byte) (int64, error) {
+	var raw int64
+	for len(blocks) > 0 {
+		if len(blocks) < 8 {
+			return 0, fmt.Errorf("short block header")
+		}
+		n := int(binary.BigEndian.Uint32(blocks[:4]))
+		if len(blocks) < 8+n {
+			return 0, fmt.Errorf("short block")
+		}
+		size, err := blockRawSize(blocks[8 : 8+n])
+		if err != nil {
+			return 0, err
+		}
+		raw += size
+		blocks = blocks[8+n:]
+	}
+	return raw, nil
+}
+
+// blockRawSize returns the uncompressed size of the value in an encoded block, excluding its 8 byte block header.
+func blockRawSize(block []byte) (int64, error) {
+	n, err := s2.DecodedLen(block)
+	if err != nil {
+		return 0, err
+	}
+	return max(0, int64(n)-8), nil
 }
 
 // Bytes returns full segment file as byte slice.
@@ -475,7 +516,10 @@ func (s *segment) Repair() error {
 	var (
 		lastGoodIdx, idx = 8, 8
 		lenCrcBuf        [8]byte
+		raw              int64
 	)
+	// The blocks read here are the segment's contents, so their sizes are its uncompressed size once it is repaired.
+	defer func() { s.rawSize.Store(raw) }()
 	for {
 		// Read the block length
 		n, err := s.w.Read(lenCrcBuf[:8])
@@ -514,6 +558,12 @@ func (s *segment) Repair() error {
 			return s.truncate(int64(lastGoodIdx))
 		}
 
+		size, err := blockRawSize(buf[:blockLen])
+		if err != nil {
+			logger.Warnf("Repairing segment %s, invalid block, truncating at %d", s.path, lastGoodIdx)
+			return s.truncate(int64(lastGoodIdx))
+		}
+		raw += size
 		lastGoodIdx = idx
 	}
 }
