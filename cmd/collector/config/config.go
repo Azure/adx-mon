@@ -102,6 +102,8 @@ type Config struct {
 	TableLimits                  []wal.TableLimit `toml:"table-limits,omitempty" comment:"Overrides for normalized database/table backlog budgets."`
 	WALFlushIntervalMilliSeconds int              `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
 	MaxTransferConcurrency       int              `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
+	MaxBatchSegments             int              `toml:"max-batch-segments,omitempty" comment:"Maximum segments of a table sent to the ingestor in one transfer. (default 25)"`
+	TransferBatchSize            int64            `toml:"transfer-batch-size,omitempty" comment:"Size in bytes at which the segments of a table are sent to the ingestor in one transfer. Keep it below the ingestor's max-transfer-size. (default 4194304)"`
 
 	StorageDir  string `toml:"storage-dir,omitempty" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof,omitempty" comment:"Enable pprof endpoints."`
