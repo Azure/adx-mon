@@ -52,6 +52,14 @@ type RepositoryOpts struct {
 	// Realtime overrides the segment rotation settings for realtime WALs.
 	Realtime RotationPolicy
 
+	// UnownedSegmentMaxAge, when positive, replaces SegmentMaxAge for queued WALs of tables that Owned reports are
+	// owned by another node.  Their segments are transferred to the owner rather than uploaded, so holding them here
+	// only delays them.  Ownership is checked when a WAL is created and again by each rotation sweep.
+	UnownedSegmentMaxAge time.Duration
+
+	// Owned reports whether this node owns the table of a WAL prefix.  When nil, every table is owned.
+	Owned func(prefix string) bool
+
 	// RealtimeReservedDiskBytes is disk space reserved for realtime WALs.  Queued WALs reject writes once total disk
 	// usage reaches MaxDiskUsage minus this value.  It only applies when Policy has realtime tables and is less than
 	// MaxDiskUsage.
@@ -81,16 +89,46 @@ func NewRepository(opts RepositoryOpts) *Repository {
 }
 
 // sweepRotations rotates any WAL segments that require it.  They are rotated after the WALs are listed, since the
-// listing holds partition locks that block creating WALs, and in parallel like scheduled rotations.
+// listing holds partition locks that block creating WALs, and in parallel like scheduled rotations.  When the age
+// limit depends on ownership, each WAL's limit is updated first so a table that moved between nodes rotates by its
+// new owner's limit.
 func (s *Repository) sweepRotations() {
-	var due []*WAL
+	var due, wals []*WAL
+	refresh := s.unownedRotation()
 	_ = s.wals.Each(func(key string, value *WAL) error {
-		if value.requiresRotation() {
+		if refresh {
+			wals = append(wals, value)
+		} else if value.requiresRotation() {
 			due = append(due, value)
 		}
 		return nil
 	})
+	for _, w := range wals {
+		w.SetSegmentMaxAge(s.segmentMaxAge(w.opts.Prefix, w.opts.Priority))
+		if w.requiresRotation() {
+			due = append(due, w)
+		}
+	}
 	s.scheduler.rotate(due)
+}
+
+// unownedRotation reports whether WALs of tables owned by another node rotate by their own age limit.
+func (s *Repository) unownedRotation() bool {
+	return s.opts.UnownedSegmentMaxAge > 0 && s.opts.Owned != nil
+}
+
+// segmentMaxAge returns the segment age limit of the WAL with the given prefix and priority.
+func (s *Repository) segmentMaxAge(prefix string, p ingestpolicy.Priority) time.Duration {
+	if p == ingestpolicy.PriorityRealtime {
+		if s.opts.Realtime.SegmentMaxAge > 0 {
+			return s.opts.Realtime.SegmentMaxAge
+		}
+		return s.opts.SegmentMaxAge
+	}
+	if s.unownedRotation() && !s.opts.Owned(prefix) {
+		return s.opts.UnownedSegmentMaxAge
+	}
+	return s.opts.SegmentMaxAge
 }
 
 func (s *Repository) Open(ctx context.Context) error {
@@ -319,11 +357,9 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 
 	opts.Priority = s.priority(prefix)
 	opts.MaxDiskUsage = s.MaxDiskUsage(opts.Priority)
+	opts.SegmentMaxAge = s.segmentMaxAge(prefix, opts.Priority)
 	if opts.Priority == ingestpolicy.PriorityRealtime {
 		rt := s.opts.Realtime
-		if rt.SegmentMaxAge > 0 {
-			opts.SegmentMaxAge = rt.SegmentMaxAge
-		}
 		if rt.SegmentMaxSize > 0 {
 			opts.SegmentMaxSize = rt.SegmentMaxSize
 		}

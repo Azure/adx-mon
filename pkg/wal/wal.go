@@ -72,6 +72,10 @@ type WAL struct {
 	// to the active segment.
 	inflightWriteBytes atomic.Int64
 
+	// maxAge is the segment age limit in nanoseconds.  It starts at opts.SegmentMaxAge and changes with
+	// SetSegmentMaxAge.
+	maxAge atomic.Int64
+
 	// rotationJitter is how much earlier than its max age the current segment rotates.  WALs whose segments are
 	// created together, such as at startup or by one rotation sweep, would otherwise keep rotating at the same moment.
 	rotationJitter atomic.Int64
@@ -158,12 +162,38 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 		opts.Index = NewIndex()
 	}
 
-	return &WAL{
+	w := &WAL{
 		index:         opts.Index,
 		opts:          opts,
 		scheduler:     opts.scheduler,
 		rotationIndex: -1,
-	}, nil
+	}
+	w.maxAge.Store(int64(opts.SegmentMaxAge))
+	return w, nil
+}
+
+// SegmentMaxAge returns the age at which the WAL's segments rotate.  0 means they do not rotate by age.
+func (w *WAL) SegmentMaxAge() time.Duration {
+	return time.Duration(w.maxAge.Load())
+}
+
+// SetSegmentMaxAge changes the age at which the WAL's segments rotate, including the current segment.  0 stops
+// rotating them by age.
+func (w *WAL) SetSegmentMaxAge(d time.Duration) {
+	if w.SegmentMaxAge() == d {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.maxAge.Store(int64(d))
+	w.rotationJitter.Store(int64(rotationJitter(d)))
+	if d <= 0 {
+		if w.scheduler != nil {
+			w.scheduler.unschedule(w)
+		}
+		return
+	}
+	w.scheduleRotationLocked()
 }
 
 func (w *WAL) Open(ctx context.Context) error {
@@ -370,7 +400,7 @@ func (w *WAL) requiresRotation() bool {
 	}
 
 	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
-	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Duration(monoNow()-createdAt) >= w.segmentMaxAge()
+	return w.SegmentMaxAge() > 0 && createdAt != 0 && time.Duration(monoNow()-createdAt) >= w.segmentMaxAge()
 }
 
 // processStart anchors segment ages to the monotonic clock.
@@ -393,7 +423,15 @@ const rotationJitterFraction = 10
 
 // segmentMaxAge returns the age at which the current segment rotates: its max age less its jitter.
 func (w *WAL) segmentMaxAge() time.Duration {
-	return w.opts.SegmentMaxAge - time.Duration(w.rotationJitter.Load())
+	return w.SegmentMaxAge() - time.Duration(w.rotationJitter.Load())
+}
+
+// rotationJitter returns a random duration up to a tenth of maxAge by which a segment rotates early.
+func rotationJitter(maxAge time.Duration) time.Duration {
+	if window := maxAge / rotationJitterFraction; window > 0 {
+		return rand.N(window)
+	}
+	return 0
 }
 
 // testHookSegmentCreated, if set, is called each time a WAL creates a segment.
@@ -424,11 +462,7 @@ func (w *WAL) setSegment(seg Segment) {
 	}
 	w.segmentSize.Store(seg.Size())
 	atomic.StoreInt64(&w.segmentCreatedAt, monoNow())
-	var jitter time.Duration
-	if window := w.opts.SegmentMaxAge / rotationJitterFraction; window > 0 {
-		jitter = rand.N(window)
-	}
-	w.rotationJitter.Store(int64(jitter))
+	w.rotationJitter.Store(int64(rotationJitter(w.SegmentMaxAge())))
 	w.scheduleRotationLocked()
 }
 
@@ -441,7 +475,7 @@ func (w *WAL) scheduleRotation() {
 
 // scheduleRotationLocked is like scheduleRotation.  w.mu must be held.
 func (w *WAL) scheduleRotationLocked() {
-	if w.closed || w.scheduler == nil || w.opts.SegmentMaxAge <= 0 {
+	if w.closed || w.scheduler == nil || w.SegmentMaxAge() <= 0 {
 		return
 	}
 	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)

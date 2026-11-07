@@ -118,6 +118,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
   - `--cluster-labels`: Labels used to identify and distinguish ingestor clusters (format: `<key>=<value>`). Used for `<key>` substitutions in SummaryRules.
   - `--uploads`: Number of concurrent uploads.
   - `--max-segment-size`, `--max-segment-age`: Segment batching thresholds.
+  - `--unowned-segment-max-age`: Segment age limit for tables owned by another ingestor, whose segments are transferred.
   - `--max-transfer-size`, `--max-transfer-age`: Peer transfer thresholds.
   - `--disable-peer-transfer`: Disable peer transfer (upload all segments directly).
   - `--forward-transfers`: Forward collector transfers to the ingestor that owns their table as they are received.

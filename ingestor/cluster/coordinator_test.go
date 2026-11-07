@@ -424,3 +424,12 @@ func TestCoordinator_SubscriberCanReadPeers(t *testing.T) {
 	require.NoError(t, c.syncPeers())
 	require.Equal(t, PeerInfo{Count: 2, Rank: 0}, got)
 }
+
+// Owner is safe to call before the coordinator knows its peers, such as by WALs opened at startup.
+func TestCoordinator_OwnerBeforeOpen(t *testing.T) {
+	c, err := NewCoordinator(&CoordinatorOpts{Hostname: "ingestor-0"})
+	require.NoError(t, err)
+	owner, addr := c.Owner([]byte("db_T"))
+	require.Empty(t, owner)
+	require.Empty(t, addr)
+}
