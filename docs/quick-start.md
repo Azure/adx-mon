@@ -78,6 +78,14 @@ adx-mon/scheme: "https"
 adx-mon/path: "/metrics"
 ```
 
+Exporters that require HTTP Basic authentication over verified TLS, such as DCGM exporter or node-exporter, can instead select a collector scrape TLS profile with `adx-mon/tls-profile`. See [Basic authentication over TLS](config.md#basic-authentication-over-tls).
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/scheme: "https"
+adx-mon/tls-profile: "exporter"
+```
+
 ### Logs
 
 ADX-Mon collector supports discovering logs from pods. To enable log collection and configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`. You do not need `adx-mon/scrape` for logs; add it only if you also want to scrape the pod's metrics endpoints.
