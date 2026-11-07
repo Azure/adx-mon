@@ -2,6 +2,7 @@ package wal
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"testing"
 	"time"
@@ -73,4 +74,29 @@ func TestWAL_RotationDeadlinesAreSpread(t *testing.T) {
 	t.Logf("rotation deadlines of 50 segments created together span %s to %s after creation", earliest, latest)
 	require.LessOrEqual(t, latest, maxAge)
 	require.GreaterOrEqual(t, latest-earliest, maxAge/20)
+}
+
+// The sweep rotates the WALs that are due by their own limits and leaves the others.
+func TestRepository_SweepRotatesDueWALs(t *testing.T) {
+	r := NewRepository(RepositoryOpts{StorageDir: t.TempDir(), SegmentMaxSize: 64, SegmentMaxAge: time.Hour})
+	ctx := context.Background()
+	require.NoError(t, r.Open(ctx))
+	defer r.Close()
+
+	full, err := r.Get(ctx, []byte("db_full"))
+	require.NoError(t, err)
+	incompressible := make([]byte, 128)
+	_, _ = cryptorand.Read(incompressible)
+	require.NoError(t, full.Write(ctx, incompressible))
+	small, err := r.Get(ctx, []byte("db_small"))
+	require.NoError(t, err)
+	require.NoError(t, small.Write(ctx, []byte("data")))
+	fullPath, smallPath := full.Path(), small.Path()
+
+	r.sweepRotations()
+	require.Len(t, r.Index().Get(nil, "db_full"), 1)
+	require.Empty(t, r.Index().Get(nil, "db_small"))
+	require.NotEqual(t, fullPath, full.Path())
+	require.Equal(t, smallPath, small.Path())
+	require.Equal(t, time.Hour, small.opts.SegmentMaxAge)
 }
