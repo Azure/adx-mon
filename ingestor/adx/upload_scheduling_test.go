@@ -172,10 +172,32 @@ func TestUploaderRunsTableOnUnreservedWorkers(t *testing.T) {
 	require.Eventually(t, func() bool { return len(rec.recorded()) == 4 }, 5*time.Second, time.Millisecond)
 }
 
-// Queued batches of a table waiting behind its running upload are uploaded one at a time, in order.
-func TestUploaderUploadsWaitingBatchesSeparately(t *testing.T) {
+// Queued batches of a table waiting behind its running upload are merged into one ingestion, and every segment is
+// removed after it.
+func TestUploaderMergesWaitingBatches(t *testing.T) {
 	rec := newUploadRecorder(true)
 	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 2}, rec)
+
+	first, _ := env.queuedBatch(t, "Cpu", "1")
+	env.u.UploadQueue() <- first
+	rec.waitStarted(t)
+
+	second, p2 := env.queuedBatch(t, "Cpu", "2")
+	third, p3 := env.queuedBatch(t, "Cpu", "3")
+	env.u.UploadQueue() <- second
+	env.u.UploadQueue() <- third
+	rec.requireNoStart(t)
+
+	rec.open()
+	require.Eventually(t, second.IsRemoved, 5*time.Second, time.Millisecond)
+	require.Equal(t, []string{string(csvRow("1")), string(csvRow("2")) + string(csvRow("3"))}, rec.recorded())
+	requireFilesRemoved(t, append(p2, p3...))
+}
+
+// With merging disabled, waiting batches are uploaded one at a time, in order.
+func TestUploaderUploadsWaitingBatchesSeparatelyWithoutMerging(t *testing.T) {
+	rec := newUploadRecorder(true)
+	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 2, MaxBatchSegments: -1}, rec)
 
 	first, _ := env.queuedBatch(t, "Cpu", "1")
 	env.u.UploadQueue() <- first
@@ -191,4 +213,101 @@ func TestUploaderUploadsWaitingBatchesSeparately(t *testing.T) {
 	require.Eventually(t, third.IsRemoved, 5*time.Second, time.Millisecond)
 	require.Equal(t, []string{string(csvRow("1")), string(csvRow("2")), string(csvRow("3"))}, rec.recorded())
 	require.True(t, second.IsRemoved())
+}
+
+// A merged batch stays within MaxMergeSize and MaxBatchSegments.
+func TestUploaderMergeLimits(t *testing.T) {
+	row := int64(len(csvRow("1")))
+	for name, opts := range map[string]UploaderOpts{
+		"size":     {MaxMergeSize: 2 * row},
+		"segments": {MaxBatchSegments: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := newUploadRecorder(true)
+			opts.ConcurrentUploads = 2
+			env := newSchedulingEnv(t, opts, rec)
+
+			first, _ := env.queuedBatch(t, "Cpu", "1")
+			env.u.UploadQueue() <- first
+			rec.waitStarted(t)
+			var last *cluster.Batch
+			for _, v := range []string{"2", "3", "4"} {
+				last, _ = env.queuedBatch(t, "Cpu", v)
+				env.u.UploadQueue() <- last
+			}
+			rec.requireNoStart(t)
+
+			rec.open()
+			require.Eventually(t, last.IsRemoved, 5*time.Second, time.Millisecond)
+			require.Equal(t, []string{
+				string(csvRow("1")), string(csvRow("2")) + string(csvRow("3")), string(csvRow("4")),
+			}, rec.recorded())
+		})
+	}
+}
+
+// A failed merged ingestion releases every segment of the merged batches for retry.
+func TestUploaderReleasesFailedMergedBatch(t *testing.T) {
+	rec := newUploadRecorder(true)
+	rec.err = io.ErrUnexpectedEOF
+	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 2}, rec)
+
+	first, p1 := env.queuedBatch(t, "Cpu", "1")
+	env.u.UploadQueue() <- first
+	rec.waitStarted(t)
+	second, p2 := env.queuedBatch(t, "Cpu", "2")
+	third, p3 := env.queuedBatch(t, "Cpu", "3")
+	env.u.UploadQueue() <- second
+	env.u.UploadQueue() <- third
+	rec.requireNoStart(t)
+
+	rec.open()
+	require.Eventually(t, second.IsReleased, 5*time.Second, time.Millisecond)
+	require.False(t, second.IsRemoved())
+	paths := append(append(p1, p2...), p3...)
+	for _, p := range paths {
+		require.FileExists(t, p)
+	}
+	// Every segment can be batched again.
+	require.ElementsMatch(t, paths, env.nextBatch(t, ingestpolicy.PriorityQueued).Paths())
+}
+
+// MaxUploadsPerTable limits a table's concurrent uploads, and its waiting batches merge.
+func TestUploaderLimitsUploadsPerTable(t *testing.T) {
+	rec := newUploadRecorder(true)
+	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 4, MaxUploadsPerTable: 1}, rec)
+
+	first, _ := env.queuedBatch(t, "Cpu", "1")
+	env.u.UploadQueue() <- first
+	rec.waitStarted(t)
+	second, _ := env.queuedBatch(t, "Cpu", "2")
+	third, _ := env.queuedBatch(t, "Cpu", "3")
+	env.u.UploadQueue() <- second
+	env.u.UploadQueue() <- third
+	rec.requireNoStart(t)
+
+	// Another table is not held back.
+	other, _ := env.queuedBatch(t, "Mem", "9")
+	env.u.UploadQueue() <- other
+	require.Equal(t, string(csvRow("9")), rec.waitStarted(t))
+
+	rec.open()
+	require.Eventually(t, second.IsRemoved, 5*time.Second, time.Millisecond)
+	require.ElementsMatch(t, []string{
+		string(csvRow("1")), string(csvRow("9")), string(csvRow("2")) + string(csvRow("3")),
+	}, rec.recorded())
+}
+
+func TestUploaderOptsQueueOpts(t *testing.T) {
+	opts := UploaderOpts{Database: "db", ConcurrentUploads: 10}.queueOpts()
+	require.Equal(t, cluster.FairQueueOpts{
+		Workers: 10, Pipeline: "adx:db", MergeSegments: cluster.DefaultMaxSegmentCount, MergeBytes: DefaultMaxUploadMergeSize,
+	}, opts)
+
+	opts = UploaderOpts{Database: "db", ConcurrentUploads: 10, MaxUploadsPerTable: 2, MaxBatchSegments: 5, MaxMergeSize: 7}.queueOpts()
+	require.Equal(t, 2, opts.MaxRunningPerTable)
+	require.Equal(t, 5, opts.MergeSegments)
+	require.Equal(t, int64(7), opts.MergeBytes)
+
+	require.Zero(t, UploaderOpts{MaxBatchSegments: -1}.queueOpts().MergeSegments)
 }

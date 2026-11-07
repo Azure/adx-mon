@@ -156,6 +156,10 @@ type ServiceOpts struct {
 	// batched with others before it is transferred.  When zero, it waits as long as owned segments.
 	TransferLinger time.Duration
 
+	// UploadLinger, when positive, is how long a closed segment of a table this ingestor owns waits to be batched
+	// with others before it is uploaded.  When zero, it waits cluster.DefaultQueuedLinger.
+	UploadLinger time.Duration
+
 	// ConcurrentUploads is the maximum number of concurrent uploads.
 	ConcurrentUploads int
 
@@ -305,6 +309,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		MaxTableBatches:         max(10, opts.ConcurrentUploads*2, opts.MaxTransferConcurrency*2),
 		TransferLinger:          opts.TransferLinger,
+		QueuedLinger:            opts.UploadLinger,
 		Partitioner:             coord,
 		Segmenter:               store.Index(),
 		Usage:                   store,
