@@ -230,7 +230,12 @@ type batcher struct {
 
 	tempSet []wal.SegmentInfo
 
+	// segments counts the batches each segment is part of.
 	segments *partmap.Map[int]
+	// markMu makes reading a prefix's unbatched segments and marking them as batched atomic with removing a delivered
+	// segment from the index and clearing a released batch's marks.  Otherwise a segment read just before its batch is
+	// delivered and released looks unbatched, and is batched again.
+	markMu sync.Mutex
 
 	usage SegmentUsage
 
@@ -504,6 +509,12 @@ func (b *batcher) updateSegmentMetrics() {
 // split by max segment count, upload size, transfer size and transfer age.  The returned owned batches are uploaded by
 // this node and notOwned batches are transferred to the peer that owns the prefix.
 func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwned []*Batch) {
+	return b.splitPrefixN(prefix, v, 0)
+}
+
+// splitPrefixN is like splitPrefix, but when maxBatches is positive it makes at most that many batches and leaves the
+// remaining segments unbatched, oldest first, so a backlog is not split into more batches than can be queued at once.
+func (b *batcher) splitPrefixN(prefix string, v []wal.SegmentInfo, maxBatches int) (owned, notOwned []*Batch) {
 	if len(v) == 0 {
 		return nil, nil
 	}
@@ -539,6 +550,10 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 	batch = newBatch()
 
 	for _, si := range v {
+		if maxBatches > 0 && len(batch.Segments) == 0 && len(owned)+len(notOwned) >= maxBatches {
+			break
+		}
+
 		// If the file has been on disk for more than the transfer age, we're behind on uploading so upload it directly
 		// ourselves vs transferring it to another node, rather than have a node that's behind on uploading.  Segments
 		// past the transfer age are batched together, so a backlog is uploaded in batches as large as the limits
@@ -696,10 +711,12 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 }
 
 func (b *batcher) Release(batch *Batch) {
+	b.markMu.Lock()
 	for _, si := range batch.Segments {
 		// Remove the segment from the map if it's no longer part of b batch so we don't leak keys
 		_, _ = b.segments.Delete(si.Path)
 	}
+	b.markMu.Unlock()
 
 	// Segments of a batch that was not removed, such as after a failed upload or transfer, are not announced again
 	// by the index so they are retried by the event batcher that batched them.
@@ -726,7 +743,9 @@ func (b *batcher) Remove(batch *Batch) error {
 			logger.Errorf("Failed to remove segment %s: %s", si.Path, err)
 			continue
 		}
+		b.markMu.Lock()
 		b.Segmenter.Remove(si)
+		b.markMu.Unlock()
 	}
 	return nil
 }
