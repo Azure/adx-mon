@@ -203,12 +203,17 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		return nil
 	}
 
-	// Walk each segment on disk and Open it to trigger a repair if necessary.
+	// Walk each segment on disk and Open it to trigger a repair if necessary.  The repair reads every block, so it
+	// also gives the segment's uncompressed size.
+	var rawSize int64
 	seg, err := Open(path)
 	if err != nil {
 		logger.Warnf("Failed to open segment file: %s %s", path, err.Error())
-	} else if err := seg.Close(); err != nil {
-		logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
+	} else {
+		rawSize = seg.Info().RawSize
+		if err := seg.Close(); err != nil {
+			logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
+		}
 	}
 
 	fileName := filepath.Base(path)
@@ -251,6 +256,7 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		Ulid:      epoch,
 		Path:      path,
 		Size:      fi.Size(),
+		RawSize:   rawSize,
 		CreatedAt: createdAt,
 		Priority:  s.priority(prefix),
 	}
