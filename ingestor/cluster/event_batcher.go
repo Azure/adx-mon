@@ -62,6 +62,10 @@ type eventBatcher struct {
 	wake    chan struct{}
 	// releases counts consecutive releases of a prefix without a removal.
 	releases map[string]int
+	// backlog holds prefixes with unbatched segments that wait for room to be queued: their last batching made as many
+	// batches as the policy allows, or one of their batches was released, such as by a full queue.  They are batched
+	// again as soon as one of their batches is delivered.
+	backlog map[string]bool
 
 	// emitMu serializes building batches so segments are never added to more than one batch.
 	emitMu  sync.Mutex
@@ -81,6 +85,7 @@ func newEventBatcher(b *batcher, policy eventPolicy, sweepInterval time.Duration
 		pending:       make(map[string]pendingPrefix),
 		wake:          make(chan struct{}, 1),
 		releases:      make(map[string]int),
+		backlog:       make(map[string]bool),
 	}
 }
 
@@ -119,6 +124,8 @@ func (r *eventBatcher) onSegment(si wal.SegmentInfo) {
 // to be retried after retryAfter, such as one its peer was briefly too busy to accept, is retried then.  Otherwise the
 // retry backs off for consecutive releases of prefix.
 func (r *eventBatcher) released(prefix string, retryAfter time.Duration) {
+	// The released segments wait for the retry, or for one of the prefix's batches to be delivered.
+	r.setBacklog(prefix, true)
 	if retryAfter > 0 {
 		at := time.Now().Add(retryAfter)
 		r.markPendingWithRetry(prefix, at, at)
@@ -139,11 +146,25 @@ func (r *eventBatcher) released(prefix string, retryAfter time.Duration) {
 	r.markPendingWithRetry(prefix, at, at)
 }
 
-// removed resets the retry backoff of prefix after one of its batches is delivered.
+// removed resets the retry backoff of prefix after one of its batches is delivered.  A prefix with a backlog is batched
+// again at once, without waiting for a retry, since its destination is accepting its data and the delivered batch made
+// room for another.
 func (r *eventBatcher) removed(prefix string) {
 	r.mu.Lock()
 	delete(r.releases, prefix)
+	backlog := r.backlog[prefix]
+	if backlog {
+		r.seq++
+		r.pending[prefix] = pendingPrefix{deadline: time.Now(), seq: r.seq}
+	}
 	r.mu.Unlock()
+
+	if backlog {
+		select {
+		case r.wake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // pendingPrefix is a prefix with unbatched segments.
@@ -318,10 +339,15 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 		return
 	}
 
-	// Read the pending state before the segments so a segment that closes afterwards keeps the prefix pending.
+	// Read the pending state before the segments so a segment that closes afterwards keeps the prefix pending.  The
+	// segments are read and marked as batched under markMu, but the batches are sent without it, since a full queue
+	// waits for workers that remove and release batches.
+	r.b.markMu.Lock()
 	segments := r.unbatched(prefix)
 	if len(segments) == 0 {
+		r.b.markMu.Unlock()
 		r.clearPending(prefix, p.seq)
+		r.setBacklog(prefix, false)
 		return
 	}
 
@@ -330,11 +356,14 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 		size += si.Size
 	}
 	if !force && size < r.policy.sizeTrigger() && now.Before(p.deadline) {
+		r.b.markMu.Unlock()
 		return
 	}
 
 	r.clearPending(prefix, p.seq)
 	owned, notOwned := r.policy.batches(r.b, prefix, segments)
+	r.b.markMu.Unlock()
+	r.setBacklog(prefix, batchedSegments(owned)+batchedSegments(notOwned) < len(segments))
 	r.send(ctx, owned, r.b.uploadQueueFor)
 	r.send(ctx, notOwned, r.b.transferQueueFor)
 }
@@ -352,6 +381,26 @@ func (r *eventBatcher) send(ctx context.Context, batches []*Batch, queueFor func
 			return
 		}
 	}
+}
+
+// setBacklog records whether prefix has segments left unbatched by the batches limit.
+func (r *eventBatcher) setBacklog(prefix string, backlog bool) {
+	r.mu.Lock()
+	if backlog {
+		r.backlog[prefix] = true
+	} else {
+		delete(r.backlog, prefix)
+	}
+	r.mu.Unlock()
+}
+
+// batchedSegments returns the number of segments in batches.
+func batchedSegments(batches []*Batch) int {
+	n := 0
+	for _, b := range batches {
+		n += len(b.Segments)
+	}
+	return n
 }
 
 // clearPending removes prefix from pending unless it was marked pending again after seq was read.
