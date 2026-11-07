@@ -60,6 +60,10 @@ type FairQueueOpts struct {
 	MergeSegments int
 	MergeBytes    int64
 
+	// MergeSize, when set, is the size of a segment that MergeBytes bounds, such as its uncompressed size.  When nil,
+	// it is the segment's size on disk.
+	MergeSize func(wal.SegmentInfo) int64
+
 	// Group and MaxRunningPerGroup, when both are set, cap how many batches of destinations in the same group run at
 	// once, such as batches sent to the same peer over a limited number of connections.  Batches of a full group wait
 	// in their destination's queue, where MergeSegments can still combine them, rather than in a worker waiting for a
@@ -482,7 +486,7 @@ func mergeBatch(queued, next *Batch, opts FairQueueOpts) bool {
 	if len(queued.Segments)+len(next.Segments) > opts.MergeSegments {
 		return false
 	}
-	if opts.MergeBytes > 0 && segmentBytes(queued)+segmentBytes(next) > opts.MergeBytes {
+	if opts.MergeBytes > 0 && mergeSize(queued, opts.MergeSize)+mergeSize(next, opts.MergeSize) > opts.MergeBytes {
 		return false
 	}
 	queued.mu.Lock()
@@ -491,12 +495,17 @@ func mergeBatch(queued, next *Batch, opts FairQueueOpts) bool {
 	return true
 }
 
-func segmentBytes(b *Batch) int64 {
-	var size int64
+// mergeSize returns the size of b's segments as size measures them, or their size on disk when size is nil.
+func mergeSize(b *Batch, size func(wal.SegmentInfo) int64) int64 {
+	var total int64
 	for _, s := range b.Segments {
-		size += s.Size
+		if size != nil {
+			total += size(s)
+		} else {
+			total += s.Size
+		}
 	}
-	return size
+	return total
 }
 
 func batchBytes(b *Batch) int64 {

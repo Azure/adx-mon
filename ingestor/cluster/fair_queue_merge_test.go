@@ -63,6 +63,8 @@ func TestFairQueueMergesBatchesWaitingForWorker(t *testing.T) {
 	require.Equal(t, [][]string{{"1"}, {"2", "3", "4"}}, rec.releases())
 }
 
+func tenfold(s wal.SegmentInfo) int64 { return 10 * s.Size }
+
 func TestFairQueueMergeLimits(t *testing.T) {
 	rec := &releaseRecorder{}
 	for name, tc := range map[string]struct {
@@ -76,6 +78,9 @@ func TestFairQueueMergeLimits(t *testing.T) {
 		"byte limit":        {FairQueueOpts{Workers: 2, MergeSegments: 10, MergeBytes: 10}, pathBatch("A", "DB_A", "3", 10), false},
 		"within byte limit": {FairQueueOpts{Workers: 2, MergeSegments: 10, MergeBytes: 11}, pathBatch("A", "DB_A", "3", 10), true},
 		"disabled":          {FairQueueOpts{Workers: 2}, pathBatch("A", "DB_A", "3", 1), false},
+		// Both batches are 1 byte on disk and 10 bytes as MergeSize measures them.
+		"merge size limit":        {FairQueueOpts{Workers: 2, MergeSegments: 10, MergeBytes: 15, MergeSize: tenfold}, pathBatch("A", "DB_A", "3", 1), false},
+		"within merge size limit": {FairQueueOpts{Workers: 2, MergeSegments: 10, MergeBytes: 20, MergeSize: tenfold}, pathBatch("A", "DB_A", "3", 1), true},
 		"other priority": {FairQueueOpts{Workers: 2, MergeSegments: 10}, func() *Batch {
 			b := pathBatch("A", "DB_A", "3", 1)
 			b.Priority = ingestpolicy.PriorityRealtime
