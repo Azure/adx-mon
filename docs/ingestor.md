@@ -51,8 +51,9 @@ after 100–300 ms rather than after the usual retry backoff.
 
 Uploads are merged the same way.  A closed segment of a table the ingestor owns waits `--upload-linger` (5 seconds
 by default) to be batched with others.  Batches of a table that are waiting for an upload worker are merged into one
-ingestion, up to `--max-batch-segments` segments and `--max-upload-merge-size` bytes (1 GiB, Kusto's recommended
-ingestion size, measured as compressed segment bytes).  `--max-uploads-per-table` limits how many uploads of one
+ingestion, up to `--max-batch-segments` segments and `--max-upload-merge-size` uncompressed bytes (1 GiB, Kusto's
+recommended ingestion size).  Each segment records its uncompressed size as it is written, appended to or opened
+from disk; a segment without one is counted as ten times its size on disk.  `--max-uploads-per-table` limits how many uploads of one
 table run at once; later batches wait behind them and are merged.  By default a table may use every upload worker
 but the reserved ones, so batches only merge when Kusto is slow enough that they wait.  If a merged ingestion fails,
 every segment in it is retried.
