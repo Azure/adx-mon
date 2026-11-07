@@ -40,13 +40,19 @@ is less than 100MB so that the file can be merged with other files before being 
 
 If the transfer fails, the instance will upload the file directly. 
 
+A segment of a table owned by another ingestor is only transferred, never uploaded from this node unless the owner is
+unavailable, so it rotates after `--unowned-segment-max-age` (1 second by default) rather than `--max-segment-age`.  Its
+data reaches the owner without waiting for the full segment age.  Ownership is checked when the table's WAL is created
+and again every 10 seconds, so a table that moves between ingestors switches limits within one sweep.  Realtime tables
+keep their own limits, and `--unowned-segment-max-age=0` turns this off.
+
 Batches of a table that are waiting for a transfer worker are merged into one, up to `--max-batch-segments` segments
 and `--max-transfer-size` bytes, so a slower owner receives fewer, larger transfers.  `--max-transfers-per-table`
 limits how many transfers of one table run at once; later batches wait behind them and are merged.  Its default, 0,
 sets no per-table limit, but at most 5 transfers run at once to each owner, one per connection to it, shared across
 the tables it owns.  `--transfer-linger` sets how long a
-closed segment of a table owned by another ingestor waits to be batched with others before it is transferred, which
-defaults to `--upload-linger`.  If the owner answers that the table's segment is busy (423), the batch is retried
+closed segment of a table owned by another ingestor waits to be batched with others before it is transferred: 1 second
+by default, or `--upload-linger` when set to 0.  If the owner answers that the table's segment is busy (423), the batch is retried
 after 100–300 ms rather than after the usual retry backoff.
 
 Uploads are merged the same way.  A closed segment of a table the ingestor owns waits `--upload-linger` (5 seconds
