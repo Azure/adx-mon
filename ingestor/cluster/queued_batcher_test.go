@@ -479,3 +479,22 @@ func TestQueuedBatcher_SweepUsesTransferLinger(t *testing.T) {
 	require.WithinDuration(t, before.Add(20*time.Millisecond), r.pending["db_Peer"].deadline, 50*time.Millisecond)
 	require.WithinDuration(t, before.Add(time.Hour), r.pending["db_Owned"].deadline, time.Second)
 }
+
+// Queued segments wait QueuedLinger before they are batched, or DefaultQueuedLinger when it is not set.
+func TestNewBatcher_QueuedLinger(t *testing.T) {
+	linger := func(queued time.Duration) time.Duration {
+		countMetric, sizeMetric, ageMetric := newTestMetrics()
+		b, err := NewBatcher(BatcherOpts{
+			Segmenter:               wal.NewIndex(),
+			QueuedLinger:            queued,
+			SegmentsCountMetric:     countMetric,
+			SegmentsSizeBytesMetric: sizeMetric,
+			SegmentsMaxAgeMetric:    ageMetric,
+		})
+		require.NoError(t, err)
+		return b.(*batcher).queued.policy.maxLatency("db_Table")
+	}
+	require.Equal(t, 5*time.Second, DefaultQueuedLinger)
+	require.Equal(t, DefaultQueuedLinger, linger(0))
+	require.Equal(t, time.Second, linger(time.Second))
+}
