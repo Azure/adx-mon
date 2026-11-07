@@ -335,6 +335,13 @@ var (
 		Help:      "Counter of target scrapes skipped because the previous scrape was still running (in_flight) or the collector was unhealthy (unhealthy)",
 	}, []string{"reason"})
 
+	CollectorScrapeTLSProfileInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "scrape_tls_profile_info",
+		Help:      "Set to 1 for each available scrape TLS profile with the username it sends. Absent while a profile is unavailable.",
+	}, []string{"profile", "username"})
+
 	SamplesStored = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "collector",

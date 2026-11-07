@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/collector/scrapetls"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/siderolabs/go-kmsg"
@@ -151,6 +152,8 @@ type PrometheusScrape struct {
 	KeepMetricsWithLabelValue []LabelMatcher     `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
 	AddMetadataLabels         *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to metrics scraped from this source."`
 
+	ScrapeTLSProfiles map[string]scrapetls.Profile `toml:"scrape-tls-profiles,omitempty" comment:"Named identities for scraping exporters with HTTP Basic authentication over verified TLS.  Targets select a profile by name."`
+
 	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
 
@@ -159,8 +162,20 @@ func (s *PrometheusScrape) Validate() error {
 		return errors.New("prom-scrape.database must be set")
 	}
 
+	for name, profile := range s.ScrapeTLSProfiles {
+		if name == "" {
+			return errors.New("prom-scrape.scrape-tls-profiles name must not be empty")
+		}
+		if err := profile.Validate(); err != nil {
+			return fmt.Errorf("prom-scrape.scrape-tls-profiles.%s: %w", name, err)
+		}
+	}
+
 	for i, v := range s.StaticScrapeTarget {
 		if err := v.Validate(); err != nil {
+			return fmt.Errorf("prom-scrape.static-scrape-target[%d].%w", i, err)
+		}
+		if err := v.validateTLSProfile(s.ScrapeTLSProfiles); err != nil {
 			return fmt.Errorf("prom-scrape.static-scrape-target[%d].%w", i, err)
 		}
 	}
@@ -212,6 +227,7 @@ type ScrapeTarget struct {
 	Namespace      string  `toml:"namespace" comment:"The namespace label to add for metrics scraped at this URL."`
 	Pod            string  `toml:"pod" comment:"The pod label to add for metrics scraped at this URL."`
 	Container      string  `toml:"container" comment:"The container label to add for metrics scraped at this URL."`
+	TLSProfile     string  `toml:"tls-profile,omitempty" comment:"Optional name of a scrape TLS profile used to scrape this URL.  Requires an https URL."`
 }
 
 type LiftLabel struct {
@@ -242,6 +258,19 @@ func (t *ScrapeTarget) Validate() error {
 	}
 	_, err := t.ParseScrapeInterval()
 	return err
+}
+
+func (t *ScrapeTarget) validateTLSProfile(profiles map[string]scrapetls.Profile) error {
+	if t.TLSProfile == "" {
+		return nil
+	}
+	if _, ok := profiles[t.TLSProfile]; !ok {
+		return fmt.Errorf("tls-profile %q is not defined in prom-scrape.scrape-tls-profiles", t.TLSProfile)
+	}
+	if err := scrapetls.ValidateTarget(t.URL); err != nil {
+		return fmt.Errorf("url: %w", err)
+	}
+	return nil
 }
 
 // ParseScrapeInterval returns zero when omitted so the scheduler uses the global interval.
