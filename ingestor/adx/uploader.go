@@ -35,6 +35,10 @@ const (
 	// table.  It is Kusto's recommended ingestion size.
 	DefaultMaxUploadMergeSize = 1024 * 1024 * 1024
 
+	// DefaultMaxUploadMergeSegments bounds the segments in a batch made by merging the batches waiting for a table.
+	// It matches the files Kusto's default ingestion batching policy seals a batch at.
+	DefaultMaxUploadMergeSegments = 500
+
 	// unknownCompressionRatio estimates the uncompressed size of a segment that does not report one.  It is above
 	// the ratios segments usually compress by, so such segments merge into smaller ingestions rather than larger
 	// ones.
@@ -116,19 +120,19 @@ type UploaderOpts struct {
 	// table may use every upload worker but the reserved ones.
 	MaxUploadsPerTable int
 
-	// MaxBatchSegments and MaxMergeSize bound a batch made by merging the queued batches waiting for a table.
-	// MaxMergeSize is in uncompressed bytes, as they are ingested.  MaxBatchSegments defaults to
-	// cluster.DefaultMaxSegmentCount and MaxMergeSize to DefaultMaxUploadMergeSize; a negative MaxBatchSegments
+	// MaxMergeSegments and MaxMergeSize bound a batch made by merging the queued batches waiting for a table.
+	// MaxMergeSize is in uncompressed bytes, as they are ingested.  MaxMergeSegments defaults to
+	// DefaultMaxUploadMergeSegments and MaxMergeSize to DefaultMaxUploadMergeSize; a negative MaxMergeSegments
 	// disables merging.
-	MaxBatchSegments int
+	MaxMergeSegments int
 	MaxMergeSize     int64
 }
 
 // queueOpts returns how queued batches are scheduled across the upload workers.
 func (o UploaderOpts) queueOpts() cluster.FairQueueOpts {
-	segments := cluster.DefaultMaxSegmentCount
-	if o.MaxBatchSegments != 0 {
-		segments = max(0, o.MaxBatchSegments)
+	segments := DefaultMaxUploadMergeSegments
+	if o.MaxMergeSegments != 0 {
+		segments = max(0, o.MaxMergeSegments)
 	}
 	size := o.MaxMergeSize
 	if size <= 0 {
