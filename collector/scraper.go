@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/metadata"
+	"github.com/Azure/adx-mon/collector/scrapetls"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -61,6 +62,10 @@ type ScraperOpts struct {
 	// DisableDiscovery disables the discovery of scrape targets.
 	DisableDiscovery bool
 
+	// ScrapeTLSProfiles are the named Basic auth over TLS identities that targets may select.  Static targets select
+	// a profile with ScrapeTarget.TLSProfile; pods select one with the adx-mon/tls-profile annotation.
+	ScrapeTLSProfiles map[string]scrapetls.Profile
+
 	PodInformer k8s.PodInformerInterface
 
 	// Targets is a list of static scrape targets.
@@ -97,6 +102,9 @@ type ScrapeTarget struct {
 
 	// ScrapeInterval overrides the global interval. Zero inherits the default.
 	ScrapeInterval time.Duration
+
+	// TLSProfile names the scrape TLS profile used to scrape the target.  Empty uses the default client.
+	TLSProfile string
 }
 
 func (t ScrapeTarget) path() string {
@@ -180,8 +188,11 @@ func (s *Scraper) Open(ctx context.Context) error {
 
 	var err error
 	s.scrapeClient, err = NewMetricsClient(ClientOpts{
-		ScrapeTimeOut: s.opts.ScrapeTimeout,
-		NodeName:      s.opts.NodeName,
+		ScrapeTimeOut:     s.opts.ScrapeTimeout,
+		NodeName:          s.opts.NodeName,
+		ScrapeTLSProfiles: s.opts.ScrapeTLSProfiles,
+		// Half the interval keeps timer jitter from skipping a recheck between scrapes.
+		ScrapeTLSRefreshInterval: s.opts.ScrapeInterval / 2,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create metrics client: %w", err)
@@ -189,6 +200,11 @@ func (s *Scraper) Open(ctx context.Context) error {
 
 	// Add static targets
 	for _, target := range s.opts.Targets {
+		if err := s.scrapeClient.validateProfileTarget(target.Addr, target.TLSProfile); err != nil {
+			s.scrapeClient.Close()
+			cancelFn()
+			return fmt.Errorf("invalid static scrape target %s: %w", target, err)
+		}
 		logger.Infof("Adding static target %s", target)
 		s.targets[target.key("", true)] = target
 	}
@@ -208,13 +224,17 @@ func (s *Scraper) Open(ctx context.Context) error {
 }
 
 func (s *Scraper) Close() error {
-	s.scrapeClient.Close()
-	s.cancel()
-	if !s.opts.DisableDiscovery {
-		s.podInformer.Remove(s.informerRegistration)
+	if s.cancel != nil {
+		s.cancel()
 	}
-	s.informerRegistration = nil
+	if s.informerRegistration != nil {
+		s.podInformer.Remove(s.informerRegistration)
+		s.informerRegistration = nil
+	}
 	s.wg.Wait()
+	if s.scrapeClient != nil {
+		s.scrapeClient.Close()
+	}
 
 	return nil
 }
@@ -336,7 +356,7 @@ func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) {
 	if logger.IsDebug() {
 		logger.Debugf("Scraping %s", target.String())
 	}
-	iter, err := s.scrapeClient.FetchMetricsIterator(fetchCtx, target.Addr)
+	iter, err := s.scrapeClient.FetchMetricsIteratorWithProfile(fetchCtx, target.Addr, target.TLSProfile)
 	if err != nil {
 		logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
 			target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
@@ -541,7 +561,29 @@ func (s *Scraper) notifyTargetsChanged() {
 
 // isScrapeable returns the scrape target endpoints and true if the pod is currently a target, false otherwise
 func (s *Scraper) isScrapeable(p *v1.Pod) []ScrapeTarget {
-	return makeTargets(p)
+	return s.withTLSProfile(p, makeTargets(p))
+}
+
+// withTLSProfile applies the pod's adx-mon/tls-profile annotation to its targets.  A pod that selects a profile it may
+// not use, or that has a target the profile cannot scrape, has no targets: it is never scraped without the profile.
+func (s *Scraper) withTLSProfile(p *v1.Pod, targets []ScrapeTarget) []ScrapeTarget {
+	name := getAnnotationOrDefault(p, "adx-mon/tls-profile", "")
+	if name == "" {
+		return targets
+	}
+	profile, ok := s.opts.ScrapeTLSProfiles[name]
+	if !ok || !profile.AllowsNamespace(p.Namespace) {
+		logger.Warnf("Rejecting scrape TLS profile %q for pod %s/%s: unknown profile or namespace not allowed", name, p.Namespace, p.Name)
+		return nil
+	}
+	for i := range targets {
+		if err := scrapetls.ValidateTarget(targets[i].Addr); err != nil {
+			logger.Warnf("Rejecting scrape TLS profile %q for pod %s/%s: %s", name, p.Namespace, p.Name, err)
+			return nil
+		}
+		targets[i].TLSProfile = name
+	}
+	return targets
 }
 
 func (s *Scraper) Targets() []ScrapeTarget {
