@@ -299,6 +299,7 @@ func realMain(ctx *cli.Context) error {
 			DefaultDropMetrics:        defaultDropMetrics,
 			DisableMetricsForwarding:  cfg.PrometheusScrape.DisableMetricsForwarding,
 			DisableDiscovery:          cfg.PrometheusScrape.DisableDiscovery,
+			ScrapeTLSProfiles:         cfg.PrometheusScrape.ScrapeTLSProfiles,
 			ScrapeInterval:            time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
 			ScrapeTimeout:             time.Duration(cfg.PrometheusScrape.ScrapeTimeout) * time.Second,
 			ScrapeConcurrency:         cfg.PrometheusScrape.ScrapeConcurrency,
@@ -1098,6 +1099,7 @@ func staticScrapeTargets(targets []*config.ScrapeTarget, hostname string) ([]col
 			Pod:            target.Pod,
 			Container:      target.Container,
 			ScrapeInterval: interval,
+			TLSProfile:     target.TLSProfile,
 		})
 	}
 	return staticTargets, nil
