@@ -90,7 +90,7 @@ func newApp() *cli.App {
 			&cli.IntFlag{Name: "max-transfers-per-table", Usage: "Maximum transfers of one table in flight.  Batches of a table waiting behind its running transfers are merged into one, so the owner receives fewer, larger transfers.  0 allows every transfer worker but the reserved ones"},
 			&cli.DurationFlag{Name: "transfer-linger", Usage: "How long a closed segment of a table owned by another ingestor waits to be batched with others before it is transferred.  0 waits --upload-linger"},
 			&cli.IntFlag{Name: "max-uploads-per-table", Usage: "Maximum queued uploads of one table in flight.  Batches of a table waiting behind its running uploads are merged into one, so Kusto receives fewer, larger ingestions.  0 allows every upload worker but the reserved ones"},
-			&cli.Int64Flag{Name: "max-upload-merge-size", Usage: "Maximum size in bytes of a batch made by merging the batches waiting to upload a table", Value: adx.DefaultMaxUploadMergeSize},
+			&cli.Int64Flag{Name: "max-upload-merge-size", Usage: "Maximum uncompressed size in bytes of a batch made by merging the batches waiting to upload a table", Value: adx.DefaultMaxUploadMergeSize},
 			&cli.DurationFlag{Name: "upload-linger", Usage: "How long a closed segment of a table this ingestor owns waits to be batched with others before it is uploaded.  0 uses the default", Value: cluster.DefaultQueuedLinger},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
 			&cli.DurationFlag{Name: "slow-request-threshold", Usage: "Threshold for slow requests. Set to 0 to disable.", Value: 10 * time.Second},
