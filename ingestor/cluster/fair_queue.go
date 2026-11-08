@@ -238,7 +238,7 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 				continue
 			}
 			if len(table.queue) >= opts.QueueDepth {
-				b.Release()
+				b.releaseQueueFull()
 				continue
 			}
 			table.queue = append(table.queue, b)
