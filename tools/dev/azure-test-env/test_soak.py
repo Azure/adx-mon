@@ -143,11 +143,11 @@ class SoakTest(unittest.TestCase):
         commands = []
         with patch.object(harness, "run", side_effect=lambda *a, **kw: commands.append((a, kw))), \
              patch.object(harness, "output", return_value=json.dumps({"subsets": [{"addresses": [{"ip": "1"}]}]})):
-            harness.deploy(STATE, "t", False, ingestor_replicas=3, ingestor_args=["--forward-transfers"],
+            harness.deploy(STATE, "t", False, ingestor_replicas=3, ingestor_args=["--max-connections=5000"],
                            keep_metrics=("^adxmon_",), collector_prefix="scrape-concurrency = 4\n")
         ingestor, collector, _ = [kw["input"] for a, kw in commands if a[-2:] == ("-f", "-")]
         self.assertIn("  replicas: 3\n", ingestor)
-        self.assertIn('            - "--forward-transfers"\n', ingestor)
+        self.assertIn('            - "--max-connections=5000"\n', ingestor)
         self.assertIn("keep-metrics = ['^e2e_scraped_sample$', '^adxmon_']", collector)
         daemonset, singleton = collector.split("name: collector-singleton-config", 1)
         self.assertIn("  config.toml: |\n    scrape-concurrency = 4\n", daemonset)

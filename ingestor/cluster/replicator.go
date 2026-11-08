@@ -53,7 +53,7 @@ type ReplicatorOpts struct {
 	// DefaultQueuedReservedWorkersPercent.
 	QueuedReservedWorkersPercent int
 
-	// PeerTransfer marks transfers as sent by an ingestor so the receiver does not forward them.
+	// PeerTransfer marks transfers as sent by an ingestor, so the receiver counts them by sender.
 	PeerTransfer bool
 
 	// TransferLatency, if set, records the age of the oldest segment in each transferred batch by database.

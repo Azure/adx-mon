@@ -204,13 +204,6 @@ var (
 
 	IngestorTransferLatency = newTransferLatency("ingestor")
 
-	IngestorTransferForwards = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "transfer_forwards_total",
-		Help:      "Counter of collector transfers for tables owned by another ingestor, by outcome: forwarded to the owner, or stored locally because the owner was unhealthy (fallback_unhealthy), all forwarding slots for it were busy (fallback_busy) or forwarding failed (fallback_error)",
-	}, []string{"outcome"})
-
 	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",

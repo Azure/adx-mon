@@ -68,7 +68,6 @@ func newApp() *cli.App {
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for OTLP logs"},
 			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish ingestor clusters. Format: <key>=<value>"},
 			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
-			&cli.BoolFlag{Name: "forward-transfers", Usage: "Forward collector transfers for tables owned by another ingestor to the owner as they are received.  A forward that times out may have been stored by the owner too, so it can be ingested twice"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
@@ -167,7 +166,6 @@ func realMain(ctx *cli.Context) error {
 	hostname := ctx.String("hostname")
 	region := ctx.String("region")
 	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
-	forwardTransfers := ctx.Bool("forward-transfers")
 	maxTransferConcurrency := ctx.Int("max-transfer-concurrency")
 	maxTransfersPerTable := ctx.Int("max-transfers-per-table")
 	transferLinger := ctx.Duration("transfer-linger")
@@ -347,7 +345,6 @@ func realMain(ctx *cli.Context) error {
 		StorageDir:                   storageDir,
 		Uploader:                     uploader,
 		DisablePeerTransfer:          disablePeerTransfer,
-		ForwardTransfers:             forwardTransfers,
 		PartitionSize:                partitionSize,
 		MaxSegmentSize:               maxSegmentSize,
 		MaxSegmentAge:                maxSegmentAge,

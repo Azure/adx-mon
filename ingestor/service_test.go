@@ -342,10 +342,6 @@ func (f fakeStore) Import(filename string, body io.ReadCloser) (int, error) {
 	return 0, nil
 }
 
-func (f fakeStore) ImportWith(filename string, body io.ReadCloser, _ func([]byte) bool) (int, error) {
-	return f.Import(filename, body)
-}
-
 type capturingUploader struct {
 	queue, realtime chan *cluster.Batch
 }
