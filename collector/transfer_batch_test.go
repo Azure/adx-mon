@@ -2,6 +2,7 @@ package collector
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -38,4 +39,9 @@ func TestServiceOptsReplicatorOpts(t *testing.T) {
 func TestDefaultMaxTransferSize(t *testing.T) {
 	require.Equal(t, int64(100*1024*1024), int64(DefaultMaxTransferSize))
 	require.Equal(t, int64(DefaultMaxTransferSize), (&ServiceOpts{MaxTransferSize: -1}).maxTransferSize())
+}
+
+// A failed transfer stops the collector's transfers for at most a minute.
+func TestMaxTransferRetryDelay(t *testing.T) {
+	require.Equal(t, time.Minute, maxTransferRetryDelay)
 }
