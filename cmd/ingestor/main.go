@@ -403,15 +403,7 @@ func realMain(ctx *cli.Context) error {
 	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	metricsMux.HandleFunc("/debug/store", svc.HandleDebugStore)
 
-	srv := &http.Server{
-		Handler: mux,
-		// Close idle connections fairly often to establish new connections through the load balancer
-		// so that long-lived connections don't stay pinned to the same node indefinitely.
-		IdleTimeout: 5 * time.Minute,
-		// Transfer bodies are bounded by a stall timeout in the handler instead of a fixed ReadTimeout, so large
-		// transfers that keep arriving are not cut off.
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := newTransferServer(mux)
 	srv.ErrorLog = newLogger()
 
 	go func() {
@@ -713,4 +705,17 @@ func makeClusterLabels(ctx *cli.Context) map[string]string {
 		clusterLabels[key] = value
 	}
 	return clusterLabels
+}
+
+// newTransferServer returns the server for the ingestor's transfer endpoint.
+func newTransferServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler: handler,
+		// Close idle connections fairly often to establish new connections through the load balancer
+		// so that long-lived connections don't stay pinned to the same node indefinitely.
+		IdleTimeout: 5 * time.Minute,
+		// Transfer bodies are bounded by a stall timeout in the handler instead of a fixed ReadTimeout, so large
+		// transfers that keep arriving are not cut off.
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 }
