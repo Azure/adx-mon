@@ -27,9 +27,10 @@ func transferWithHeader(t *testing.T, size int) int {
 	return resp.StatusCode
 }
 
-// The transfer server accepts headers up to Go's 1 MB default, so each connection can hold about 1 MB of headers
-// before a request is admitted.
+// The transfer server accepts headers up to 64 KB, which bounds what each connection can hold before its request is
+// admitted.
 func TestTransferServerHeaderLimit(t *testing.T) {
-	require.Equal(t, http.StatusAccepted, transferWithHeader(t, 512<<10))
-	require.Equal(t, http.StatusRequestHeaderFieldsTooLarge, transferWithHeader(t, 2<<20))
+	require.Equal(t, 64<<10, transferMaxHeaderBytes)
+	require.Equal(t, http.StatusAccepted, transferWithHeader(t, 32<<10))
+	require.Equal(t, http.StatusRequestHeaderFieldsTooLarge, transferWithHeader(t, 128<<10))
 }
