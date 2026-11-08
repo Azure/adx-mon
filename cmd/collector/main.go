@@ -376,6 +376,7 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferConcurrency: cfg.MaxTransferConcurrency,
 		MaxBatchSegments:       cfg.MaxBatchSegments,
 		TransferBatchSize:      cfg.TransferBatchSize,
+		MaxTransferSize:        cfg.MaxTransferSize,
 		WALFlushInterval:       time.Duration(cfg.WALFlushIntervalMilliSeconds) * time.Millisecond,
 		Region:                 cfg.Region,
 		StorageDir:             cfg.StorageDir,

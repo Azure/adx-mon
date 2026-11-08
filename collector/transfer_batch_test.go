@@ -17,8 +17,7 @@ func TestServiceOptsTransferBatchSize(t *testing.T) {
 	require.Equal(t, int64(9<<20), (&ServiceOpts{TransferBatchSize: 9 << 20}).transferBatchSize())
 }
 
-// The replicator merges a table's waiting transfers with its default segment count and no byte bound, whatever the
-// collector's own max-batch-segments and transfer-batch-size.
+// The replicator merges a table's waiting transfers up to the collector's max-batch-segments and max-transfer-size.
 func TestServiceOptsReplicatorOpts(t *testing.T) {
 	opts := &ServiceOpts{NodeName: "node", MaxTransferConcurrency: 7, MaxBatchSegments: 100, TransferBatchSize: 9 << 20, DisableGzip: true, QueuedReservedWorkersPercent: 20}
 	r := opts.replicatorOpts(nil, nil, nil)
@@ -27,6 +26,16 @@ func TestServiceOptsReplicatorOpts(t *testing.T) {
 	require.True(t, r.DisableGzip)
 	require.Equal(t, 20, r.QueuedReservedWorkersPercent)
 	require.NotNil(t, r.TransferLatency)
-	require.Zero(t, r.MaxBatchSegments)
-	require.Zero(t, r.MaxTransferSize)
+	require.Equal(t, 100, r.MaxBatchSegments)
+	require.Equal(t, int64(DefaultMaxTransferSize), r.MaxTransferSize)
+
+	r = (&ServiceOpts{MaxTransferSize: 50 << 20}).replicatorOpts(nil, nil, nil)
+	require.Zero(t, r.MaxBatchSegments, "the replicator's own default")
+	require.Equal(t, int64(50<<20), r.MaxTransferSize)
+}
+
+// Merged transfers are bounded by the ingestor's default max-transfer-size.
+func TestDefaultMaxTransferSize(t *testing.T) {
+	require.Equal(t, int64(100*1024*1024), int64(DefaultMaxTransferSize))
+	require.Equal(t, int64(DefaultMaxTransferSize), (&ServiceOpts{MaxTransferSize: -1}).maxTransferSize())
 }
