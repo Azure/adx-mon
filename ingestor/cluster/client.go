@@ -103,8 +103,8 @@ func transferError(ctx context.Context, size int64, err error) error {
 const OverloadScopeHeader = "X-Adxmon-Overload-Scope"
 const OverloadReasonHeader = "X-Adxmon-Overload-Reason"
 
-// PeerTransferHeader marks transfers sent by an ingestor rather than a collector.  They are already routed to their
-// owner, so the receiver stores them instead of forwarding them again.
+// PeerTransferHeader marks transfers sent by an ingestor rather than a collector, so the receiver counts them by
+// sender.
 const PeerTransferHeader = "X-Adxmon-Peer-Transfer"
 
 // MaxTransferBytesHeader advertises how many bytes a destination can accept, so

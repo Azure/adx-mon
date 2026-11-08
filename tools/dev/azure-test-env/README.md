@@ -225,7 +225,7 @@ the ADX endpoint (for example, when it only accepts Azure networks), add
 `curl --connect-to`, so TLS still terminates at the real host name and its
 certificate is verified. Only use it where that routing is permitted.
 
-Pass branch-only settings with `--ingestor-arg=--forward-transfers` or
+Pass branch-only settings with `--ingestor-arg=--max-connections=5000` or
 `--collector-toml 'scrape-concurrency = 4'`; older builds may reject unknown
 settings. Each run writes `result.json`, `rows.json` (every seq's emitted and
 ingested time), `report.md` and the component logs. The report shows per-path
