@@ -80,6 +80,21 @@ func (o *ServiceOpts) transferBatchSize() int64 {
 	return DefaultTransferBatchSize
 }
 
+// replicatorOpts returns the options of the replicator that sends the collector's segments to the ingestor.
+func (o *ServiceOpts) replicatorOpts(partitioner cluster.MetricPartitioner, health cluster.PeerHealthReporter, remover cluster.SegmentRemover) cluster.ReplicatorOpts {
+	return cluster.ReplicatorOpts{
+		Hostname:                     o.NodeName,
+		Partitioner:                  partitioner,
+		Health:                       health,
+		SegmentRemover:               remover,
+		InsecureSkipVerify:           o.InsecureSkipVerify,
+		MaxTransferConcurrency:       o.MaxTransferConcurrency,
+		DisableGzip:                  o.DisableGzip,
+		QueuedReservedWorkersPercent: o.QueuedReservedWorkersPercent,
+		TransferLatency:              metrics.CollectorTransferLatency,
+	}
+}
+
 type ServiceOpts struct {
 	ListenAddr     string
 	NodeName       string
@@ -436,17 +451,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			addr: opts.Endpoint,
 		}
 
-		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-			Hostname:                     opts.NodeName,
-			Partitioner:                  partitioner,
-			Health:                       health,
-			SegmentRemover:               store,
-			InsecureSkipVerify:           opts.InsecureSkipVerify,
-			MaxTransferConcurrency:       opts.MaxTransferConcurrency,
-			DisableGzip:                  opts.DisableGzip,
-			QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
-			TransferLatency:              metrics.CollectorTransferLatency,
-		})
+		r, err := cluster.NewReplicator(opts.replicatorOpts(partitioner, health, store))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)
 		}
