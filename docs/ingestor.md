@@ -168,6 +168,19 @@ A rising rate of `fallback_*` outcomes means realtime batches are using queued i
 `retry_no_slot` usually mean the streaming budget is too small for the realtime volume, and `fallback_too_large`
 means `--realtime-max-batch-bytes` should be lowered.
 
+## Connection limit
+
+`--max-connections` bounds the connections an ingestor holds, which bounds the memory a flood of connections can
+take before their requests are admitted.  Each connection can hold up to 64 KB of request headers plus its TLS and
+buffer state.  A connection beyond the limit is closed before anything is read from it, and counted by
+`adxmon_ingestor_dropped_connections_total`; its sender sees the connection close and retries after its backoff.
+With the default of 5000, 5000 connections each holding 60 KB of unfinished headers peaked at 1.7 GiB of heap on an
+ingestor while thousands more were dropped.  Request bodies are bounded separately by `--max-intake-memory`, and a
+body that does not fit is answered with 429.
+
+Collectors keep up to 5 connections to each ingestor, including idle ones, so an ingestor receiving from N collectors
+can hold up to 5 × N connections.
+
 ## Latency metrics
 
 Each stage records how long data waited before it left that stage, as histograms whose quantiles can be compared
