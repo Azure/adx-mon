@@ -80,6 +80,9 @@ func (o *ServiceOpts) transferBatchSize() int64 {
 	return DefaultTransferBatchSize
 }
 
+// maxTransferRetryDelay is the longest the collector stops sending to the ingestor after consecutive failed transfers.
+const maxTransferRetryDelay = time.Minute
+
 // DefaultMaxTransferSize bounds the size of one transfer made by merging a table's waiting batches.  It matches the
 // ingestor's default max-transfer-size.
 const DefaultMaxTransferSize = 100 * 1024 * 1024
@@ -360,7 +363,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	// The collector sends everything to a single load-balanced endpoint and has no local fallback, so a transient
 	// failure is retried quickly instead of stopping all transfers for the full UnhealthyTimeout.
 	health := cluster.NewHealth(cluster.HealthOpts{
-		UnhealthyTimeout:        time.Minute,
+		UnhealthyTimeout:        maxTransferRetryDelay,
 		InitialUnhealthyTimeout: time.Second,
 		MaxSegmentCount:         maxSegmentCount,
 		MaxDiskUsage:            maxDiskUsage,
