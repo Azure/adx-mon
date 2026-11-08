@@ -281,8 +281,7 @@ func TestClient_Write_GzipGoroutineExitsWhenRequestFails(t *testing.T) {
 	}
 }
 
-// Only ingestors mark their transfers as peer transfers; collector transfers are unmarked so the receiving ingestor
-// may forward them to the owner.
+// Only ingestors mark their transfers as peer transfers; collector transfers are unmarked.
 func TestClientMarksPeerTransfers(t *testing.T) {
 	for _, peer := range []bool{false, true} {
 		var header string

@@ -60,10 +60,6 @@ type Store interface {
 
 	// Import imports a file into the LocalStore and returns the number of bytes stored.
 	Import(filename string, body io.ReadCloser) (int, error)
-
-	// ImportWith is like Import, but first offers the buffered file to forward, if set, and does not store it when
-	// forward reports that it was accepted elsewhere.
-	ImportWith(filename string, body io.ReadCloser, forward func(data []byte) bool) (int, error)
 }
 
 // LocalStore provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
@@ -683,10 +679,6 @@ func (s *LocalStore) PrefixesByAge() []string {
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
-	return s.ImportWith(filename, body, nil)
-}
-
-func (s *LocalStore) ImportWith(filename string, body io.ReadCloser, forward func(data []byte) bool) (int, error) {
 	db, table, schema, _, err := wal.ParseFilename(filename)
 	if err != nil {
 		return 0, err
@@ -729,10 +721,6 @@ func (s *LocalStore) ImportWith(filename string, body io.ReadCloser, forward fun
 			return 0, &wal.SegmentTooLargeError{Destination: wal.Destination{Database: db, Table: table}, Size: n, Limit: limit}
 		}
 		return 0, wal.ErrMaxDiskUsageExceeded
-	}
-
-	if forward != nil && forward(buf.Bytes()) {
-		return int(n), nil
 	}
 
 	key := gbp.Get(256)

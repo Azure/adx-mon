@@ -121,7 +121,6 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
   - `--unowned-segment-max-age`: Segment age limit for tables owned by another ingestor, whose segments are transferred.
   - `--max-transfer-size`, `--max-transfer-age`: Peer transfer thresholds.
   - `--disable-peer-transfer`: Disable peer transfer (upload all segments directly).
-  - `--forward-transfers`: Forward collector transfers to the ingestor that owns their table as they are received.
   - `--partition-size`: Number of nodes in a partition for sharding.
   - `--max-disk-usage`, `--max-segment-count`: Backpressure controls.
   - `--max-intake-memory`: Ceiling on memory buffered by in-flight transfers (1 GiB by default). See [table isolation](table-isolation.md#upgrading) before upgrading.
