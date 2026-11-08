@@ -62,6 +62,8 @@ type eventBatcher struct {
 	wake    chan struct{}
 	// releases counts consecutive releases of a prefix without a removal.
 	releases map[string]int
+	// failed holds prefixes backing off because a batch failed, rather than because a queue was full.
+	failed map[string]bool
 	// backlog holds prefixes with unbatched segments that wait for room to be queued: their last batching made as many
 	// batches as the policy allows, or one of their batches was released, such as by a full queue.  They are batched
 	// again as soon as one of their batches is delivered.
@@ -85,6 +87,7 @@ func newEventBatcher(b *batcher, policy eventPolicy, sweepInterval time.Duration
 		pending:       make(map[string]pendingPrefix),
 		wake:          make(chan struct{}, 1),
 		releases:      make(map[string]int),
+		failed:        make(map[string]bool),
 		backlog:       make(map[string]bool),
 	}
 }
@@ -124,9 +127,22 @@ func (r *eventBatcher) onSegment(si wal.SegmentInfo) {
 // to be retried after retryAfter, such as one its peer was briefly too busy to accept, is retried then.  Otherwise the
 // retry backs off for consecutive releases of prefix.
 func (r *eventBatcher) released(prefix string, retryAfter time.Duration) {
+	r.release(prefix, retryAfter, true)
+}
+
+// queueFull is called when a batch is released unsent because its destination's queue was full.  It is retried like
+// a failed batch, but its delivery later does not mean that a failing destination recovered.
+func (r *eventBatcher) queueFull(prefix string) {
+	r.release(prefix, 0, false)
+}
+
+func (r *eventBatcher) release(prefix string, retryAfter time.Duration, failed bool) {
 	// The released segments wait for the retry, or for one of the prefix's batches to be delivered.
 	r.setBacklog(prefix, true)
 	if retryAfter > 0 {
+		r.mu.Lock()
+		delete(r.failed, prefix)
+		r.mu.Unlock()
 		at := time.Now().Add(retryAfter)
 		r.markPendingWithRetry(prefix, at, at)
 		return
@@ -136,6 +152,9 @@ func (r *eventBatcher) released(prefix string, retryAfter time.Duration) {
 		r.mu.Lock()
 		n := r.releases[prefix]
 		r.releases[prefix] = n + 1
+		if failed {
+			r.failed[prefix] = true
+		}
 		r.mu.Unlock()
 		for i := 0; i < n && delay < r.maxRetryDelay; i++ {
 			delay *= 2
@@ -149,22 +168,41 @@ func (r *eventBatcher) released(prefix string, retryAfter time.Duration) {
 // removed resets the retry backoff of prefix after one of its batches is delivered.  A prefix with a backlog is batched
 // again at once, without waiting for a retry, since its destination is accepting its data and the delivered batch made
 // room for another.
+//
+// A delivery of a prefix whose batches had failed means its destination recovered, such as after an outage of the
+// ingestor or ADX, so every other failing prefix is retried at once too rather than after its own backoff of up to
+// maxRetryDelay.  A prefix that fails on its own is retried early only when another failing prefix recovers.
 func (r *eventBatcher) removed(prefix string) {
 	r.mu.Lock()
+	recovered := r.failed[prefix]
 	delete(r.releases, prefix)
-	backlog := r.backlog[prefix]
-	if backlog {
-		r.seq++
-		r.pending[prefix] = pendingPrefix{deadline: time.Now(), seq: r.seq}
+	delete(r.failed, prefix)
+	wake := r.backlog[prefix]
+	if wake {
+		r.retryNow(prefix)
+	}
+	if recovered {
+		for p := range r.failed {
+			delete(r.failed, p)
+			delete(r.releases, p)
+			r.retryNow(p)
+			wake = true
+		}
 	}
 	r.mu.Unlock()
 
-	if backlog {
+	if wake {
 		select {
 		case r.wake <- struct{}{}:
 		default:
 		}
 	}
+}
+
+// retryNow marks prefix to be batched at once, clearing any retry backoff.  r.mu must be held.
+func (r *eventBatcher) retryNow(prefix string) {
+	r.seq++
+	r.pending[prefix] = pendingPrefix{deadline: time.Now(), seq: r.seq}
 }
 
 // pendingPrefix is a prefix with unbatched segments.

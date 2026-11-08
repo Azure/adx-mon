@@ -73,6 +73,10 @@ type BatcherOpts struct {
 	// smaller transfers.
 	TransferLinger time.Duration
 
+	// MaxRetryDelay caps the backoff of a table whose batches keep failing.  Defaults to the queued sweep interval, a
+	// minute.
+	MaxRetryDelay time.Duration
+
 	TransfersDisabled bool
 
 	// Usage is optional.  When set, SegmentsTotal and SegmentsSize, and the metrics derived from them, report every
@@ -111,6 +115,8 @@ type Batch struct {
 	mu         sync.Mutex
 	completion func(time.Duration)
 	retryDelay time.Duration
+	// queueFull is set when the batch is released unsent because its destination's queue was full.
+	queueFull bool
 }
 
 // Release releases the segments in the batch so they can be processed again.
@@ -129,6 +135,15 @@ func (b *Batch) Release() {
 	if completion != nil {
 		completion(delay)
 	}
+}
+
+// releaseQueueFull releases a batch that was not sent because its destination's queue was full.  Unlike a failed
+// delivery, it says nothing about whether the destination is reachable.
+func (b *Batch) releaseQueueFull() {
+	b.mu.Lock()
+	b.queueFull = true
+	b.mu.Unlock()
+	b.Release()
 }
 
 // RetryAfter releases the worker promptly while deferring this table's next work.
@@ -304,6 +319,9 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 			linger = DefaultQueuedLinger
 		}
 		b.queued = newQueuedBatcher(b, linger, opts.TransferLinger)
+		if opts.MaxRetryDelay > 0 {
+			b.queued.maxRetryDelay = opts.MaxRetryDelay
+		}
 	}
 
 	return b, nil
@@ -727,12 +745,19 @@ func (b *batcher) Release(batch *Batch) {
 		return
 	}
 	batch.mu.Lock()
-	retryAfter := batch.retryDelay
+	retryAfter, queueFull := batch.retryDelay, batch.queueFull
 	batch.mu.Unlock()
+	r := b.queued
 	if b.realtime != nil && batch.Priority == ingestpolicy.PriorityRealtime {
-		b.realtime.released(batch.Prefix, retryAfter)
-	} else if b.queued != nil {
-		b.queued.released(batch.Prefix, retryAfter)
+		r = b.realtime
+	}
+	if r == nil {
+		return
+	}
+	if queueFull {
+		r.queueFull(batch.Prefix)
+	} else {
+		r.released(batch.Prefix, retryAfter)
 	}
 }
 
