@@ -80,8 +80,10 @@ func (o *ServiceOpts) transferBatchSize() int64 {
 	return DefaultTransferBatchSize
 }
 
-// maxTransferRetryDelay is the longest the collector stops sending to the ingestor after consecutive failed transfers.
-const maxTransferRetryDelay = time.Minute
+// maxTransferRetryDelay is the longest the collector stops sending to the ingestor after consecutive failed transfers,
+// and the longest a table's batches back off.  While the ingestor is down a retry costs one failed request per
+// collector, so it is kept short to start draining the backlog soon after the ingestor is back.
+const maxTransferRetryDelay = 10 * time.Second
 
 // DefaultMaxTransferSize bounds the size of one transfer made by merging a table's waiting batches.  It matches the
 // ingestor's default max-transfer-size.
@@ -501,6 +503,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		Usage:                   store,
 		MinUploadSize:           opts.transferBatchSize(),
 		MaxBatchSegments:        opts.MaxBatchSegments,
+		MaxRetryDelay:           maxTransferRetryDelay,
 		MaxTableBatches:         max(10, opts.MaxTransferConcurrency*2),
 		UploadQueue:             transferQueue,
 		TransferQueue:           transferQueue,
