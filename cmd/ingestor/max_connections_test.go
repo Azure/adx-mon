@@ -12,5 +12,5 @@ func TestMaxConnectionsDefault(t *testing.T) {
 	var got uint
 	app.Action = func(ctx *cli.Context) error { got = ctx.Uint("max-connections"); return nil }
 	require.NoError(t, app.Run([]string{"ingestor"}))
-	require.Equal(t, uint(1000), got)
+	require.Equal(t, uint(5000), got)
 }
