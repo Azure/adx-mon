@@ -80,6 +80,17 @@ func (o *ServiceOpts) transferBatchSize() int64 {
 	return DefaultTransferBatchSize
 }
 
+// DefaultMaxTransferSize bounds the size of one transfer made by merging a table's waiting batches.  It matches the
+// ingestor's default max-transfer-size.
+const DefaultMaxTransferSize = 100 * 1024 * 1024
+
+func (o *ServiceOpts) maxTransferSize() int64 {
+	if o.MaxTransferSize > 0 {
+		return o.MaxTransferSize
+	}
+	return DefaultMaxTransferSize
+}
+
 // replicatorOpts returns the options of the replicator that sends the collector's segments to the ingestor.
 func (o *ServiceOpts) replicatorOpts(partitioner cluster.MetricPartitioner, health cluster.PeerHealthReporter, remover cluster.SegmentRemover) cluster.ReplicatorOpts {
 	return cluster.ReplicatorOpts{
@@ -92,6 +103,8 @@ func (o *ServiceOpts) replicatorOpts(partitioner cluster.MetricPartitioner, heal
 		DisableGzip:                  o.DisableGzip,
 		QueuedReservedWorkersPercent: o.QueuedReservedWorkersPercent,
 		TransferLatency:              metrics.CollectorTransferLatency,
+		MaxBatchSegments:             o.MaxBatchSegments,
+		MaxTransferSize:              o.maxTransferSize(),
 	}
 }
 
@@ -180,6 +193,10 @@ type ServiceOpts struct {
 	// TransferBatchSize is the size at which the segments of a table are sent to the ingestor as a batch.  When zero,
 	// it is DefaultTransferBatchSize.
 	TransferBatchSize int64
+
+	// MaxTransferSize bounds the bytes of one transfer made by merging a table's batches that wait for a transfer
+	// worker.  When zero, it is DefaultMaxTransferSize.
+	MaxTransferSize int64
 
 	// DisableGzip disables gzip compression for the transfer endpoint.
 	DisableGzip bool
