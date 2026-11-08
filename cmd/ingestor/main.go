@@ -707,10 +707,16 @@ func makeClusterLabels(ctx *cli.Context) map[string]string {
 	return clusterLabels
 }
 
+// transferMaxHeaderBytes bounds the headers of a request to the transfer endpoint.  Every connection can hold this
+// much before its request is admitted, so it sets the memory --max-connections allows.  Transfers carry their filename
+// in the query and a few short headers.
+const transferMaxHeaderBytes = 64 << 10
+
 // newTransferServer returns the server for the ingestor's transfer endpoint.
 func newTransferServer(handler http.Handler) *http.Server {
 	return &http.Server{
-		Handler: handler,
+		Handler:        handler,
+		MaxHeaderBytes: transferMaxHeaderBytes,
 		// Close idle connections fairly often to establish new connections through the load balancer
 		// so that long-lived connections don't stay pinned to the same node indefinitely.
 		IdleTimeout: 5 * time.Minute,
