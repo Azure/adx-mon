@@ -41,7 +41,7 @@ func TestDefaultMaxTransferSize(t *testing.T) {
 	require.Equal(t, int64(DefaultMaxTransferSize), (&ServiceOpts{MaxTransferSize: -1}).maxTransferSize())
 }
 
-// A failed transfer stops the collector's transfers for at most a minute.
+// A failed transfer stops the collector's transfers, and a table's batches back off, for at most 10 seconds.
 func TestMaxTransferRetryDelay(t *testing.T) {
-	require.Equal(t, time.Minute, maxTransferRetryDelay)
+	require.Equal(t, 10*time.Second, maxTransferRetryDelay)
 }
