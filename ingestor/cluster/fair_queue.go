@@ -186,7 +186,7 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 	}
 
 	for {
-		candidate, destination := selectCandidate(tables, order, &cursor, &round, limit, opts.Quantum, groups)
+		candidate, destination, viaGroup := selectCandidate(tables, order, &cursor, &round, limit, opts.Quantum, groups)
 
 		var out chan *Batch
 		var group string
@@ -244,7 +244,13 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 			dispatched = true
 			table := tables[destination]
 			table.queue = table.queue[1:]
-			table.deficit -= batchBytes(candidate)
+			if viaGroup {
+				// Group priority ignored the destination's credit, so it spends only what it has and takes no debt.
+				table.deficit = max(table.deficit-batchBytes(candidate), 0)
+				groups.dispatched(destination, group)
+			} else {
+				table.deficit -= batchBytes(candidate)
+			}
 			table.running++
 			if groups != nil {
 				groups.running[group]++
@@ -299,19 +305,19 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 // batch, so throughput is shared by bytes rather than by batch count.  When groups is set, a destination whose next
 // batch belongs to a full group is skipped and waits for the group, and a group with room goes first to the destination
 // that has waited for it longest.
-func selectCandidate(tables map[wal.Destination]*fairTable, order []wal.Destination, cursor, round *int, limit int, quantum int64, groups *groupWaits) (*Batch, wal.Destination) {
+func selectCandidate(tables map[wal.Destination]*fairTable, order []wal.Destination, cursor, round *int, limit int, quantum int64, groups *groupWaits) (*Batch, wal.Destination, bool) {
 	now := time.Now()
 	ready := func(t *fairTable) bool {
 		return t != nil && len(t.queue) > 0 && t.running < limit && !t.retryAt.After(now)
 	}
 	if groups != nil {
 		if d, ok := groups.next(tables, ready); ok {
-			return tables[d].queue[0], d
+			return tables[d].queue[0], d, true
 		}
 	}
 	for visited := 0; visited <= len(order); visited++ {
 		if len(order) == 0 {
-			return nil, wal.Destination{}
+			return nil, wal.Destination{}, false
 		}
 		if *cursor >= len(order) {
 			*cursor = 0
@@ -336,14 +342,14 @@ func selectCandidate(tables map[wal.Destination]*fairTable, order []wal.Destinat
 		}
 
 		if cost := batchBytes(table.queue[0]); cost <= table.deficit {
-			return table.queue[0], d
+			return table.queue[0], d, false
 		}
 
 		// Cannot afford its next batch this round; keep the credit and let the
 		// next destination run.
 		*cursor++
 	}
-	return nil, wal.Destination{}
+	return nil, wal.Destination{}, false
 }
 
 // groupWaits limits how many batches of each group run at once, and remembers the destinations that are waiting for a
@@ -383,9 +389,10 @@ func (g *groupWaits) done(group string) {
 	}
 }
 
-// next returns the destination that has waited longest for a group that now has room and is ready to run.  Waiting
-// destinations that are no longer ready, such as ones without work or retrying, stop waiting; they wait again if
-// they are skipped for a full group later.
+// next returns the destination that has waited longest for a group that now has room and is ready to run.  It stays
+// at the head of the group's waiters until dispatched removes it, so if its batch isn't sent this time it is still
+// first next time.  Waiting destinations that are no longer ready, such as ones without work or retrying, stop
+// waiting; they wait again if they are skipped for a full group later.
 func (g *groupWaits) next(tables map[wal.Destination]*fairTable, ready func(*fairTable) bool) (wal.Destination, bool) {
 	for group, waiting := range g.waiting {
 		if g.running[group] >= g.limit {
@@ -393,20 +400,28 @@ func (g *groupWaits) next(tables map[wal.Destination]*fairTable, ready func(*fai
 		}
 		for len(waiting) > 0 {
 			d := waiting[0]
-			waiting = waiting[1:]
-			delete(g.queued, d)
 			if t := tables[d]; ready(t) && g.group(t.queue[0]) == group {
-				if len(waiting) == 0 {
-					delete(g.waiting, group)
-				} else {
-					g.waiting[group] = waiting
-				}
+				g.waiting[group] = waiting
 				return d, true
 			}
+			waiting = waiting[1:]
+			delete(g.queued, d)
 		}
 		delete(g.waiting, group)
 	}
 	return wal.Destination{}, false
+}
+
+// dispatched removes d, whose batch of group was dispatched, from the head of group's waiters.
+func (g *groupWaits) dispatched(d wal.Destination, group string) {
+	if w := g.waiting[group]; len(w) > 0 && w[0] == d {
+		if len(w) == 1 {
+			delete(g.waiting, group)
+		} else {
+			g.waiting[group] = w[1:]
+		}
+		delete(g.queued, d)
+	}
 }
 
 // mergeBatch adds next's segments to queued, a batch waiting for a worker, when they are for the same prefix and
