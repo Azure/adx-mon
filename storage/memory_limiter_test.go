@@ -184,9 +184,68 @@ func importUnderCeiling(t *testing.T, ceiling int64, size int) error {
 	return err
 }
 
-// The intake ceiling charges an import for the bytes it has read, not for the buffer holding them, which grows by
-// doubling: a 600 KB body is admitted under a 1 MB ceiling though its buffer grows to 1 MB from a 512 KB one.
-func TestImportChargesBytesRead(t *testing.T) {
-	err := importUnderCeiling(t, 1<<20, 600<<10)
+// The intake ceiling charges an import for the buffers holding its body, which grow by doubling and briefly hold the
+// old copy too.  A 400 KB body grows a 256 KB buffer into a 512 KB one, 768 KB in all, which fits a 1 MB ceiling; a
+// 600 KB body grows a 512 KB buffer into a 1 MB one, 1.5 MB in all, which does not.
+func TestImportChargesBufferCapacity(t *testing.T) {
+	err := importUnderCeiling(t, 1<<20, 400<<10)
 	require.False(t, errorsIsExhausted(err), "got %v", err)
+	require.ErrorIs(t, importUnderCeiling(t, 1<<20, 600<<10), storage.ErrIntakeMemoryExhausted)
+}
+
+// Concurrent imports never hold more buffer memory than the ceiling, however large their bodies.
+func TestConcurrentImportsStayWithinIntakeCeiling(t *testing.T) {
+	const ceiling = 8 << 20
+	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: wal.NewAdmission(wal.AdmissionOpts{}), MaxIntakeMemory: ceiling})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, s.Open(ctx))
+	defer s.Close()
+
+	body := make([]byte, 3<<20)
+	var peak int64
+	var mu sync.Mutex
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			mu.Lock()
+			peak = max(peak, s.IntakeInFlight())
+			mu.Unlock()
+		}
+	}()
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = s.Import("DB_A_s_1.wal", io.NopCloser(bytes.NewReader(body)))
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	<-sampled
+	require.LessOrEqual(t, peak, int64(ceiling))
+	require.Zero(t, s.IntakeInFlight())
+}
+
+func TestIntakeNeeded(t *testing.T) {
+	require.EqualValues(t, 64<<10, storage.IntakeNeeded(1))
+	require.EqualValues(t, 64<<10, storage.IntakeNeeded(64<<10))
+	require.EqualValues(t, 192<<10, storage.IntakeNeeded(64<<10+1))
+	require.EqualValues(t, 192<<20, storage.IntakeNeeded(100<<20))
+}
+
+// A body of any size is admitted under a ceiling of IntakeNeeded of its size.
+func TestImportAdmittedAtIntakeNeeded(t *testing.T) {
+	for _, size := range []int{1, 64 << 10, 64<<10 + 1, 600 << 10, 3 << 20} {
+		err := importUnderCeiling(t, storage.IntakeNeeded(int64(size)), size)
+		require.False(t, errorsIsExhausted(err), "size %d: got %v", size, err)
+	}
 }
