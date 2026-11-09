@@ -148,3 +148,14 @@ func TestCountingRWMutexTryLockFor(t *testing.T) {
 		readers.Wait()
 	})
 }
+
+// TryLock does not count its holder, but Unlock uncounts it, so the waiter count goes negative with every TryLock and
+// the limit never sheds a caller.
+func TestCountingRWMutexTryLockUnlockGoesNegative(t *testing.T) {
+	rw := NewCountingRWMutex(5)
+	for i := 0; i < 10; i++ {
+		require.True(t, rw.TryLock())
+		rw.Unlock()
+	}
+	require.EqualValues(t, -10, rw.Waiters())
+}
