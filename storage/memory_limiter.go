@@ -2,6 +2,7 @@ package storage
 
 import (
 	"io"
+	"math"
 	"sync/atomic"
 
 	gbp "github.com/libp2p/go-buffer-pool"
@@ -76,6 +77,10 @@ func (m *MemoryLimiter) InFlight() int64 {
 // IntakeNeeded returns the intake memory an import of a size-byte body is charged at its peak: the buffer that holds
 // it, the smallest intakeStep doubled enough times, plus the half-size buffer it grows from.
 func IntakeNeeded(size int64) int64 {
+	// A body this large could never be buffered; saturate rather than overflow while doubling.
+	if size > math.MaxInt64/4 {
+		return math.MaxInt64
+	}
 	c := int64(intakeStep)
 	for c < size {
 		c *= 2

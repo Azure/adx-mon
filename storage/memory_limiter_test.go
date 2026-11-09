@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math"
 	"os"
 	"sync"
 	"testing"
@@ -240,6 +241,9 @@ func TestIntakeNeeded(t *testing.T) {
 	require.EqualValues(t, 64<<10, storage.IntakeNeeded(64<<10))
 	require.EqualValues(t, 192<<10, storage.IntakeNeeded(64<<10+1))
 	require.EqualValues(t, 192<<20, storage.IntakeNeeded(100<<20))
+	// Sizes too large to buffer saturate instead of overflowing while doubling.
+	require.EqualValues(t, int64(math.MaxInt64), storage.IntakeNeeded(1<<62+1))
+	require.EqualValues(t, int64(math.MaxInt64), storage.IntakeNeeded(math.MaxInt64))
 }
 
 // A body of any size is admitted under a ceiling of IntakeNeeded of its size.

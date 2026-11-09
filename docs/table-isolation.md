@@ -202,8 +202,11 @@ Check the defaults against your peak concurrency before upgrading. A peer
 transfers batches smaller than `--max-transfer-size` (100 MiB by default), and
 each peer sends up to `--max-transfer-concurrency` requests at once (50 by
 default), so a single peer alone could have about 5 GiB in flight toward one
-ingestor, and several peers can target the same ingestor. With the defaults,
-roughly ten near-full-size transfers in flight at once reach the 1 GiB ceiling.
+ingestor, and several peers can target the same ingestor. A transfer is charged
+for the buffer holding it, which doubles from 64 KiB: a 100 MiB transfer holds
+128 MiB once read and is charged up to 192 MiB while its buffer grows. With the
+defaults, five to eight near-full-size transfers in flight at once reach the
+1 GiB ceiling.
 To size it:
 
 1. Estimate the average transfer size as
@@ -216,8 +219,9 @@ To size it:
    ingestor's memory limit, or lower `--max-transfer-size`. Setting it to `0`
    restores the previous unbounded behaviour.
 
-`--max-intake-memory` must be at least `--max-transfer-size`; an ingestor
-configured below that refuses to start.
+`--max-intake-memory` must cover the largest transfer's charge, 192 MiB for a
+100 MiB `--max-transfer-size`; a lower ceiling is raised to that at startup,
+with a warning.
 
 ## End-to-end verification
 
