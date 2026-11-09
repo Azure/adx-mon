@@ -424,7 +424,7 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 
 		var (
 			readers        = make([]io.Reader, 0, len(segments))
-			segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
+			segmentReaders = make([]*lazySegmentReader, 0, len(segments))
 			database       string
 			table          string
 			schema         string
@@ -464,11 +464,15 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 				break
 			}
 
-			segmentReaders = append(segmentReaders, f)
-			readers = append(readers, f)
+			// The segment is opened again when the upload reaches it, so a batch holds one file open at a time
+			// rather than one per segment.
+			f.Close()
+			lazy := &lazySegmentReader{path: si.Path, opts: opts}
+			segmentReaders = append(segmentReaders, lazy)
+			readers = append(readers, lazy)
 		}
 
-		defer func(segmentReaders []*wal.SegmentReader) {
+		defer func(segmentReaders []*lazySegmentReader) {
 			for _, sr := range segmentReaders {
 				sr.Close()
 			}
@@ -485,7 +489,7 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			return
 		}
 
-		samplePath := segmentReaders[0].Path()
+		samplePath := segmentReaders[0].path
 		database, table, schema, _, err = wal.ParseFilename(samplePath)
 		if err != nil {
 			logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
@@ -639,4 +643,47 @@ type clusterDetails struct {
 // or it ends before its header.
 func unreadableSegment(err error) bool {
 	return errors.Is(err, wal.ErrInvalidWALSegment) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// lazySegmentReader reads a segment that uploadBatch has checked it can open, opening it only when the upload
+// reaches it and closing it at its end, so an upload holds one segment file open at a time.  A segment that is gone
+// or unreadable by then, such as one another batch uploaded and removed, reads as empty, as it would have been
+// skipped; any other failure to open it fails the upload, so the batch is retried.
+type lazySegmentReader struct {
+	path string
+	opts []wal.Option
+	r    *wal.SegmentReader
+	done bool
+}
+
+func (l *lazySegmentReader) Read(p []byte) (int, error) {
+	if l.done {
+		return 0, io.EOF
+	}
+	if l.r == nil {
+		r, err := wal.NewSegmentReader(l.path, l.opts...)
+		if os.IsNotExist(err) || unreadableSegment(err) {
+			l.done = true
+			return 0, io.EOF
+		} else if err != nil {
+			return 0, err
+		}
+		l.r = r
+	}
+	n, err := l.r.Read(p)
+	if err == io.EOF {
+		l.Close()
+		l.done = true
+	}
+	return n, err
+}
+
+// Close closes the segment if it is open.
+func (l *lazySegmentReader) Close() error {
+	if l.r == nil {
+		return nil
+	}
+	err := l.r.Close()
+	l.r = nil
+	return err
 }
