@@ -3,7 +3,7 @@ package interp
 import (
 	"fmt"
 	"go/constant"
-	"path/filepath"
+	"path"
 	"reflect"
 	"strconv"
 	"strings"
@@ -779,8 +779,8 @@ func nodeType2(interp *Interpreter, sc *scope, n *node, seen []*node) (t *itype,
 		sym, _, found := sc.lookup(n.ident)
 		if !found {
 			// retry with the filename, in case ident is a package name.
-			baseName := filepath.Base(interp.fset.Position(n.pos).Filename)
-			ident := filepath.Join(n.ident, baseName)
+			baseName := path.Base(interp.fset.Position(n.pos).Filename)
+			ident := path.Join(n.ident, baseName)
 			sym, _, found = sc.lookup(ident)
 			if !found {
 				t = &itype{name: n.ident, path: sc.pkgName, node: n, incomplete: true, scope: sc}
@@ -1182,15 +1182,12 @@ func genMethod(interp *Interpreter, sc *scope, t *itype, nod *node, types []*ity
 // findPackageType searches the top level scope for a package type.
 func findPackageType(interp *Interpreter, sc *scope, n *node) *itype {
 	// Find the root scope, the package symbols will exist there.
-	for {
-		if sc.level == 0 {
-			break
-		}
+	for sc.level != 0 {
 		sc = sc.anc
 	}
 
-	baseName := filepath.Base(interp.fset.Position(n.pos).Filename)
-	sym, _, found := sc.lookup(filepath.Join(n.ident, baseName))
+	baseName := path.Base(interp.fset.Position(n.pos).Filename)
+	sym, _, found := sc.lookup(path.Join(n.ident, baseName))
 	if !found || sym.typ == nil && sym.typ.cat != srcPkgT && sym.typ.cat != binPkgT {
 		return nil
 	}
@@ -1714,10 +1711,7 @@ func (t *itype) fieldIndex(name string) int {
 func (t *itype) fieldSeq(seq []int) *itype {
 	ft := t
 	for _, i := range seq {
-		if ft.cat == ptrT {
-			ft = ft.val
-		}
-		ft = ft.field[i].typ
+		ft = baseType(ft).field[i].typ
 	}
 	return ft
 }
@@ -2154,9 +2148,13 @@ func (t *itype) refType(ctx *refTypeContext) reflect.Type {
 				Type: f.typ.refType(ctx),
 				Tag:  reflect.StructTag(f.tag),
 			}
-			if len(t.field) == 1 && f.embed {
+			if len(t.field) == 1 && f.embed && field.Type.NumMethod() == 0 {
 				// Mark the field as embedded (anonymous) only if it is the
 				// only one, to avoid a panic due to golang/go#15924 issue.
+				// Do not mark it if its type has methods: reflect.StructOf
+				// copies them to the struct type but not to the pointer type,
+				// and callers like encoding/json in Go 1.27 expect the pointer
+				// to have the same methods.
 				field.Anonymous = true
 			}
 			fields = append(fields, field)

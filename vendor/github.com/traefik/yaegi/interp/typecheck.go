@@ -270,6 +270,7 @@ func (check typecheck) binaryExpr(n *node) error {
 		}
 	}
 
+	// Ensure that if values are untyped, both are converted to the same type
 	_ = check.convertUntyped(c0, c1.typ)
 	_ = check.convertUntyped(c1, c0.typ)
 
@@ -1003,8 +1004,8 @@ func (check typecheck) argument(p param, ftyp *itype, i, l int, ellipsis bool) e
 			return p.nod.cfgErrorf("can only use ... with matching parameter")
 		}
 		t := p.Type().TypeOf()
-		if t.Kind() != reflect.Slice || !(valueTOf(t.Elem())).assignableTo(atyp) {
-			return p.nod.cfgErrorf("cannot use %s as type %s", p.nod.typ.id(), (sliceOf(atyp)).id())
+		if t.Kind() != reflect.Slice || !valueTOf(t.Elem()).assignableTo(atyp) {
+			return p.nod.cfgErrorf("cannot use %s as type %s", p.nod.typ.id(), sliceOf(atyp).id())
 		}
 		return nil
 	}
@@ -1059,7 +1060,7 @@ func (check typecheck) convertUntyped(n *node, typ *itype) error {
 		// Both n and target are untyped.
 		nkind, tkind := ntyp.Kind(), ttyp.Kind()
 		if isNumber(ntyp) && isNumber(ttyp) {
-			if nkind < tkind {
+			if nkind <= tkind {
 				n.typ = typ
 			}
 		} else if nkind != tkind {
