@@ -430,6 +430,7 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			schema         string
 			header         string
 			err            error
+			openFailed     bool
 		)
 
 		for _, si := range segments {
@@ -451,9 +452,16 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			if os.IsNotExist(err) {
 				// batches are not disjoint, so the same segments could be included in multiple batches.
 				continue
-			} else if err != nil {
-				logger.Errorf("Failed to open file: %s", err.Error())
+			} else if unreadableSegment(err) {
+				// It can never be read, so it is removed with the batch.
+				logger.Errorf("Failed to open file, removing it: %s", err.Error())
 				continue
+			} else if err != nil {
+				// It may open on a retry, such as once file descriptors or the disk recover, so the whole batch is
+				// retried rather than removed with this segment unread.
+				logger.Errorf("Failed to open file, retrying the batch: %s", err.Error())
+				openFailed = true
+				break
 			}
 
 			segmentReaders = append(segmentReaders, f)
@@ -466,7 +474,7 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			}
 		}(segmentReaders)
 
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || openFailed {
 			return
 		}
 
@@ -625,4 +633,10 @@ type clusterDetails struct {
 	Reserved0              int       `kusto:"Reserved0"`
 	ClockDescription       string    `kusto:"ClockDescription"`
 	RuntimeDescription     string    `kusto:"RuntimeDescription"`
+}
+
+// unreadableSegment reports whether err, from opening a segment, means it can never be read: it is not a WAL segment,
+// or it ends before its header.
+func unreadableSegment(err error) bool {
+	return errors.Is(err, wal.ErrInvalidWALSegment) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
