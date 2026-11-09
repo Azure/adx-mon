@@ -66,8 +66,31 @@ func segmentFilesOpenWhileUploading(t *testing.T, n int) int {
 	}
 }
 
-// An upload opens every segment of its batch before it reads the first, so a batch of 500 segments holds 500 files
-// open at once.
-func TestUploadOpensEverySegmentAtOnce(t *testing.T) {
-	require.Equal(t, 5, segmentFilesOpenWhileUploading(t, 5))
+// An upload opens each segment of its batch when it reaches it and closes it at its end, so it holds one segment file
+// open at a time however many segments the batch merges.
+func TestUploadOpensOneSegmentAtATime(t *testing.T) {
+	require.LessOrEqual(t, segmentFilesOpenWhileUploading(t, 5), 1)
+}
+
+// A segment that is gone or unreadable when the upload reaches it reads as empty; any other failure to open it fails
+// the read, and so the upload, so the batch is retried.
+func TestLazySegmentReaderOpenFailures(t *testing.T) {
+	dir := t.TempDir()
+	gone := &lazySegmentReader{path: filepath.Join(dir, "gone.wal")}
+	n, err := gone.Read(make([]byte, 10))
+	require.Zero(t, n)
+	require.ErrorIs(t, err, io.EOF)
+
+	invalid := filepath.Join(dir, "invalid.wal")
+	require.NoError(t, os.WriteFile(invalid, []byte("not a segment"), 0o644))
+	_, err = (&lazySegmentReader{path: invalid}).Read(make([]byte, 10))
+	require.ErrorIs(t, err, io.EOF)
+
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a file without permission")
+	}
+	unreadable := filepath.Join(dir, "unreadable.wal")
+	require.NoError(t, os.WriteFile(unreadable, nil, 0))
+	_, err = (&lazySegmentReader{path: unreadable}).Read(make([]byte, 10))
+	require.ErrorIs(t, err, os.ErrPermission)
 }
