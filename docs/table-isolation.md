@@ -90,7 +90,8 @@ charged up to about three times its size. A request that would exceed the
 ceiling gets a retryable `429` while the sender keeps its WAL files. The
 ceiling must cover a full-size transfer, 1.5 times the smallest power of two
 at or above `--max-transfer-size` (192 MB for 100 MB), or that transfer could
-never be admitted; the ingestor refuses to start otherwise. See
+never be admitted; a lower ceiling is raised to that at startup, with a
+warning. See
 [Upgrading](#upgrading) for sizing.
 
 ## Shedding and recovery
