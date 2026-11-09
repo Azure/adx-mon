@@ -987,7 +987,20 @@ func genFunctionWrapper(n *node) func(*frame) reflect.Value {
 	}
 	funcType := n.typ.TypeOf()
 
+	value := genValue(n)
+	var isDefer bool
+	if n.anc != nil && n.anc.anc != nil && n.anc.anc.kind == deferStmt {
+		isDefer = true
+	}
+
 	return func(f *frame) reflect.Value {
+		v := value(f)
+		if !isDefer && v.Kind() == reflect.Func {
+			// fixes #1634, if v is already a func, then don't re-wrap
+			// because original wrapping cloned the frame but this doesn't
+			return v
+		}
+
 		return reflect.MakeFunc(funcType, func(in []reflect.Value) []reflect.Value {
 			// Allocate and init local frame. All values to be settable and addressable.
 			fr := newFrame(f, len(def.types), f.runid())
@@ -1066,6 +1079,9 @@ func genInterfaceWrapper(n *node, typ reflect.Type) func(*frame) reflect.Value {
 	// As the field name was generated with a prefixed first character (in order to avoid
 	// collisions with method names), this first character is ignored in comparisons.
 	wrap := getWrapper(n, typ)
+	if wrap == nil {
+		panic(n.cfgErrorf("no interface wrapper found for %s.%s", typ.PkgPath(), typ.Name()))
+	}
 	mn := wrap.NumField() - 1
 	names := make([]string, mn)
 	methods := make([]*node, mn)
@@ -1399,6 +1415,13 @@ func call(n *node) {
 			return tnext
 		}
 		runCfg(def.child[3].start, nf, def, n)
+
+		// Set return values
+		for i, v := range rvalues {
+			if v != nil {
+				v(f).Set(nf.data[i])
+			}
+		}
 
 		// Handle branching according to boolean result
 		if fnext != nil && !nf.data[0].Bool() {
@@ -1939,7 +1962,7 @@ func getMethod(n *node) {
 	next := getExec(n.tnext)
 
 	n.exec = func(f *frame) bltn {
-		nod := *(n.val.(*node))
+		nod := *n.val.(*node)
 		nod.val = &nod
 		nod.recv = n.recv
 		getFrame(f, l).data[i] = genFuncValue(&nod)(f)
@@ -2647,10 +2670,7 @@ func compositeBinSlice(n *node) {
 func doCompositeBinStruct(n *node, hasType bool) {
 	next := getExec(n.tnext)
 	value := valueGenerator(n, n.findex)
-	typ := n.typ.rtype
-	if n.typ.cat == ptrT || n.typ.cat == linkedT {
-		typ = n.typ.val.rtype
-	}
+	typ := baseType(n.typ).rtype
 	child := n.child
 	if hasType {
 		child = n.child[1:]
@@ -2714,10 +2734,7 @@ func destType(n *node) *itype {
 func doComposite(n *node, hasType bool, keyed bool) {
 	value := valueGenerator(n, n.findex)
 	next := getExec(n.tnext)
-	typ := n.typ
-	if typ.cat == ptrT || typ.cat == linkedT {
-		typ = typ.val
-	}
+	typ := baseType(n.typ)
 	child := n.child
 	if hasType {
 		child = n.child[1:]
@@ -2873,6 +2890,85 @@ func _range(n *node) {
 	}
 }
 
+func rangeInt(n *node) {
+	ixn := n.child[0]
+	index0 := ixn.findex // array index location in frame
+	index2 := index0 - 1 // max
+	fnext := getExec(n.fnext)
+	tnext := getExec(n.tnext)
+
+	var value func(*frame) reflect.Value
+	mxn := n.child[1]
+	value = genValue(mxn)
+	n.exec = func(f *frame) bltn {
+		rv := f.data[index0]
+		rv.SetInt(rv.Int() + 1)
+		if int(rv.Int()) >= int(f.data[index2].Int()) {
+			return fnext
+		}
+		return tnext
+	}
+
+	// Init sequence
+	next := n.exec
+	index := index0
+	ixn.exec = func(f *frame) bltn {
+		f.data[index2] = value(f) // set max
+		f.data[index].SetInt(-1)  // assing index value
+		return next
+	}
+}
+
+func loopVarKey(n *node) {
+	ixn := n.anc.anc.child[0]
+	next := getExec(n.tnext)
+	n.exec = func(f *frame) bltn {
+		rv := f.data[ixn.findex]
+		nv := reflect.New(rv.Type()).Elem()
+		nv.Set(rv)
+		f.data[n.findex] = nv
+		return next
+	}
+}
+
+func loopVarVal(n *node) {
+	vln := n.anc.anc.child[1]
+	next := getExec(n.tnext)
+	n.exec = func(f *frame) bltn {
+		rv := f.data[vln.findex]
+		nv := reflect.New(rv.Type()).Elem()
+		nv.Set(rv)
+		f.data[n.findex] = nv
+		return next
+	}
+}
+
+func loopVarFor(n *node) {
+	ixn := n.anc.anc.child[0].child[0]
+	next := getExec(n.tnext)
+	n.exec = func(f *frame) bltn {
+		fv := f.data[ixn.findex]
+		nv := reflect.New(fv.Type()).Elem()
+		nv.Set(fv)
+		f.data[n.findex] = nv
+		return next
+	}
+}
+
+// loopVarForEnd runs at the end of each iteration of a for loop with a
+// per-iteration variable, before the post statement: as in Go 1.22, the next
+// iteration starts from the value that the body left in the variable (the body
+// can change it, as in "i++" or "i += n").
+func loopVarForEnd(n *node) {
+	lv := n.child[0].findex
+	ixn := n.anc.child[0].child[0].findex
+	next := getExec(n.tnext)
+	n.exec = func(f *frame) bltn {
+		f.data[ixn].Set(f.data[lv])
+		return next
+	}
+}
+
 func rangeChan(n *node) {
 	i := n.child[0].findex        // element index location in frame
 	value := genValue(n.child[1]) // chan
@@ -2901,11 +2997,10 @@ func rangeMap(n *node) {
 	index2 := index0 - 1        // iterator for range, always just behind index0
 	fnext := getExec(n.fnext)
 	tnext := getExec(n.tnext)
+	value := genValue(n.child[len(n.child)-2]) // map value
 
-	var value func(*frame) reflect.Value
-	if len(n.child) == 4 {
-		index1 := n.child[1].findex  // map value location in frame
-		value = genValue(n.child[2]) // map
+	if len(n.child) == 4 && n.child[1].ident != "_" {
+		index1 := n.child[1].findex // map value location in frame
 		n.exec = func(f *frame) bltn {
 			iter := f.data[index2].Interface().(*reflect.MapIter)
 			if !iter.Next() {
@@ -2916,7 +3011,6 @@ func rangeMap(n *node) {
 			return tnext
 		}
 	} else {
-		value = genValue(n.child[1]) // map
 		n.exec = func(f *frame) bltn {
 			iter := f.data[index2].Interface().(*reflect.MapIter)
 			if !iter.Next() {
@@ -3686,7 +3780,7 @@ func send(n *node) {
 	next := getExec(n.tnext)
 	c0, c1 := n.child[0], n.child[1]
 	value0 := genValue(c0) // Send channel.
-	value1 := genDestValue(c0.typ.val, c1)
+	value1 := genDestValue(c0.typ.elem(), c1)
 
 	if !n.interp.cancelChan {
 		// Send is non-cancellable, has the least overhead.
