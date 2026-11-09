@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type AlerterOpts struct {
 	KustoEndpoints map[string]string
 	Region         string
 	AlertAddr      string
+	AlertAddrs     []string
 	Cloud          string
 	Port           int
 	Concurrency    int
@@ -55,7 +57,7 @@ type ruleStore interface {
 
 type Alerter struct {
 	clients  map[string]KustoClient
-	alertCli *alert.Client
+	alertCli *alert.FanoutClient
 	opts     *AlerterOpts
 
 	wg        sync.WaitGroup
@@ -112,13 +114,17 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		ruleStore.Register(fakeRule)
 	}
 
-	if opts.AlertAddr == "" {
+	addrs := resolveAlertAddrs(opts)
+	if len(addrs) == 0 {
 		logger.Warnf("No alert address provided, using fake alert handler")
 		l.alertHandler = fakeAlertHandler()
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
+		addrs = []string{opts.AlertAddr}
+	} else if opts.AlertAddr == "" {
+		opts.AlertAddr = addrs[0]
 	}
 
-	alertCli, err := alert.NewClient(time.Minute)
+	alertCli, err := alert.NewFanoutClient(addrs, alert.WithTimeout(time.Minute))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert client: %w", err)
 	}
@@ -211,6 +217,9 @@ func (l *Alerter) Open(ctx context.Context) error {
 	if err := l.metrics.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open metrics service: %w", err)
 	}
+	if err := l.alertCli.Open(l.ctx); err != nil {
+		return fmt.Errorf("failed to open alert client: %w", err)
+	}
 
 	if err := l.executor.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open executor: %w", err)
@@ -261,6 +270,9 @@ func (l *Alerter) Close() error {
 	if err := l.executor.Close(); err != nil {
 		return fmt.Errorf("failed to close executor: %w", err)
 	}
+	if err := l.alertCli.Close(); err != nil {
+		return fmt.Errorf("failed to close alert client: %w", err)
+	}
 	if err := l.metrics.Close(); err != nil {
 		return fmt.Errorf("failed to close metrics service: %w", err)
 	}
@@ -269,4 +281,29 @@ func (l *Alerter) Close() error {
 		return fmt.Errorf("failed to close rule store: %w", err)
 	}
 	return nil
+}
+
+func resolveAlertAddrs(opts *AlerterOpts) []string {
+	var raw []string
+	raw = append(raw, opts.AlertAddrs...)
+	if opts.AlertAddr != "" {
+		raw = append(raw, opts.AlertAddr)
+	}
+	seen := make(map[string]struct{}, len(raw))
+	var addrs []string
+	for _, entry := range raw {
+		for _, part := range strings.Split(entry, ",") {
+			trimmed := strings.TrimSpace(part)
+			normalized := alert.NormalizeEndpoint(trimmed)
+			if normalized == "" {
+				continue
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			addrs = append(addrs, trimmed)
+		}
+	}
+	return addrs
 }

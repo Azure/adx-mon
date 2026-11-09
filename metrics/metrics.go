@@ -225,6 +225,13 @@ var (
 		Help:      "Gauge indicating if a notification is healthy or not",
 	}, []string{"namespace", "name"})
 
+	NotificationsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "notifications_dropped_total",
+		Help:      "Counter of alert notifications dropped per endpoint when the retry queue exceeds its maximum size or exhausts retries.",
+	}, []string{"endpoint", "reason"})
+
 	AlertRuleEvaluationDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",

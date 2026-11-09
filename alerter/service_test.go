@@ -61,6 +61,36 @@ func TestAlerter_OpenClose(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNewService_MultipleAlertAddrs(t *testing.T) {
+	opts := &alerter.AlerterOpts{
+		Dev:            true,
+		KustoEndpoints: map[string]string{"fake": "http://fake.endpoint"},
+		Region:         "test-region",
+		AlertAddrs: []string{
+			"http://notifier-a:8080",
+			"http://notifier-b:8080",
+		},
+		Cloud:            "Azure",
+		Port:             8081,
+		Concurrency:      5,
+		Tags:             map[string]string{"env": "test"},
+		MaxNotifications: 10,
+		MSIID:            "test-msi-id",
+		MSIResource:      "https://kusto.kusto.windows.net",
+		KustoToken:       "test-token",
+		CtrlCli:          nil,
+	}
+
+	service, err := alerter.NewService(opts)
+	require.NoError(t, err)
+	require.NotNil(t, service)
+	require.Equal(t, "http://notifier-a:8080", opts.AlertAddr)
+
+	ctx := context.Background()
+	require.NoError(t, service.Open(ctx))
+	require.NoError(t, service.Close())
+}
+
 func TestLint(t *testing.T) {
 
 	filename := filepath.Join(t.TempDir(), "alert_rule.yaml")
