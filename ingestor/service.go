@@ -231,11 +231,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Transfers are buffered in full before admission, so a ceiling below what
-	// the largest transfer is charged would reject that transfer on every retry.
-	if need := storage.IntakeNeeded(opts.MaxTransferSize); opts.MaxIntakeMemory > 0 && need > opts.MaxIntakeMemory {
-		return nil, fmt.Errorf("max intake memory (%d) must be at least %d to buffer a transfer of max transfer size (%d)", opts.MaxIntakeMemory, need, opts.MaxTransferSize)
-	}
+	opts.MaxIntakeMemory = intakeCeiling(opts.MaxIntakeMemory, opts.MaxTransferSize)
 	if opts.Realtime.enabled() {
 		// Admission replaces the repository's disk checks, so it must also
 		// hold back the space reserved for realtime tables.
@@ -907,4 +903,16 @@ func initTransferMetrics() {
 	for _, code := range []string{"202", "423", "429"} {
 		metrics.RequestsReceived.WithLabelValues("/transfer", code)
 	}
+}
+
+// intakeCeiling returns the intake memory ceiling to use for a configured ceiling and the largest transfer.  Transfers
+// are buffered in full before admission, so a ceiling below what the largest transfer is charged would reject that
+// transfer on every retry; such a ceiling is raised to what it is charged.  Zero disables the ceiling.
+func intakeCeiling(configured, maxTransferSize int64) int64 {
+	need := storage.IntakeNeeded(maxTransferSize)
+	if configured <= 0 || configured >= need {
+		return configured
+	}
+	logger.Warnf("Raising max intake memory from %d to %d, the most a transfer of max transfer size (%d) is charged", configured, need, maxTransferSize)
+	return need
 }
