@@ -19,8 +19,8 @@ func pooledAfter(t *testing.T, size int) int {
 	return p.Get(512 * 1024).(*gbp.Buffer).Cap()
 }
 
-// A buffer put back into the pool keeps the memory it grew to while holding a request body, and the pool never
-// releases it, so after a flood of large bodies every pooled buffer holds one.
-func TestBytesBufferPoolKeepsGrownBuffers(t *testing.T) {
-	require.GreaterOrEqual(t, pooledAfter(t, 16<<20), 16<<20)
+// A buffer put back into the pool hands back the memory it grew to while holding a request body, so the buffers the
+// pool keeps hold none after a flood of large bodies.
+func TestBytesBufferPoolReleasesGrownBuffers(t *testing.T) {
+	require.Zero(t, pooledAfter(t, 16<<20))
 }
