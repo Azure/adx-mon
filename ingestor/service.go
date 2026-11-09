@@ -280,6 +280,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
+	initTransferMetrics()
+
 	// Create ingestor-specific WAL segment metrics lazily to avoid exposing collector metrics
 	ingestorSegmentsTotal, ingestorSegmentsSizeBytes, ingestorSegmentsMaxAge := metrics.NewIngestorSegmentMetrics()
 
@@ -863,4 +865,21 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (s *statusRecorder) Unwrap() http.ResponseWriter {
 	return s.ResponseWriter
+}
+
+// initTransferMetrics creates the transfer series an ingestor reports, at zero, so the first transfer of each kind is
+// counted as an increase rather than appearing as a new series that rate() and increase() miss.  Transfer status codes
+// beyond the common ones are created as they occur.
+func initTransferMetrics() {
+	for _, outcome := range cluster.TransferOutcomeNames {
+		metrics.IngestorPeerTransfers.WithLabelValues(outcome)
+	}
+	for _, sender := range []string{"collector", "peer"} {
+		for _, code := range []string{"202", "423", "429"} {
+			metrics.IngestorTransfersReceived.WithLabelValues(sender, code)
+		}
+	}
+	for _, code := range []string{"202", "423", "429"} {
+		metrics.RequestsReceived.WithLabelValues("/transfer", code)
+	}
 }
