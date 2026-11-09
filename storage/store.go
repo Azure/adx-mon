@@ -684,10 +684,6 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	buf := pool.BytesBufferPool.Get(512 * 1024).(*gbp.Buffer)
-	defer pool.BytesBufferPool.Put(buf)
-	buf.Reset()
-
 	limit := s.opts.MaxDiskUsage
 	tableScoped := false
 	// In observe-only mode the table budget is reported, not enforced, so it
@@ -705,15 +701,14 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	}
 
 	// The body is buffered in full before it can be admitted, so memory is
-	// claimed as it is read rather than reserving the destination's whole
+	// claimed as the buffer grows rather than reserving the destination's whole
 	// budget, which could exceed the ceiling for a small payload.
-	intake := &intakeReader{r: input, m: s.intake}
-	defer intake.Release()
-
-	n, err := io.Copy(buf, intake)
+	buf, err := readIntake(input, s.intake)
+	defer buf.Release()
 	if err != nil {
 		return 0, err
 	}
+	n := int64(len(buf.Bytes()))
 	if limit > 0 && n > limit {
 		if tableScoped {
 			// Larger than the destination's entire budget: draining cannot make

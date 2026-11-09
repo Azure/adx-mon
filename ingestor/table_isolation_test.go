@@ -97,7 +97,10 @@ func newServiceWithIntake(t *testing.T, transferSize, ceiling int64) error {
 	return err
 }
 
-// The ingestor starts when the intake ceiling equals its largest transfer.
-func TestIngestorAcceptsIntakeCeilingEqualToTransferSize(t *testing.T) {
-	require.NoError(t, newServiceWithIntake(t, 100<<20, 100<<20))
+// The ingestor starts only when the intake ceiling covers what its largest transfer is charged: a 100 MB transfer is
+// buffered in 128 MB grown from 64 MB.
+func TestIngestorRequiresIntakeCeilingForLargestTransfer(t *testing.T) {
+	require.ErrorContains(t, newServiceWithIntake(t, 100<<20, 100<<20), "max intake memory")
+	require.ErrorContains(t, newServiceWithIntake(t, 100<<20, 192<<20-1), "max intake memory")
+	require.NoError(t, newServiceWithIntake(t, 100<<20, 192<<20))
 }
