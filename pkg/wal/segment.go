@@ -94,7 +94,7 @@ type segment struct {
 	filePos   uint64
 
 	wg sync.WaitGroup
-	mu *adxsync.CountingRWMutex
+	mu *adxsync.RWMutex
 
 	// w is the underlying segment file on disk
 	w *os.File
@@ -191,7 +191,7 @@ func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 		closing:       make(chan struct{}),
 		flushCh:       make(chan chan error),
 		flushInterval: 100 * time.Millisecond,
-		mu:            adxsync.NewCountingRWMutex(5),
+		mu:            &adxsync.RWMutex{},
 	}
 
 	for _, opt := range opts {
@@ -270,7 +270,7 @@ func Open(path string) (Segment, error) {
 		closing:       make(chan struct{}),
 		flushCh:       make(chan chan error),
 		flushInterval: 100 * time.Millisecond,
-		mu:            adxsync.NewCountingRWMutex(5),
+		mu:            &adxsync.RWMutex{},
 	}
 
 	if err := f.Repair(); err != nil {
