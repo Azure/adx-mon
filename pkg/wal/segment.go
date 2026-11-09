@@ -412,14 +412,7 @@ func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) (
 	}
 	s.mu.RUnlock()
 
-	written, err := s.blockWrite(buf, opts...)
-	if err != nil {
-		return 0, err
-	}
-
-	atomic.AddUint64(&s.filePos, uint64(written))
-	s.rawSize.Add(int64(len(buf)))
-	return written, err
+	return s.blockWrite(buf, opts...)
 }
 
 // blocksRawSize returns the uncompressed size of the values in a sequence of length and CRC prefixed blocks, read
@@ -694,6 +687,9 @@ func (s *segment) blockWrite(buf []byte, opts ...WriteOptions) (int, error) {
 		return 0, io.ErrShortWrite
 	}
 
+	// Count the write while the lock is held, so a rotation that closes the segment and reads its Info counts it.
+	atomic.AddUint64(&s.filePos, uint64(n))
+	s.rawSize.Add(int64(len(buf)))
 	return n, nil
 }
 
