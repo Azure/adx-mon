@@ -137,32 +137,33 @@ func (r *eventBatcher) queueFull(prefix string) {
 }
 
 func (r *eventBatcher) release(prefix string, retryAfter time.Duration, failed bool) {
-	// The released segments wait for the retry, or for one of the prefix's batches to be delivered.
-	r.setBacklog(prefix, true)
+	// The released segments wait for the retry, or for one of the prefix's batches to be delivered.  The failure is
+	// recorded and the retry set under one hold of mu, so a delivery that recovers the destination in between
+	// either sees the failure and retries the prefix, or finds the retry already set and clears it.
+	r.mu.Lock()
+	r.backlog[prefix] = true
+	var at time.Time
 	if retryAfter > 0 {
-		r.mu.Lock()
 		delete(r.failed, prefix)
-		r.mu.Unlock()
-		at := time.Now().Add(retryAfter)
-		r.markPendingWithRetry(prefix, at, at)
-		return
-	}
-	delay := r.retryDelay
-	if r.maxRetryDelay > 0 {
-		r.mu.Lock()
-		n := r.releases[prefix]
-		r.releases[prefix] = n + 1
-		if failed {
-			r.failed[prefix] = true
+		at = time.Now().Add(retryAfter)
+	} else {
+		delay := r.retryDelay
+		if r.maxRetryDelay > 0 {
+			n := r.releases[prefix]
+			r.releases[prefix] = n + 1
+			if failed {
+				r.failed[prefix] = true
+			}
+			for i := 0; i < n && delay < r.maxRetryDelay; i++ {
+				delay *= 2
+			}
+			delay = min(delay, r.maxRetryDelay)
 		}
-		r.mu.Unlock()
-		for i := 0; i < n && delay < r.maxRetryDelay; i++ {
-			delay *= 2
-		}
-		delay = min(delay, r.maxRetryDelay)
+		at = time.Now().Add(delay)
 	}
-	at := time.Now().Add(delay)
-	r.markPendingWithRetry(prefix, at, at)
+	r.markPendingLocked(prefix, at, at)
+	r.mu.Unlock()
+	r.signal()
 }
 
 // removed resets the retry backoff of prefix after one of its batches is delivered.  A prefix with a backlog is batched
@@ -225,6 +226,13 @@ func (r *eventBatcher) markPending(prefix string, deadline time.Time) {
 // markPendingWithRetry records a pending prefix and, when retryAfter is set, delays normal batching until that time.
 func (r *eventBatcher) markPendingWithRetry(prefix string, deadline, retryAfter time.Time) {
 	r.mu.Lock()
+	r.markPendingLocked(prefix, deadline, retryAfter)
+	r.mu.Unlock()
+	r.signal()
+}
+
+// markPendingLocked is markPendingWithRetry for a caller that holds mu; the caller signals the run loop afterwards.
+func (r *eventBatcher) markPendingLocked(prefix string, deadline, retryAfter time.Time) {
 	r.seq++
 	p, ok := r.pending[prefix]
 	if !ok || deadline.Before(p.deadline) {
@@ -235,8 +243,10 @@ func (r *eventBatcher) markPendingWithRetry(prefix string, deadline, retryAfter 
 	}
 	p.seq = r.seq
 	r.pending[prefix] = p
-	r.mu.Unlock()
+}
 
+// signal wakes the run loop to recompute its next deadline.
+func (r *eventBatcher) signal() {
 	select {
 	case r.wake <- struct{}{}:
 	default:
