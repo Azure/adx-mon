@@ -231,10 +231,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Transfers are buffered in full before admission, so a ceiling below the
-	// largest transfer would reject that transfer on every retry.
-	if opts.MaxIntakeMemory > 0 && opts.MaxTransferSize > opts.MaxIntakeMemory {
-		return nil, fmt.Errorf("max intake memory (%d) must be at least max transfer size (%d)", opts.MaxIntakeMemory, opts.MaxTransferSize)
+	// Transfers are buffered in full before admission, so a ceiling below what
+	// the largest transfer is charged would reject that transfer on every retry.
+	if need := storage.IntakeNeeded(opts.MaxTransferSize); opts.MaxIntakeMemory > 0 && need > opts.MaxIntakeMemory {
+		return nil, fmt.Errorf("max intake memory (%d) must be at least %d to buffer a transfer of max transfer size (%d)", opts.MaxIntakeMemory, need, opts.MaxTransferSize)
 	}
 	if opts.Realtime.enabled() {
 		// Admission replaces the repository's disk checks, so it must also

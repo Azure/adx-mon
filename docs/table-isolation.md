@@ -84,10 +84,13 @@ are omitted above.
 
 `--max-intake-memory` (default 1 GiB) bounds the bytes buffered across
 concurrent transfer requests; disk budgets alone do not protect process memory.
-Each transfer is charged for the bytes it actually buffers, and a request that
-would exceed the ceiling gets a retryable `429` while the sender keeps its WAL
-files. The ceiling must be at least `--max-transfer-size`, or a full-size
-transfer could never be admitted; the ingestor refuses to start otherwise. See
+Each transfer is charged for the buffer holding its body as it grows, which
+doubles from 64 KB and briefly holds the old buffer too, so a transfer is
+charged up to about three times its size. A request that would exceed the
+ceiling gets a retryable `429` while the sender keeps its WAL files. The
+ceiling must cover a full-size transfer, 1.5 times the smallest power of two
+at or above `--max-transfer-size` (192 MB for 100 MB), or that transfer could
+never be admitted; the ingestor refuses to start otherwise. See
 [Upgrading](#upgrading) for sizing.
 
 ## Shedding and recovery

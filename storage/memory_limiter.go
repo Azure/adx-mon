@@ -3,11 +3,14 @@ package storage
 import (
 	"io"
 	"sync/atomic"
+
+	gbp "github.com/libp2p/go-buffer-pool"
 )
 
-// intakeStep is how much memory an import claims ahead of each read. Claiming
-// in steps charges a request for what it actually buffers, so a small transfer
-// is admitted even when its destination's disk budget exceeds the ceiling.
+// intakeStep is the size of the buffer an import starts with.  Growing from a
+// small buffer charges a request for what it actually buffers, so a small
+// transfer is admitted even when its destination's disk budget exceeds the
+// ceiling.
 const intakeStep = 64 * 1024
 
 // MemoryLimiter bounds the total bytes buffered by concurrent intake requests.
@@ -70,44 +73,105 @@ func (m *MemoryLimiter) InFlight() int64 {
 	return m.used.Load()
 }
 
-// intakeReader charges every byte read from r to m before reading it, so the
-// buffered body never exceeds the claim. Read returns ErrIntakeMemoryExhausted
-// once the ceiling is reached. The caller must call Release when the buffered
-// body is no longer needed.
-type intakeReader struct {
-	r        io.Reader
-	m        *MemoryLimiter
-	reserved int64
-	read     int64
+// IntakeNeeded returns the intake memory an import of a size-byte body is charged at its peak: the buffer that holds
+// it, the smallest intakeStep doubled enough times, plus the half-size buffer it grows from.
+func IntakeNeeded(size int64) int64 {
+	c := int64(intakeStep)
+	for c < size {
+		c *= 2
+	}
+	if c == intakeStep {
+		return c
+	}
+	return c + c/2
 }
 
-func (r *intakeReader) Read(p []byte) (int, error) {
-	if r.read >= r.reserved {
-		step := int64(intakeStep)
-		if r.m != nil && r.m.limit > 0 {
-			step = min(step, r.m.limit)
-		}
-		if !r.m.Reserve(step) {
-			// A body that ends exactly at the claim is only known to be
-			// complete after one more read, so probe before rejecting it.
+// intakeBuffer reads a request body into memory charged to a MemoryLimiter.  It charges the capacity of the buffers
+// it holds rather than the bytes read: the buffer grows by doubling, and while it grows the old and the new buffer
+// are both held, so charging bytes read let concurrent imports hold several times the ceiling.
+type intakeBuffer struct {
+	m       *MemoryLimiter
+	buf     []byte
+	pooled  bool
+	charged int64
+}
+
+// readIntake reads r into an intakeBuffer.  It returns ErrIntakeMemoryExhausted when the buffer cannot grow within
+// m's ceiling.  The caller must call Release when the body is no longer needed, also after an error.
+func readIntake(r io.Reader, m *MemoryLimiter) (*intakeBuffer, error) {
+	b := &intakeBuffer{m: m}
+	first := int64(intakeStep)
+	if m != nil && m.limit > 0 {
+		first = min(first, m.limit)
+	}
+	if !b.grow(int(first)) {
+		return b, ErrIntakeMemoryExhausted
+	}
+	for {
+		if len(b.buf) == cap(b.buf) {
+			// A body that ends exactly at the buffer's capacity is only known to be complete after one more read,
+			// so probe before growing.
 			var probe [1]byte
-			if n, err := r.r.Read(probe[:]); n == 0 && err != nil {
-				return 0, err
+			n, err := r.Read(probe[:])
+			if n == 0 {
+				if err == io.EOF {
+					return b, nil
+				} else if err != nil {
+					return b, err
+				}
+				continue
 			}
-			return 0, ErrIntakeMemoryExhausted
+			if !b.grow(2 * cap(b.buf)) {
+				return b, ErrIntakeMemoryExhausted
+			}
+			b.buf = append(b.buf, probe[0])
+			if err == io.EOF {
+				return b, nil
+			} else if err != nil {
+				return b, err
+			}
+			continue
 		}
-		r.reserved += step
+		n, err := r.Read(b.buf[len(b.buf):cap(b.buf)])
+		b.buf = b.buf[:len(b.buf)+n]
+		if err == io.EOF {
+			return b, nil
+		} else if err != nil {
+			return b, err
+		}
 	}
-	if avail := r.reserved - r.read; int64(len(p)) > avail {
-		p = p[:avail]
-	}
-	n, err := r.r.Read(p)
-	r.read += int64(n)
-	return n, err
 }
 
-// Release returns the memory claimed by all reads.
-func (r *intakeReader) Release() {
-	r.m.Release(r.reserved)
-	r.reserved = 0
+// grow moves the body into a buffer of size bytes, charging it before allocating, and reports false without
+// growing when the charge does not fit.
+func (b *intakeBuffer) grow(size int) bool {
+	if !b.m.Reserve(int64(size)) {
+		return false
+	}
+	var next []byte
+	pooled := size&(size-1) == 0
+	if pooled {
+		next = gbp.Get(size)[:len(b.buf)]
+	} else {
+		next = make([]byte, len(b.buf), size)
+	}
+	copy(next, b.buf)
+	b.free()
+	b.buf, b.pooled, b.charged = next, pooled, int64(size)
+	return true
 }
+
+// free returns the buffer and its charge.
+func (b *intakeBuffer) free() {
+	if b.buf != nil && b.pooled {
+		gbp.Put(b.buf[:cap(b.buf)])
+	}
+	b.m.Release(b.charged)
+	b.buf, b.charged = nil, 0
+}
+
+// Bytes returns the body read.
+func (b *intakeBuffer) Bytes() []byte { return b.buf }
+
+// Release returns the buffer and the memory charged for it.
+func (b *intakeBuffer) Release() { b.free() }
