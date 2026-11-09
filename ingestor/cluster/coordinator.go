@@ -255,8 +255,13 @@ func (c *coordinator) Open(ctx context.Context) error {
 
 	set := make(map[string]string)
 	set[c.hostname] = c.hostEntpoint
-	c.peers = set
-	c.setPartitioner(set)
+	// Owner may already be called, such as by the store's ownership sweep, so the partitioner is set under the lock.
+	c.mu.Lock()
+	err = c.setPartitioner(set)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
 
 	if _, err := podsInformer.AddEventHandler(c); err != nil {
 		return err
@@ -423,6 +428,7 @@ func (c *coordinator) syncPeersLocked() error {
 	return nil
 }
 
+// setPartitioner sets the peers and the partitioner that assigns tables to them.  mu must be held.
 func (c *coordinator) setPartitioner(set map[string]string) error {
 	c.peers = make(map[string]string, len(set))
 	maps.Copy(c.peers, set)
