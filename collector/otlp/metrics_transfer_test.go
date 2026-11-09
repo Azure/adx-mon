@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io/fs"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -326,4 +327,45 @@ func serializedMSR(t *testing.T, msg *v1.ExportMetricsServiceRequest) []byte {
 	b, err := proto.Marshal(msg)
 	require.NoError(t, err)
 	return b
+}
+
+func TestNewSeriesUsesPlainAttributeValues(t *testing.T) {
+	str := func(s string) *commonv1.AnyValue {
+		return &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: s}}
+	}
+	series := newSeries("m", []*commonv1.KeyValue{
+		{Key: "s", Value: str("eastus")},
+		{Key: "i", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 42}}},
+		{Key: "d", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 1.5}}},
+		{Key: "b", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_BoolValue{BoolValue: true}}},
+		{Key: "y", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_BytesValue{BytesValue: []byte("hi")}}},
+		{Key: "d6", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 1e6}}},
+		{Key: "dsmall", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 1e-7}}},
+		{Key: "dinf", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: math.Inf(1)}}},
+		{Key: "a", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_ArrayValue{ArrayValue: &commonv1.ArrayValue{Values: []*commonv1.AnyValue{str("x"), {}, str("y")}}}}},
+		{Key: "k", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_KvlistValue{KvlistValue: &commonv1.KeyValueList{Values: []*commonv1.KeyValue{{Key: "z", Value: str("a<b&c")}}}}}},
+		{Key: "e", Value: &commonv1.AnyValue{}},
+		{Key: "n"},
+	})
+	t.Cleanup(func() { prompb.TimeSeriesPool.Put(series) })
+
+	got := map[string]string{}
+	for _, l := range series.Labels {
+		got[string(l.Name)] = string(l.Value)
+	}
+	require.Equal(t, map[string]string{
+		"__name__": "m",
+		"s":        "eastus",
+		"i":        "42",
+		"d":        "1.5",
+		"d6":       "1000000",
+		"dsmall":   "1e-7",
+		"dinf":     "+Inf",
+		"b":        "true",
+		"y":        "aGk=",
+		"a":        `["x",null,"y"]`,
+		"k":        `{"z":"a<b&c"}`,
+		"e":        "",
+		"n":        "",
+	}, got)
 }

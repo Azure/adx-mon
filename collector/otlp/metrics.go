@@ -2,9 +2,12 @@ package otlp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -496,10 +499,103 @@ func newSeries(name string, attributes []*commonv1.KeyValue) *prompb.TimeSeries 
 	ts.AppendLabelString("__name__", name)
 
 	for _, l := range attributes {
-		ts.AppendLabelString(l.Key, l.Value.String())
+		ts.AppendLabelString(l.Key, anyValueString(l.Value))
 	}
 
 	return ts
+}
+
+// anyValueString renders an attribute value as a plain label value, following
+// the OpenTelemetry AsString conventions. AnyValue.String() would produce the
+// protobuf text form, e.g. string_value:"eastus".
+func anyValueString(val *commonv1.AnyValue) string {
+	switch v := val.GetValue().(type) {
+	case *commonv1.AnyValue_StringValue:
+		return v.StringValue
+	case *commonv1.AnyValue_BoolValue:
+		return strconv.FormatBool(v.BoolValue)
+	case *commonv1.AnyValue_IntValue:
+		return strconv.FormatInt(v.IntValue, 10)
+	case *commonv1.AnyValue_DoubleValue:
+		return float64String(v.DoubleValue)
+	case *commonv1.AnyValue_BytesValue:
+		return base64.StdEncoding.EncodeToString(v.BytesValue)
+	case *commonv1.AnyValue_ArrayValue, *commonv1.AnyValue_KvlistValue:
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(anyValueJSON(val, 0)); err != nil {
+			return ""
+		}
+		return strings.TrimSuffix(b.String(), "\n")
+	default:
+		return ""
+	}
+}
+
+// anyValueJSON keeps empty elements as null so distinct arrays and maps do not
+// collapse into the same label value.
+func anyValueJSON(val *commonv1.AnyValue, depth int) any {
+	if depth > defaultMaxDepth {
+		return "..."
+	}
+	switch v := val.GetValue().(type) {
+	case *commonv1.AnyValue_StringValue:
+		return v.StringValue
+	case *commonv1.AnyValue_BoolValue:
+		return v.BoolValue
+	case *commonv1.AnyValue_IntValue:
+		return v.IntValue
+	case *commonv1.AnyValue_DoubleValue:
+		if math.IsNaN(v.DoubleValue) || math.IsInf(v.DoubleValue, 0) {
+			return float64String(v.DoubleValue)
+		}
+		return v.DoubleValue
+	case *commonv1.AnyValue_BytesValue:
+		return v.BytesValue
+	case *commonv1.AnyValue_ArrayValue:
+		values := v.ArrayValue.GetValues()
+		ret := make([]any, 0, len(values))
+		for _, e := range values {
+			ret = append(ret, anyValueJSON(e, depth+1))
+		}
+		return ret
+	case *commonv1.AnyValue_KvlistValue:
+		values := v.KvlistValue.GetValues()
+		ret := make(map[string]any, len(values))
+		for _, kv := range values {
+			ret[kv.GetKey()] = anyValueJSON(kv.GetValue(), depth+1)
+		}
+		return ret
+	default:
+		return nil
+	}
+}
+
+// float64String formats like pcommon's AsString: plain decimal unless the
+// magnitude is very small or very large. Non-finite values use the Prometheus
+// spellings.
+func float64String(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "+Inf"
+	case math.IsInf(f, -1):
+		return "-Inf"
+	}
+	format := byte('f')
+	if abs := math.Abs(f); abs != 0 && (abs < 1e-6 || abs >= 1e21) {
+		format = 'e'
+	}
+	s := strconv.FormatFloat(f, format, -1, 64)
+	if format == 'e' {
+		// 1e-07 -> 1e-7, matching pcommon
+		if n := len(s); n >= 4 && s[n-4] == 'e' && s[n-3] == '-' && s[n-2] == '0' {
+			s = s[:n-2] + s[n-1:]
+		}
+	}
+	return s
 }
 
 func unixNanoToUnixMillis(nano uint64) int64 {
