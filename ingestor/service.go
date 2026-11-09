@@ -909,8 +909,11 @@ func initTransferMetrics() {
 // are buffered in full before admission, so a ceiling below what the largest transfer is charged would reject that
 // transfer on every retry; such a ceiling is raised to what it is charged.  Zero disables the ceiling.
 func intakeCeiling(configured, maxTransferSize int64) int64 {
+	if configured <= 0 {
+		return configured
+	}
 	need := storage.IntakeNeeded(maxTransferSize)
-	if configured <= 0 || configured >= need {
+	if configured >= need {
 		return configured
 	}
 	logger.Warnf("Raising max intake memory from %d to %d, the most a transfer of max transfer size (%d) is charged", configured, need, maxTransferSize)
