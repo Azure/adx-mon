@@ -84,9 +84,9 @@ func TestIngestorWiresTableBudgetDefaults(t *testing.T) {
 	require.Equal(t, http.StatusOK, ready.Code)
 }
 
-func TestIngestorRejectsIntakeCeilingBelowTransferSize(t *testing.T) {
+func TestIngestorStartsWithIntakeCeilingBelowTransferSize(t *testing.T) {
 	_, err := NewService(ServiceOpts{StorageDir: t.TempDir(), MaxTransferSize: 2048, MaxIntakeMemory: 1024, Uploader: tableTestUploader{queue: make(chan *cluster.Batch, 10)}, K8sCli: fake.NewSimpleClientset(), Hostname: "ingestor-0", Namespace: "adx-mon"})
-	require.ErrorContains(t, err, "max intake memory")
+	require.NoError(t, err)
 }
 
 // newServiceWithIntake creates a service whose largest transfer is transferSize bytes under an intake ceiling of
@@ -97,10 +97,12 @@ func newServiceWithIntake(t *testing.T, transferSize, ceiling int64) error {
 	return err
 }
 
-// The ingestor starts only when the intake ceiling covers what its largest transfer is charged: a 100 MB transfer is
-// buffered in 128 MB grown from 64 MB.
-func TestIngestorRequiresIntakeCeilingForLargestTransfer(t *testing.T) {
-	require.ErrorContains(t, newServiceWithIntake(t, 100<<20, 100<<20), "max intake memory")
-	require.ErrorContains(t, newServiceWithIntake(t, 100<<20, 192<<20-1), "max intake memory")
-	require.NoError(t, newServiceWithIntake(t, 100<<20, 192<<20))
+// An intake ceiling below what the largest transfer is charged is raised to it: a 100 MB transfer is buffered in
+// 128 MB grown from 64 MB.  A larger ceiling is kept, and zero still disables it.
+func TestIntakeCeilingCoversLargestTransfer(t *testing.T) {
+	require.NoError(t, newServiceWithIntake(t, 100<<20, 100<<20))
+	require.EqualValues(t, 192<<20, intakeCeiling(100<<20, 100<<20))
+	require.EqualValues(t, 192<<20, intakeCeiling(192<<20-1, 100<<20))
+	require.EqualValues(t, 1<<30, intakeCeiling(1<<30, 100<<20))
+	require.Zero(t, intakeCeiling(0, 100<<20))
 }
