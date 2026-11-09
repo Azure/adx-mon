@@ -181,6 +181,15 @@ body that does not fit is answered with 429.
 Collectors keep up to 5 connections to each ingestor, including idle ones, so an ingestor receiving from N collectors
 can hold up to 5 × N connections.
 
+## Memory limit
+
+`--memory-limit` sets Go's memory limit, a soft limit at which the garbage collector runs more often.  Without one,
+the heap grows to about twice its live size before each collection, so under a flood of large transfers, each
+leaving its buffer behind as garbage, an ingestor can hold several times what `--max-intake-memory` admits.  When
+the flag is not set, the ingestor uses `GOMEMLIMIT` if it is set, and otherwise 90% of the container's memory limit
+if the pod has one; the limit it uses is logged at startup.  The limit is soft: memory the ingestor really holds is
+never refused, and the garbage collector uses at most about half the CPU to stay under it.
+
 ## Latency metrics
 
 Each stage records how long data waited before it left that stage, as histograms whose quantiles can be compared

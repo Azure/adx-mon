@@ -77,6 +77,7 @@ func newApp() *cli.App {
 			&cli.Int64Flag{Name: "max-table-disk-usage", Usage: "Maximum WAL bytes per table; zero defaults to 10% of max-disk-usage"},
 			&cli.Int64Flag{Name: "max-table-segment-count", Usage: "Maximum active and closed files per table; zero defaults to 10% of max-segment-count"},
 			&cli.BoolFlag{Name: "disable-table-limits", Usage: "Disable default table quotas; explicit overrides still apply"},
+			&cli.Int64Flag{Name: "memory-limit", Usage: "Go memory limit in bytes, a soft limit at which the garbage collector runs more often.  0 uses GOMEMLIMIT if set, otherwise 90% of the container's memory limit if it has one"},
 			&cli.Int64Flag{Name: "max-intake-memory", Usage: "Maximum bytes buffered across concurrent transfer requests. 0 disables the ceiling", Value: 1024 * 1024 * 1024},
 			&cli.BoolFlag{Name: "enforce-table-limits", Usage: "Reject writes that exceed a table budget. When unset, budgets are only measured and reported"},
 			&cli.GenericFlag{Name: "table-limit", Value: &tableLimitValues{}, Usage: "Repeatable normalized table override as JSON: {\"database\":\"Logs\",\"table\":\"App\",\"max-bytes\":1073741824,\"max-segments\":1000}"},
@@ -132,6 +133,7 @@ func realMain(ctx *cli.Context) error {
 	runtime.MemProfileRate = 4096
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
+	applyMemoryLimit(ctx.Int64("memory-limit"))
 
 	var (
 		storageDir                              string

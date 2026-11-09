@@ -123,6 +123,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
   - `--disable-peer-transfer`: Disable peer transfer (upload all segments directly).
   - `--partition-size`: Number of nodes in a partition for sharding.
   - `--max-disk-usage`, `--max-segment-count`: Backpressure controls.
+  - `--memory-limit`: Go memory limit; defaults to `GOMEMLIMIT`, or 90% of the container's memory limit.
   - `--max-intake-memory`: Ceiling on memory buffered by in-flight transfers (1 GiB by default). See [table isolation](table-isolation.md#upgrading) before upgrading.
   - `--max-table-disk-usage`, `--max-table-segment-count`, `--table-limit`, `--disable-table-limits`, `--enforce-table-limits`: Per-table backlog budgets. See [table isolation](table-isolation.md).
   - `--enable-wal-fsync`: Enable fsync for WAL durability.
