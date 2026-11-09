@@ -20,6 +20,7 @@ func NewSegmentReader(path string, opts ...Option) (*SegmentReader, error) {
 
 	iter, err := NewSegmentIterator(f)
 	if err != nil {
+		f.Close()
 		return nil, err
 	}
 	r := &SegmentReader{f: f, iter: iter}
