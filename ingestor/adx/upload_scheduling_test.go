@@ -114,6 +114,20 @@ func requireFilesRemoved(t *testing.T, paths []string) {
 func csvRow(v string) []byte { return []byte("2024-01-01T00:00:00Z,1,{}," + v + "\n") }
 
 // queuedBatch adds one segment per value to table and returns the batch the batcher builds from them.
+// waitUnbatched waits until none of paths is part of a batch.  A released batch is marked released before its segments
+// are, so they can be batched again only after that.
+func (e *streamingTestEnv) waitUnbatched(t *testing.T, paths []string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		for _, p := range paths {
+			if e.batcher.(interface{ IsBatched(string) bool }).IsBatched(p) {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, time.Millisecond)
+}
+
 func (e *streamingTestEnv) queuedBatch(t *testing.T, table string, values ...string) (*cluster.Batch, []string) {
 	t.Helper()
 	var paths []string
@@ -293,6 +307,7 @@ func TestUploaderReleasesFailedMergedBatch(t *testing.T) {
 	require.Eventually(t, second.IsReleased, 5*time.Second, time.Millisecond)
 	require.False(t, second.IsRemoved())
 	paths := append(append(p1, p2...), p3...)
+	env.waitUnbatched(t, paths)
 	for _, p := range paths {
 		require.FileExists(t, p)
 	}
@@ -315,12 +330,14 @@ func TestUploaderLimitsUploadsPerTable(t *testing.T) {
 	rec.requireNoStart(t)
 
 	// Another table is not held back.
-	other, _ := env.queuedBatch(t, "Mem", "9")
+	other, otherPaths := env.queuedBatch(t, "Mem", "9")
 	env.u.UploadQueue() <- other
 	require.Equal(t, string(csvRow("9")), rec.waitStarted(t))
 
 	rec.open()
 	require.Eventually(t, second.IsRemoved, 5*time.Second, time.Millisecond)
+	// Mem's upload is not ordered with CPU's, so wait for it to finish too.
+	requireFilesRemoved(t, otherPaths)
 	require.ElementsMatch(t, []string{
 		string(csvRow("1")), string(csvRow("9")), string(csvRow("2")) + string(csvRow("3")),
 	}, rec.recorded())
