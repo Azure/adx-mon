@@ -340,14 +340,16 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 	}
 
 	// Read the pending state before the segments so a segment that closes afterwards keeps the prefix pending.  The
-	// segments are read and marked as batched under markMu, but the batches are sent without it, since a full queue
-	// waits for workers that remove and release batches.
+	// segments are read and marked as batched, and the backlog flag set from them, under markMu, but the batches are
+	// sent without it, since a full queue waits for workers that remove and release batches.
 	r.b.markMu.Lock()
 	segments := r.unbatched(prefix)
 	if len(segments) == 0 {
+		// The backlog flag is set before markMu is released, so a batch released after this read, which sets it,
+		// isn't overwritten by this stale result.
+		r.setBacklog(prefix, false)
 		r.b.markMu.Unlock()
 		r.clearPending(prefix, p.seq)
-		r.setBacklog(prefix, false)
 		return
 	}
 
@@ -362,8 +364,8 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 
 	r.clearPending(prefix, p.seq)
 	owned, notOwned := r.policy.batches(r.b, prefix, segments)
-	r.b.markMu.Unlock()
 	r.setBacklog(prefix, batchedSegments(owned)+batchedSegments(notOwned) < len(segments))
+	r.b.markMu.Unlock()
 	r.send(ctx, owned, r.b.uploadQueueFor)
 	r.send(ctx, notOwned, r.b.transferQueueFor)
 }
