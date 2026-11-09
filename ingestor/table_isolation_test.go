@@ -2,6 +2,7 @@ package ingestor
 
 import (
 	"bytes"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -105,4 +106,5 @@ func TestIntakeCeilingCoversLargestTransfer(t *testing.T) {
 	require.EqualValues(t, 192<<20, intakeCeiling(192<<20-1, 100<<20))
 	require.EqualValues(t, 1<<30, intakeCeiling(1<<30, 100<<20))
 	require.Zero(t, intakeCeiling(0, 100<<20))
+	require.Zero(t, intakeCeiling(0, math.MaxInt64), "a disabled ceiling stays disabled whatever the transfer size")
 }
