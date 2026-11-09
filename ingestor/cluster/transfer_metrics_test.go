@@ -105,3 +105,11 @@ func TestReplicatorWithoutTransferMetrics(t *testing.T) {
 	after, _ := observed(metrics.IngestorPeerTransferSegments)
 	require.Equal(t, count, after)
 }
+
+// TransferOutcomeNames lists every outcome transferOutcome reports.
+func TestTransferOutcomeNamesCoverEveryOutcome(t *testing.T) {
+	for _, err := range []error{nil, &wal.TableOverloadedError{Reason: "bytes"}, &wal.SegmentTooLargeError{Limit: 1}, &ErrBadRequest{Msg: "bad"},
+		ErrSegmentExists, ErrSegmentLocked, &PeerOverloadedError{RetryAfter: time.Second}, errors.New("boom")} {
+		require.Contains(t, TransferOutcomeNames, transferOutcome(err))
+	}
+}
