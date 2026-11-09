@@ -170,3 +170,23 @@ func TestMemoryLimiterCountsUsageWithoutCeiling(t *testing.T) {
 	m.Release(100)
 	require.Zero(t, m.InFlight())
 }
+
+// importUnderCeiling imports a body of size bytes into a store whose intake ceiling is ceiling bytes.
+func importUnderCeiling(t *testing.T, ceiling int64, size int) error {
+	t.Helper()
+	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: wal.NewAdmission(wal.AdmissionOpts{}), MaxIntakeMemory: ceiling})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, s.Open(ctx))
+	defer s.Close()
+	_, err := s.Import("DB_A_s_1.wal", io.NopCloser(bytes.NewReader(make([]byte, size))))
+	require.Zero(t, s.IntakeInFlight(), "an import releases its intake memory when it returns")
+	return err
+}
+
+// The intake ceiling charges an import for the bytes it has read, not for the buffer holding them, which grows by
+// doubling: a 600 KB body is admitted under a 1 MB ceiling though its buffer grows to 1 MB from a 512 KB one.
+func TestImportChargesBytesRead(t *testing.T) {
+	err := importUnderCeiling(t, 1<<20, 600<<10)
+	require.False(t, errorsIsExhausted(err), "got %v", err)
+}

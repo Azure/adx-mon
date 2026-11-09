@@ -88,3 +88,16 @@ func TestIngestorRejectsIntakeCeilingBelowTransferSize(t *testing.T) {
 	_, err := NewService(ServiceOpts{StorageDir: t.TempDir(), MaxTransferSize: 2048, MaxIntakeMemory: 1024, Uploader: tableTestUploader{queue: make(chan *cluster.Batch, 10)}, K8sCli: fake.NewSimpleClientset(), Hostname: "ingestor-0", Namespace: "adx-mon"})
 	require.ErrorContains(t, err, "max intake memory")
 }
+
+// newServiceWithIntake creates a service whose largest transfer is transferSize bytes under an intake ceiling of
+// ceiling bytes.
+func newServiceWithIntake(t *testing.T, transferSize, ceiling int64) error {
+	t.Helper()
+	_, err := NewService(ServiceOpts{StorageDir: t.TempDir(), MaxTransferSize: transferSize, MaxIntakeMemory: ceiling, Uploader: tableTestUploader{queue: make(chan *cluster.Batch, 10)}, K8sCli: fake.NewSimpleClientset(), Hostname: "ingestor-0", Namespace: "adx-mon"})
+	return err
+}
+
+// The ingestor starts when the intake ceiling equals its largest transfer.
+func TestIngestorAcceptsIntakeCeilingEqualToTransferSize(t *testing.T) {
+	require.NoError(t, newServiceWithIntake(t, 100<<20, 100<<20))
+}
