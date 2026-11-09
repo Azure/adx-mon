@@ -150,32 +150,34 @@ func TestSegmentAppendReturnsLockedWhileLockHeld(t *testing.T) {
 	}
 }
 
-// An append is shed while more goroutines than the lock's limit hold or wait for it.
-func TestSegmentAppendReturnsLockedAboveWaiterLimit(t *testing.T) {
+// An append is answered locked when readers hold the segment's lock for longer than the append waits, and succeeds
+// once they are done.
+func TestSegmentAppendReturnsLockedWhileReadersHoldTheLock(t *testing.T) {
 	s := newAppendSegment(t)
 	b := segmentBytes(t, "a")
 	release := make(chan struct{})
 	releaseAll := sync.OnceFunc(func() { close(release) })
 	defer releaseAll()
-	done := make(chan struct{}, 6)
 	const readers = 6
+	var holding, done sync.WaitGroup
 	for i := 0; i < readers; i++ {
+		holding.Add(1)
+		done.Add(1)
 		go func() {
+			defer done.Done()
 			s.mu.RLock()
+			holding.Done()
 			<-release
 			s.mu.RUnlock()
-			done <- struct{}{}
 		}()
 	}
-	require.Eventually(t, func() bool { return s.mu.Waiters() == readers }, time.Second, time.Millisecond)
+	holding.Wait()
 
 	_, err := s.Append(context.Background(), b)
 	require.ErrorIs(t, err, ErrSegmentLocked)
 
 	releaseAll()
-	for i := 0; i < readers; i++ {
-		<-done
-	}
+	done.Wait()
 	_, err = s.Append(context.Background(), b)
 	require.NoError(t, err)
 }
