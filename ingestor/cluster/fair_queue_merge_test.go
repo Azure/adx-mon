@@ -289,6 +289,9 @@ func TestGroupWaitsNext(t *testing.T) {
 	d, ok := g.next(tables, ready)
 	require.True(t, ok)
 	require.Equal(t, b, d)
+	require.Equal(t, []wal.Destination{b}, g.waiting["x"], "b keeps its place until its batch is dispatched")
+
+	g.dispatched(b, "x")
 	require.Empty(t, g.waiting)
 	require.Empty(t, g.queued)
 }
