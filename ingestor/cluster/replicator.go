@@ -170,6 +170,9 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 	batch.Release()
 }
 
+// TransferOutcomeNames are the outcomes transferOutcome reports.
+var TransferOutcomeNames = []string{"accepted", "table_overloaded", "too_large", "bad_request", "exists", "locked", "peer_overloaded", "error"}
+
 // transferOutcome names the outcome of a transfer for ReplicatorOpts.TransferOutcomes.
 func transferOutcome(err error) string {
 	var quota *wal.TableOverloadedError

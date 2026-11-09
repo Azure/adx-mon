@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
@@ -149,4 +151,31 @@ func TestStatusRecorder(t *testing.T) {
 		resp := httptest.NewRecorder()
 		require.Same(t, resp, (&statusRecorder{ResponseWriter: resp}).Unwrap())
 	})
+}
+
+// The ingestor's transfer series exist at zero before any transfer, so rate() and increase() count the first one.
+func TestInitTransferMetrics(t *testing.T) {
+	initTransferMetrics()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	series := map[string]map[string]bool{}
+	for _, f := range families {
+		for _, m := range f.GetMetric() {
+			var labels []string
+			for _, l := range m.GetLabel() {
+				labels = append(labels, l.GetName()+"="+l.GetValue())
+			}
+			if series[f.GetName()] == nil {
+				series[f.GetName()] = map[string]bool{}
+			}
+			series[f.GetName()][strings.Join(labels, ",")] = true
+		}
+	}
+	for _, outcome := range cluster.TransferOutcomeNames {
+		require.True(t, series["adxmon_ingestor_peer_transfers_total"]["outcome="+outcome], outcome)
+	}
+	for _, s := range []string{"code=423,sender=collector", "code=423,sender=peer", "code=202,sender=collector", "code=429,sender=peer"} {
+		require.True(t, series["adxmon_ingestor_transfers_received_total"][s], s)
+	}
+	require.True(t, series["adxmon_ingestor_requests_received_total"]["code=423,path=/transfer"])
 }
