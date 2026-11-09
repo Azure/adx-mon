@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,4 +127,27 @@ func TestSplitPrefixN(t *testing.T) {
 	// Without a limit every segment is batched, the last three together and the remaining one on its own.
 	owned, _ = env.b.splitPrefixN("db_Cpu", segments[6:], 0)
 	require.Equal(t, 4, batchedSegments(owned))
+}
+
+// Ending a batch of segments past the transfer age before a younger one doesn't make more batches than the limit.
+func TestSplitPrefixNStopsAtLimitAfterAgeBoundary(t *testing.T) {
+	env := newBacklogEnv(t, 0)
+	env.b.maxBatchSegments = 2
+	env.b.minUploadSize = 1 << 30
+	var segments []wal.SegmentInfo
+	for i := 0; i < 5; i++ {
+		si := env.add(t, "Cpu", 10, ingestpolicy.PriorityQueued)
+		if i < 3 {
+			si.CreatedAt = time.Now().Add(-time.Hour)
+		}
+		segments = append(segments, si)
+	}
+
+	owned, notOwned := env.b.splitPrefixN("db_Cpu", segments, 2)
+	require.Len(t, append(owned, notOwned...), 2)
+	require.Equal(t, 3, batchedSegments(owned)+batchedSegments(notOwned))
+	for i, si := range segments {
+		n, _ := env.b.segments.Get(si.Path)
+		require.Equal(t, i < 3, n == 1, "segment %d", i)
+	}
 }

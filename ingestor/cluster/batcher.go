@@ -563,6 +563,9 @@ func (b *batcher) splitPrefixN(prefix string, v []wal.SegmentInfo, maxBatches in
 			owned = append(owned, batch)
 			batch = newBatch()
 			batchSize = 0
+			if maxBatches > 0 && len(owned)+len(notOwned) >= maxBatches {
+				break
+			}
 		}
 		local = old
 
