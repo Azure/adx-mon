@@ -112,7 +112,11 @@ func TestScrapeTLSMetricsFetchMethods(t *testing.T) {
 				}
 				fmt.Fprint(out, "# TYPE test_metric gauge\ntest_metric{source=\"synthetic\"} 42\n")
 			})
-			c, err := NewMetricsClient(ClientOpts{ScrapeTLSProfiles: map[string]scrapetls.Profile{"exporter": profile}})
+			// Recheck files on every request so that restored credentials are adopted immediately.
+			c, err := NewMetricsClient(ClientOpts{
+				ScrapeTLSProfiles:        map[string]scrapetls.Profile{"exporter": profile},
+				ScrapeTLSRefreshInterval: time.Nanosecond,
+			})
 			require.NoError(t, err)
 			defer c.Close()
 			ctx := context.Background()
@@ -145,14 +149,16 @@ func TestScrapeTLSMetricsFetchMethods(t *testing.T) {
 			_, err = c.FetchMetricsIteratorWithProfile(ctx, srv.URL, "unknown")
 			require.ErrorContains(t, err, "unknown scrape TLS profile")
 
-			// Credentials are re-read on every request.
+			// Credentials are re-read on every request, and empty credentials are never sent.
 			for _, path := range []string{profile.UsernameFile, profile.PasswordFile} {
 				for _, value := range []string{"wrong", "", " \n"} {
 					require.NoError(t, os.WriteFile(path, []byte(value), 0600))
 					_, err = c.FetchMetricsWithProfile(srv.URL, "exporter")
-					require.ErrorContains(t, err, "401")
+					require.Error(t, err)
+					require.Equal(t, value == "wrong", strings.Contains(err.Error(), "401"), err.Error())
 					_, err = c.FetchMetricsIteratorWithProfile(ctx, srv.URL, "exporter")
-					require.ErrorContains(t, err, "401")
+					require.Error(t, err)
+					require.Equal(t, value == "wrong", strings.Contains(err.Error(), "401"), err.Error())
 				}
 				require.NoError(t, os.Remove(path))
 				_, err = c.FetchMetricsWithProfile(srv.URL, "exporter")
@@ -522,5 +528,65 @@ func TestScrapeTLSUnavailableProfileFailsClosedAndRecovers(t *testing.T) {
 		require.Equal(t, []string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
 	}
 	require.NoError(t, c.Close())
+	require.Empty(t, scrapeTLSInfoUsernames(t, name))
+}
+
+func TestScrapeTLSInvalidCredentialsBetweenChecks(t *testing.T) {
+	const name = "invalid-credentials-exporter"
+	profile, pair := scrapeTLSFixture(t)
+	var requests atomic.Int64
+	srv := startScrapeTLSServer(t, pair, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, "keep_metric 1\n")
+	})
+	c, err := NewMetricsClient(ClientOpts{
+		ScrapeTLSProfiles:        map[string]scrapetls.Profile{name: profile},
+		ScrapeTLSRefreshInterval: time.Hour,
+	})
+	require.NoError(t, err)
+	defer c.Close()
+	_, err = c.FetchMetricsWithProfile(srv.URL, name)
+	require.NoError(t, err)
+	require.Equal(t, []string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
+
+	for _, tc := range []struct{ name, file, content string }{
+		{"empty-password", profile.PasswordFile, ""},
+		{"empty-username", profile.UsernameFile, ""},
+		{"colon-username", profile.UsernameFile, "synthetic:user"},
+		{"invalid-utf8-username", profile.UsernameFile, "synthetic-user\xff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests.Store(0)
+			require.NoError(t, os.WriteFile(tc.file, []byte(tc.content), 0600))
+			// The change happens before the next periodic check, so it must be caught by the request itself.
+			_, err := c.FetchMetricsWithProfile(srv.URL, name)
+			require.Error(t, err)
+			_, err = c.FetchMetricsIteratorWithProfile(context.Background(), srv.URL, name)
+			require.ErrorContains(t, err, "unavailable")
+			require.Zero(t, requests.Load(), "unusable credentials were sent")
+			require.Empty(t, scrapeTLSInfoUsernames(t, name))
+
+			// Recovery is throttled by the refresh interval.
+			require.NoError(t, os.WriteFile(profile.UsernameFile, []byte("synthetic-user"), 0600))
+			require.NoError(t, os.WriteFile(profile.PasswordFile, []byte("synthetic-password"), 0600))
+			_, err = c.FetchMetricsWithProfile(srv.URL, name)
+			require.ErrorContains(t, err, "unavailable")
+			c.profilesMu.Lock()
+			c.profiles[name].checked = time.Time{}
+			c.profilesMu.Unlock()
+			_, err = c.FetchMetricsWithProfile(srv.URL, name)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), requests.Load())
+			require.Equal(t, []string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
+		})
+	}
+
+	// An invalid UTF-8 username found by a periodic check makes the profile unavailable instead of panicking.
+	require.NoError(t, os.WriteFile(profile.UsernameFile, []byte("synthetic-user\xff"), 0600))
+	c.profilesMu.Lock()
+	c.profiles[name].checked = time.Time{}
+	c.profilesMu.Unlock()
+	_, err = c.FetchMetricsWithProfile(srv.URL, name)
+	require.ErrorContains(t, err, "unavailable")
 	require.Empty(t, scrapeTLSInfoUsernames(t, name))
 }
