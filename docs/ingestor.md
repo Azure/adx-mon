@@ -40,9 +40,11 @@ is less than 100MB so that the file can be merged with other files before being 
 
 If the transfer fails, the instance will upload the file directly. 
 
-A segment of a table owned by another ingestor is only transferred, never uploaded from this node unless the owner is
-unavailable, so it rotates after `--unowned-segment-max-age` (1 second by default) rather than `--max-segment-age`.  Its
-data reaches the owner without waiting for the full segment age.  Ownership is checked when the table's WAL is created
+A segment of a table owned by another ingestor is normally transferred rather than uploaded from this node, so it
+rotates after `--unowned-segment-max-age` (1 second by default) rather than `--max-segment-age`.  Its data reaches the
+owner without waiting for the full segment age.  It is uploaded here instead when the owner is unavailable, when it is
+older than `--max-transfer-age`, or when its batch reaches `--max-batch-segments` segments or the transfer size limit.
+Ownership is checked when the table's WAL is created
 and again every 10 seconds, so a table that moves between ingestors switches limits within one sweep.  Realtime tables
 keep their own limits, and `--unowned-segment-max-age=0` turns this off.
 
