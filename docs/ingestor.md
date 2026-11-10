@@ -42,8 +42,9 @@ If the transfer fails, the instance will upload the file directly.
 
 Batches of a table that are waiting for a transfer worker are merged into one, up to `--max-batch-segments` segments
 and `--max-transfer-size` bytes, so a slower owner receives fewer, larger transfers.  `--max-transfers-per-table`
-limits how many transfers of one table run at once; later batches wait behind them and are merged.  By default a
-table may use every transfer worker but the reserved ones, so few batches wait.  `--transfer-linger` sets how long a
+limits how many transfers of one table run at once; later batches wait behind them and are merged.  Its default, 0,
+sets no per-table limit, but at most 5 transfers run at once to each owner, one per connection to it, shared across
+the tables it owns.  `--transfer-linger` sets how long a
 closed segment of a table owned by another ingestor waits to be batched with others before it is transferred, which
 defaults to the 5 seconds owned segments wait.  If the owner answers that the table's segment is busy (423), the
 batch is retried after 100–300 ms rather than after the usual retry backoff.
