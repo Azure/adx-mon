@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -576,14 +577,35 @@ func (s *Scraper) withTLSProfile(p *v1.Pod, targets []ScrapeTarget) []ScrapeTarg
 		logger.Warnf("Rejecting scrape TLS profile %q for pod %s/%s: unknown profile or namespace not allowed", name, p.Namespace, p.Name)
 		return nil
 	}
+	// The scheme annotation is interpolated into the target URL, so anything other than exactly "https" could point
+	// the URL, and the profile's credentials, at another host.
+	if scheme := getAnnotationOrDefault(p, "adx-mon/scheme", "http"); scheme != "https" {
+		logger.Warnf("Rejecting scrape TLS profile %q for pod %s/%s: adx-mon/scheme must be \"https\"", name, p.Namespace, p.Name)
+		return nil
+	}
 	for i := range targets {
-		if err := scrapetls.ValidateTarget(targets[i].Addr); err != nil {
+		if err := validatePodProfileTarget(targets[i].Addr, p.Status.PodIP); err != nil {
 			logger.Warnf("Rejecting scrape TLS profile %q for pod %s/%s: %s", name, p.Namespace, p.Name, err)
 			return nil
 		}
 		targets[i].TLSProfile = name
 	}
 	return targets
+}
+
+// validatePodProfileTarget checks that a discovered target may use a profile and addresses the pod itself.
+func validatePodProfileTarget(target, podIP string) error {
+	if err := scrapetls.ValidateTarget(target); err != nil {
+		return err
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return err
+	}
+	if u.Hostname() != podIP {
+		return fmt.Errorf("target host %q is not the pod IP %q", u.Hostname(), podIP)
+	}
+	return nil
 }
 
 func (s *Scraper) Targets() []ScrapeTarget {
