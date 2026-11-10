@@ -190,10 +190,12 @@ func TestSegmentAppendWaitsForLockHeldBriefly(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newAppendSegment(t)
+			// Build the payload first so the lock is still held when Append starts, however slow the setup is.
+			b := segmentBytes(t, "a")
 			release := hold(s)
 			time.AfterFunc(appendLockWait/5, release)
 
-			_, err := s.Append(context.Background(), segmentBytes(t, "a"))
+			_, err := s.Append(context.Background(), b)
 			require.NoError(t, err)
 			require.Equal(t, []string{"a"}, values(t, s))
 		})
@@ -203,13 +205,14 @@ func TestSegmentAppendWaitsForLockHeldBriefly(t *testing.T) {
 // An append stops waiting for the lock when its context is done.
 func TestSegmentAppendStopsWaitingWhenContextDone(t *testing.T) {
 	s := newAppendSegment(t)
+	b := segmentBytes(t, "a")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(5*time.Millisecond, cancel)
 
 	start := time.Now()
-	_, err := s.Append(ctx, segmentBytes(t, "a"))
+	_, err := s.Append(ctx, b)
 	require.ErrorIs(t, err, ErrSegmentLocked)
 	require.Less(t, time.Since(start), appendLockWait)
 }
