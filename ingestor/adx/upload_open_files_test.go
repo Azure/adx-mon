@@ -13,11 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// openFilesIn returns how many of the process's open files are in dir.
-func openFilesIn(t *testing.T, dir string) int {
+// openFilesIn returns how many of the process's open files are in dir.  It runs in the uploader's goroutine, so it
+// reports an error rather than failing or skipping the test; callers check /proc/self/fd first.
+func openFilesIn(dir string) (int, error) {
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
-		t.Skip("needs /proc/self/fd")
+		return 0, err
 	}
 	n := 0
 	for _, e := range entries {
@@ -25,12 +26,16 @@ func openFilesIn(t *testing.T, dir string) int {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 // segmentFilesOpenWhileUploading uploads a batch of n segments and returns the most segment files open at once while
 // the upload reads it.
 func segmentFilesOpenWhileUploading(t *testing.T, n int) int {
+	// Skip here, on the test's goroutine: t.Skip in the uploader's goroutine would not stop the test.
+	if _, err := os.ReadDir("/proc/self/fd"); err != nil {
+		t.Skip("needs /proc/self/fd")
+	}
 	rec := newUploadRecorder(false)
 	env := newSchedulingEnv(t, UploaderOpts{ConcurrentUploads: 1}, rec)
 	var values []string
@@ -46,7 +51,11 @@ func segmentFilesOpenWhileUploading(t *testing.T, n int) int {
 		most := 0
 		buf := make([]byte, 1)
 		for {
-			most = max(most, openFilesIn(t, dir))
+			open, err := openFilesIn(dir)
+			if err != nil {
+				return err
+			}
+			most = max(most, open)
 			if _, err := reader.Read(buf); err == io.EOF {
 				break
 			} else if err != nil {
