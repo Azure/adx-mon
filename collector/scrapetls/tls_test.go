@@ -180,7 +180,8 @@ func TestInitialFiles(t *testing.T) {
 	ca := newCA(t)
 	for _, tc := range []string{
 		"missing-ca", "missing-username", "missing-password", "bad-ca", "empty-username", "empty-password",
-		"colon-username", "unreadable-username", "unreadable-password", "unset-ca", "unset-username", "unset-password",
+		"colon-username", "invalid-utf8-username", "unreadable-username", "unreadable-password", "unset-ca", "unset-username",
+		"unset-password",
 	} {
 		t.Run(tc, func(t *testing.T) {
 			p := profileFiles(t, ca.pem, []byte("client"), []byte("synthetic-password"))
@@ -199,6 +200,8 @@ func TestInitialFiles(t *testing.T) {
 				writeFile(t, p.PasswordFile, nil)
 			case "colon-username":
 				writeFile(t, p.UsernameFile, []byte("unusable:name"))
+			case "invalid-utf8-username":
+				writeFile(t, p.UsernameFile, []byte("client\xff"))
 			case "unreadable-username":
 				p.UsernameFile = filepath.Dir(p.UsernameFile)
 			case "unreadable-password":
@@ -251,7 +254,9 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 	var connections atomic.Int64
 	var addresses sync.Map
 	// The remote address is stable only when the same keepalive connection is used.
+	var requests atomic.Int64
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		if _, loaded := addresses.LoadOrStore(r.RemoteAddr, true); !loaded {
 			connections.Add(1)
 		}
@@ -286,7 +291,7 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 
 	for _, tc := range []string{
 		"missing-ca", "missing-username", "missing-password", "bad-ca", "empty-username", "empty-password",
-		"wrong-password", "unreadable-username", "unreadable-password",
+		"colon-username", "invalid-utf8-username", "wrong-password", "unreadable-username", "unreadable-password",
 	} {
 		t.Run(tc, func(t *testing.T) {
 			switch tc {
@@ -302,6 +307,10 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 				writeFile(t, p.UsernameFile, []byte(" \n"))
 			case "empty-password":
 				writeFile(t, p.PasswordFile, nil)
+			case "colon-username":
+				writeFile(t, p.UsernameFile, []byte("unusable:name"))
+			case "invalid-utf8-username":
+				writeFile(t, p.UsernameFile, []byte("client\xff"))
 			case "wrong-password":
 				writeFile(t, p.PasswordFile, []byte("wrong"))
 			case "unreadable-username":
@@ -311,14 +320,21 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 				require.NoError(t, os.Remove(p.PasswordFile))
 				require.NoError(t, os.Mkdir(p.PasswordFile, 0700))
 			}
+			before := requests.Load()
 			switch tc {
-			case "empty-username", "empty-password", "wrong-password":
+			case "wrong-password":
 				resp, err := c.Get(srv.URL)
 				require.NoError(t, err)
 				resp.Body.Close()
 				require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-			default:
+			case "missing-ca", "bad-ca":
 				get(t, c, srv.URL, true)
+			default:
+				// Unusable credentials are rejected before any request is sent.
+				_, err := c.Get(srv.URL)
+				var credErr *CredentialError
+				require.ErrorAs(t, err, &credErr)
+				require.Equal(t, before, requests.Load(), "unusable credentials were sent")
 			}
 			switch tc {
 			case "unreadable-username":

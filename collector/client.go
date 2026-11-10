@@ -263,7 +263,16 @@ func (c *MetricsClient) do(req *http.Request, target, profile string) (*http.Res
 		}
 	}
 
-	return client.Do(req)
+	resp, err := client.Do(req)
+	var credErr *scrapetls.CredentialError
+	if profile != "" && errors.As(err, &credErr) {
+		// The credentials changed since the last check and were not sent.  Stop advertising the profile until a
+		// later check finds usable files.
+		c.profilesMu.Lock()
+		c.setProfileErrorLocked(profile, c.profiles[profile], credErr, time.Now())
+		c.profilesMu.Unlock()
+	}
+	return resp, err
 }
 
 func (c *MetricsClient) Close() error {
@@ -347,11 +356,7 @@ func (c *MetricsClient) refreshProfileLocked(name string, state *scrapeTLSProfil
 		state.client, err = c.newProfileClient(state.profile)
 	}
 	if err != nil {
-		if state.err == nil {
-			logger.Warnf("Scrape TLS profile %q unavailable; its targets will not be scraped until it loads: %s", name, err)
-		}
-		state.err = err
-		c.setProfileUsernameLocked(name, state, "")
+		c.setProfileErrorLocked(name, state, err, now)
 		return
 	}
 	if state.err != nil {
@@ -359,6 +364,16 @@ func (c *MetricsClient) refreshProfileLocked(name string, state *scrapeTLSProfil
 	}
 	state.err = nil
 	c.setProfileUsernameLocked(name, state, username)
+}
+
+// setProfileErrorLocked makes the profile unavailable until a check after now plus the refresh interval succeeds.
+func (c *MetricsClient) setProfileErrorLocked(name string, state *scrapeTLSProfileState, err error, now time.Time) {
+	if state.err == nil {
+		logger.Warnf("Scrape TLS profile %q unavailable; its targets will not be scraped until it loads: %s", name, err)
+	}
+	state.err = err
+	state.checked = now
+	c.setProfileUsernameLocked(name, state, "")
 }
 
 func (c *MetricsClient) isClosed() bool {

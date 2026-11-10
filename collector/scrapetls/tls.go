@@ -1,9 +1,10 @@
 // Package scrapetls builds HTTP clients that scrape Prometheus exporters with
 // HTTP Basic authentication over verified TLS.
 //
-// A Profile names a CA bundle and a pair of credential files. The files are
-// re-read by the underlying Prometheus HTTP client on every request, so
-// rotated credentials and CA bundles are picked up without a restart.
+// A Profile names a CA bundle and a pair of credential files. The credential
+// files are read and validated on every request, and the CA bundle is
+// re-read by the underlying Prometheus HTTP client, so rotated credentials
+// and CA bundles are picked up without a restart.
 package scrapetls
 
 import (
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	promconfig "github.com/prometheus/common/config"
 )
@@ -68,26 +70,46 @@ func (p Profile) Validate() error {
 	return nil
 }
 
+// CredentialError reports credential files that cannot be read or do not hold
+// usable Basic auth credentials. The request was not sent.
+type CredentialError struct {
+	Err error
+}
+
+func (e *CredentialError) Error() string { return "scrape TLS credentials: " + e.Err.Error() }
+
+func (e *CredentialError) Unwrap() error { return e.Err }
+
+// readCredentials reads and validates the Basic auth credentials. Surrounding
+// whitespace is trimmed. The username must be nonempty valid UTF-8 without
+// ':' and the password must be nonempty.
+func (p Profile) readCredentials(ctx context.Context) (string, string, error) {
+	username, err := promconfig.NewFileSecret(p.UsernameFile).Fetch(ctx)
+	if err != nil {
+		return "", "", &CredentialError{fmt.Errorf("username file: %w", err)}
+	}
+	if username == "" || strings.Contains(username, ":") || !utf8.ValidString(username) {
+		return "", "", &CredentialError{errors.New("username file is empty, contains ':' or is not valid UTF-8")}
+	}
+	password, err := promconfig.NewFileSecret(p.PasswordFile).Fetch(ctx)
+	if err != nil {
+		return "", "", &CredentialError{fmt.Errorf("password file: %w", err)}
+	}
+	if password == "" {
+		return "", "", &CredentialError{errors.New("password file is empty")}
+	}
+	return username, password, nil
+}
+
 // CheckFiles reads the credential files and parses the CA bundle. It returns
 // the username, which is not secret; the password is never returned.
 func (p Profile) CheckFiles() (string, error) {
 	if err := p.Validate(); err != nil {
 		return "", err
 	}
-	// Use the same trimming semantics as the per-request reader.
-	username, err := promconfig.NewFileSecret(p.UsernameFile).Fetch(context.Background())
+	username, _, err := p.readCredentials(context.Background())
 	if err != nil {
-		return "", fmt.Errorf("username file: %w", err)
-	}
-	if username == "" || strings.Contains(username, ":") {
-		return "", errors.New("username file is empty or contains ':'")
-	}
-	password, err := promconfig.NewFileSecret(p.PasswordFile).Fetch(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("password file: %w", err)
-	}
-	if password == "" {
-		return "", errors.New("password file is empty")
+		return "", err
 	}
 	cfg := p.tlsConfig()
 	if _, err := promconfig.NewTLSConfig(&cfg); err != nil {
@@ -96,13 +118,15 @@ func (p Profile) CheckFiles() (string, error) {
 	return username, nil
 }
 
-// Transport rejects requests that do not satisfy ValidateTarget and strips
-// caller-supplied credentials. Credential loading, change detection, TLS
-// verification and connection-pool replacement are delegated to the
-// Prometheus HTTP client.
+// Transport rejects requests that do not satisfy ValidateTarget, replaces
+// caller-supplied credentials with the profile's, and returns a
+// *CredentialError without sending the request if they are unusable. CA
+// loading, TLS verification and connection-pool replacement are delegated to
+// the Prometheus HTTP client.
 type Transport struct {
-	client *http.Client
-	closed atomic.Bool
+	profile Profile
+	client  *http.Client
+	closed  atomic.Bool
 }
 
 // NewClient returns an HTTP client for p. Its Transport is a *Transport.
@@ -112,7 +136,6 @@ func NewClient(p Profile, dialTimeout time.Duration) (*http.Client, error) {
 		return nil, err
 	}
 	client, err := promconfig.NewClientFromConfig(promconfig.HTTPClientConfig{
-		BasicAuth:       &promconfig.BasicAuth{UsernameFile: p.UsernameFile, PasswordFile: p.PasswordFile},
 		TLSConfig:       p.tlsConfig(),
 		FollowRedirects: false,
 	}, "adx-mon-collector", promconfig.WithDialContextFunc((&net.Dialer{Timeout: dialTimeout}).DialContext))
@@ -120,7 +143,7 @@ func NewClient(p Profile, dialTimeout time.Duration) (*http.Client, error) {
 		return nil, err
 	}
 	inner := *client
-	client.Transport = &Transport{client: &inner}
+	client.Transport = &Transport{profile: p, client: &inner}
 	return client, nil
 }
 
@@ -131,9 +154,13 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := ValidateTarget(req.URL.String()); err != nil {
 		return nil, err
 	}
+	username, password, err := t.profile.readCredentials(req.Context())
+	if err != nil {
+		return nil, err
+	}
 	clone := req.Clone(req.Context())
-	clone.Header.Del("Authorization")
 	clone.Header.Del("Proxy-Authorization")
+	clone.SetBasicAuth(username, password)
 	return t.client.Transport.RoundTrip(clone)
 }
 
