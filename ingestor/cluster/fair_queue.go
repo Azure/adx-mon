@@ -247,12 +247,12 @@ func runFairQueue(ctx context.Context, input <-chan *Batch, output chan *Batch, 
 			if viaGroup {
 				// Group priority ignored the destination's credit, so it spends only what it has and takes no debt.
 				table.deficit = max(table.deficit-batchBytes(candidate), 0)
-				groups.dispatched(destination, group)
 			} else {
 				table.deficit -= batchBytes(candidate)
 			}
 			table.running++
 			if groups != nil {
+				groups.dispatched(destination)
 				groups.running[group]++
 			}
 			if len(table.queue) == 0 {
@@ -360,26 +360,68 @@ type groupWaits struct {
 	limit   int
 	running map[string]int
 	waiting map[string][]wal.Destination
-	queued  map[wal.Destination]bool
+	queued  map[wal.Destination]groupWait
+	seq     uint64
+}
+
+// groupWait is the group a destination is waiting for, and when it started waiting.
+type groupWait struct {
+	group string
+	seq   uint64
 }
 
 func newGroupWaits(group func(*Batch) string, limit int) *groupWaits {
 	return &groupWaits{group: group, limit: limit, running: make(map[string]int),
-		waiting: make(map[string][]wal.Destination), queued: make(map[wal.Destination]bool)}
+		waiting: make(map[string][]wal.Destination), queued: make(map[wal.Destination]groupWait)}
 }
 
 func (g *groupWaits) full(b *Batch) bool {
 	return g.running[g.group(b)] >= g.limit
 }
 
-// wait records that d, whose next batch is b, is waiting for b's group.
+// wait records that d, whose next batch is b, is waiting for b's group.  A destination already waiting for another
+// group, because its table changed owner, moves to b's group and keeps its place by when it started waiting.
 func (g *groupWaits) wait(d wal.Destination, b *Batch) {
-	if g.queued[d] {
+	group := g.group(b)
+	w, ok := g.queued[d]
+	if ok && w.group == group {
 		return
 	}
-	group := g.group(b)
-	g.waiting[group] = append(g.waiting[group], d)
-	g.queued[d] = true
+	if ok {
+		g.remove(d, w.group)
+	} else {
+		g.seq++
+		w.seq = g.seq
+	}
+	g.insert(d, group, w.seq)
+}
+
+// insert adds d, which started waiting at seq, to group's waiters in the order they started waiting.
+func (g *groupWaits) insert(d wal.Destination, group string, seq uint64) {
+	waiting := g.waiting[group]
+	i := len(waiting)
+	for i > 0 && g.queued[waiting[i-1]].seq > seq {
+		i--
+	}
+	g.waiting[group] = append(waiting[:i], append([]wal.Destination{d}, waiting[i:]...)...)
+	g.queued[d] = groupWait{group: group, seq: seq}
+}
+
+// remove takes d off group's waiters.
+func (g *groupWaits) remove(d wal.Destination, group string) {
+	waiting := g.waiting[group]
+	for i, w := range waiting {
+		if w == d {
+			waiting = append(waiting[:i:i], waiting[i+1:]...)
+			break
+		}
+	}
+	if len(waiting) == 0 {
+		delete(g.waiting, group)
+	} else {
+		g.waiting[group] = waiting
+	}
+	delete(g.queued, d)
 }
 
 // done records that a batch of group finished.
@@ -392,35 +434,40 @@ func (g *groupWaits) done(group string) {
 // next returns the destination that has waited longest for a group that now has room and is ready to run.  It stays
 // at the head of the group's waiters until dispatched removes it, so if its batch isn't sent this time it is still
 // first next time.  Waiting destinations that are no longer ready, such as ones without work or retrying, stop
-// waiting; they wait again if they are skipped for a full group later.
+// waiting; they wait again if they are skipped for a full group later.  A ready destination whose next batch is now
+// for another group moves to that group's waiters, keeping its place.
 func (g *groupWaits) next(tables map[wal.Destination]*fairTable, ready func(*fairTable) bool) (wal.Destination, bool) {
-	for group, waiting := range g.waiting {
+	for group := range g.waiting {
 		if g.running[group] >= g.limit {
 			continue
 		}
-		for len(waiting) > 0 {
-			d := waiting[0]
-			if t := tables[d]; ready(t) && g.group(t.queue[0]) == group {
-				g.waiting[group] = waiting
-				return d, true
+		for len(g.waiting[group]) > 0 {
+			d := g.waiting[group][0]
+			t := tables[d]
+			if !ready(t) {
+				g.remove(d, group)
+				continue
 			}
-			waiting = waiting[1:]
-			delete(g.queued, d)
+			if moved := g.group(t.queue[0]); moved != group {
+				seq := g.queued[d].seq
+				g.remove(d, group)
+				g.insert(d, moved, seq)
+				if g.running[moved] < g.limit {
+					// moved has room, but someone may have waited for it longer, so look again from its head.
+					return g.next(tables, ready)
+				}
+				continue
+			}
+			return d, true
 		}
-		delete(g.waiting, group)
 	}
 	return wal.Destination{}, false
 }
 
-// dispatched removes d, whose batch of group was dispatched, from the head of group's waiters.
-func (g *groupWaits) dispatched(d wal.Destination, group string) {
-	if w := g.waiting[group]; len(w) > 0 && w[0] == d {
-		if len(w) == 1 {
-			delete(g.waiting, group)
-		} else {
-			g.waiting[group] = w[1:]
-		}
-		delete(g.queued, d)
+// dispatched records that d's next batch was dispatched, so it no longer waits for any group.
+func (g *groupWaits) dispatched(d wal.Destination) {
+	if w, ok := g.queued[d]; ok {
+		g.remove(d, w.group)
 	}
 }
 
