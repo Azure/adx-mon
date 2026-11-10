@@ -291,7 +291,83 @@ func TestGroupWaitsNext(t *testing.T) {
 	require.Equal(t, b, d)
 	require.Equal(t, []wal.Destination{b}, g.waiting["x"], "b keeps its place until its batch is dispatched")
 
-	g.dispatched(b, "x")
+	g.dispatched(b)
 	require.Empty(t, g.waiting)
 	require.Empty(t, g.queued)
+}
+
+// A destination waiting for a full group whose next batch moves to another full group keeps its place in line: it
+// joins the new group's waiters ahead of destinations that started waiting after it.
+func TestGroupWaitsKeepsPlaceWhenOwnerChanges(t *testing.T) {
+	groups := map[string]string{"x1": "peer1", "x2": "peer2"}
+	g := newGroupWaits(func(b *Batch) string { return groups[b.Table] }, 1)
+	a, b := wal.Destination{Database: "DB", Table: "x1"}, wal.Destination{Database: "DB", Table: "x2"}
+	tables := map[wal.Destination]*fairTable{
+		a: {queue: []*Batch{fairBatch("x1", "s", 1)}},
+		b: {queue: []*Batch{fairBatch("x2", "s", 1)}},
+	}
+	ready := func(t *fairTable) bool { return t != nil && len(t.queue) > 0 }
+	g.running["peer1"], g.running["peer2"] = 1, 1
+
+	g.wait(a, tables[a].queue[0])
+	groups["x1"] = "peer2"
+	g.wait(b, tables[b].queue[0])
+	g.wait(a, tables[a].queue[0])
+	require.Equal(t, []wal.Destination{a, b}, g.waiting["peer2"], "a started waiting first")
+	require.NotContains(t, g.waiting, "peer1")
+
+	g.done("peer2")
+	d, ok := g.next(tables, ready)
+	require.True(t, ok)
+	require.Equal(t, a, d)
+}
+
+// A waiting destination that is dispatched by the round robin, such as after its table moved to a group with room,
+// stops waiting.
+func TestGroupWaitsDispatchedOutsideGroupStopsWaiting(t *testing.T) {
+	groups := map[string]string{"x1": "peer1"}
+	g := newGroupWaits(func(b *Batch) string { return groups[b.Table] }, 1)
+	a := wal.Destination{Database: "DB", Table: "x1"}
+	g.running["peer1"] = 1
+	g.wait(a, fairBatch("x1", "s", 1))
+
+	groups["x1"] = "peer2"
+	g.dispatched(a)
+	require.Empty(t, g.waiting)
+	require.Empty(t, g.queued)
+}
+
+// A waiter that moves to a group with room still goes after the destinations that waited for that group longer.
+func TestGroupWaitsMovedWaiterQueuesBehindOlderWaiters(t *testing.T) {
+	groups := map[string]string{"c": "peer2", "a": "peer1"}
+	g := newGroupWaits(func(b *Batch) string { return groups[b.Table] }, 1)
+	c, a := wal.Destination{Database: "DB", Table: "c"}, wal.Destination{Database: "DB", Table: "a"}
+	tables := map[wal.Destination]*fairTable{
+		c: {queue: []*Batch{fairBatch("c", "s", 1)}},
+		a: {queue: []*Batch{fairBatch("a", "s", 1)}},
+	}
+	ready := func(t *fairTable) bool { return t != nil && len(t.queue) > 0 }
+	g.running["peer1"], g.running["peer2"] = 1, 1
+	g.wait(c, tables[c].queue[0])
+	g.wait(a, tables[a].queue[0])
+	groups["a"] = "peer2"
+	g.done("peer1")
+	g.done("peer2")
+
+	for i := 0; i < 20; i++ { // next ranges over a map, so try both orders.
+		d, ok := g.next(tables, ready)
+		require.True(t, ok)
+		require.Equal(t, c, d)
+	}
+
+	// c runs on peer2, so a waits for it, and goes next once c is done.
+	g.dispatched(c)
+	g.running["peer2"]++
+	tables[c].queue = nil
+	_, ok := g.next(tables, ready)
+	require.False(t, ok, "peer2 is full")
+	g.done("peer2")
+	d, ok := g.next(tables, ready)
+	require.True(t, ok)
+	require.Equal(t, a, d)
 }
