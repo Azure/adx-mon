@@ -328,6 +328,10 @@ func TestScrapeTLSDiscovery(t *testing.T) {
 		func(p *v1.Pod) { p.Annotations["adx-mon/tls-profile"] = "unknown" },
 		func(p *v1.Pod) { p.Annotations["adx-mon/tls-profile"] = "static-only" },
 		func(p *v1.Pod) { p.Annotations["adx-mon/scheme"] = "http" },
+		// The scheme annotation is interpolated into the URL, so it must not be able to redirect the profile's
+		// credentials to a host other than the pod.
+		func(p *v1.Pod) { p.Annotations["adx-mon/scheme"] = "https://other-exporter.test/metrics?ignored=" },
+		func(p *v1.Pod) { p.Annotations["adx-mon/scheme"] = "https://other-exporter.test/metrics#" },
 	} {
 		s.OnAdd(p, false)
 		requireProfile("a", 2)
@@ -336,6 +340,8 @@ func TestScrapeTLSDiscovery(t *testing.T) {
 		s.OnUpdate(p, bad)
 		require.Empty(t, s.Targets())
 	}
+	require.NoError(t, validatePodProfileTarget("https://127.0.0.1:9000/metrics", "127.0.0.1"))
+	require.Error(t, validatePodProfileTarget("https://other-exporter.test:9000/metrics", "127.0.0.1"))
 	untrusted := p.DeepCopy()
 	untrusted.UID, untrusted.Namespace = "other-uid", "untrusted"
 	s.OnAdd(untrusted, false)

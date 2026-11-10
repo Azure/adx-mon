@@ -171,7 +171,7 @@ New targets are staggered within their interval. Up to `scrape-concurrency` targ
 
 #### Basic authentication over TLS
 
-Exporters that require HTTP Basic authentication over HTTPS, such as DCGM exporter or node-exporter configured with a web configuration file, can be scraped with a named profile in `scrape-tls-profiles`. A profile names a PEM CA bundle that verifies the exporter's serving certificate, an optional `server-name` to verify instead of the target host, and files containing the username and password. Static targets select a profile with `tls-profile`. Pods select one with the `adx-mon/tls-profile` annotation together with `adx-mon/scheme: https`, and only pods in the profile's `allowed-namespaces` may use it; an empty list allows static targets only:
+Exporters that require HTTP Basic authentication over HTTPS, such as DCGM exporter or node-exporter configured with a web configuration file, can be scraped with a named profile in `scrape-tls-profiles`. A profile names a PEM CA bundle that verifies the exporter's serving certificate, an optional `server-name` to verify instead of the target host, and files containing the username and password. Static targets select a profile with `tls-profile`. Pods select one with the `adx-mon/tls-profile` annotation together with `adx-mon/scheme: https` (exactly `https`), and only pods in the profile's `allowed-namespaces` may use it; an empty list allows static targets only:
 
 ```yaml
 adx-mon/scrape: "true"
