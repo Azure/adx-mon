@@ -105,3 +105,18 @@ static-scrape-target = [
 	require.NotContains(t, string(encoded), "scrape-tls-profiles")
 	require.NotContains(t, string(encoded), "tls-profile")
 }
+
+func TestScrapeTLSProfilesReplaceVariables(t *testing.T) {
+	var cfg Config
+	require.NoError(t, toml.Unmarshal([]byte(scrapeTLSConfig), &cfg))
+	p := cfg.PrometheusScrape.ScrapeTLSProfiles["exporter"]
+	p.ServerName = "$(HOSTNAME).exporter.test"
+	cfg.PrometheusScrape.ScrapeTLSProfiles["exporter"] = p
+
+	cfg.ReplaceVariable("$(HOSTNAME)", "node-1")
+	cfg.ReplaceVariable("$(HOSTIP)", "10.0.0.1")
+
+	require.Equal(t, "node-1.exporter.test", cfg.PrometheusScrape.ScrapeTLSProfiles["exporter"].ServerName)
+	require.Equal(t, "/etc/exporter/ca.crt", cfg.PrometheusScrape.ScrapeTLSProfiles["exporter"].CAFile)
+	require.Equal(t, []string{"metrics"}, cfg.PrometheusScrape.ScrapeTLSProfiles["exporter"].AllowedNamespaces)
+}

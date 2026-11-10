@@ -884,7 +884,11 @@ func (c *Config) processStringFields(v reflect.Value, f func(string) string) {
 				continue
 			}
 
-			c.processStringFields(v.MapIndex(key), f)
+			// Map values are not addressable, so update a copy and store it back.
+			elem := reflect.New(value.Type()).Elem()
+			elem.Set(value)
+			c.processStringFields(elem, f)
+			v.SetMapIndex(key, elem)
 		}
 	}
 }
