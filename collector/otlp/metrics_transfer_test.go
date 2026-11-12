@@ -3,6 +3,7 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,26 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+// A chunked request, which has no Content-Length, is still bounded by the body size limit.
+func TestMetricsService_OLTP_protobuf_ChunkedOversized(t *testing.T) {
+	s := NewMetricsService(metricWriterWithError(nil), "/fake/path", 0)
+	resp := httptest.NewRecorder()
+
+	req := httptest.NewRequest("POST", "/fake/path", io.LimitReader(zeroReader{}, maxOTLPRequestBodySize+1))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.ContentLength = -1
+
+	s.Handler(resp, req)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
 
 func TestMetricsService_OLTP_protobuf(t *testing.T) {
 	type testcase struct {
@@ -56,7 +77,7 @@ func TestMetricsService_OLTP_protobuf(t *testing.T) {
 			writer:           metricWriterWithError(nil),
 			input:            serializedMSR(t, newServiceRequest()),
 			overriddenLength: -1,
-			expectedStatus:   http.StatusLengthRequired,
+			expectedStatus:   http.StatusOK,
 		},
 		{
 			name:           "empty request",
