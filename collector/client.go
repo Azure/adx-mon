@@ -40,6 +40,7 @@ type MetricsClient struct {
 
 	closing   chan struct{}
 	closeOnce sync.Once
+	wg        sync.WaitGroup
 
 	mu       sync.RWMutex
 	token    string
@@ -157,6 +158,10 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 	if err := c.initProfiles(); err != nil {
 		c.Close()
 		return nil, err
+	}
+	if len(c.profiles) > 0 {
+		c.wg.Add(1)
+		go c.refreshProfiles(c.opts.ScrapeTLSRefreshInterval)
 	}
 
 	if token != "" {
@@ -278,6 +283,7 @@ func (c *MetricsClient) do(req *http.Request, target, profile string) (*http.Res
 func (c *MetricsClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closing)
+		c.wg.Wait()
 		c.client.CloseIdleConnections()
 
 		c.profilesMu.Lock()
@@ -313,6 +319,31 @@ func (c *MetricsClient) initProfiles() error {
 		c.refreshProfileLocked(name, state, now)
 	}
 	return nil
+}
+
+// refreshProfiles rechecks every profile once its refresh interval has passed, so the gauge also tracks profiles that
+// no target selects.  It stops when the client closes.
+func (c *MetricsClient) refreshProfiles(interval time.Duration) {
+	defer c.wg.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.closing:
+			return
+		case now := <-t.C:
+			if c.isClosed() {
+				return
+			}
+			c.profilesMu.Lock()
+			for name, state := range c.profiles {
+				if now.Sub(state.checked) >= interval {
+					c.refreshProfileLocked(name, state, now)
+				}
+			}
+			c.profilesMu.Unlock()
+		}
+	}
 }
 
 // validateProfileTarget checks that target may use profile.  It does not check whether the profile is available.
