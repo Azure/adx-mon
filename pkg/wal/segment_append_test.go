@@ -216,3 +216,24 @@ func TestSegmentAppendStopsWaitingWhenContextDone(t *testing.T) {
 	require.ErrorIs(t, err, ErrSegmentLocked)
 	require.Less(t, time.Since(start), appendLockWait)
 }
+
+// An append whose body ends in bytes that are not a whole block, a short tail or trailing zeros that Verify stops at,
+// appends the blocks before them and drops the rest, so the junk does not hide blocks appended after it.
+func TestSegmentAppendDropsJunkTail(t *testing.T) {
+	for name, tail := range map[string][]byte{
+		"short tail":     {1, 2, 3},
+		"trailing zeros": make([]byte, 16),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newAppendSegment(t)
+			body := append(segmentBytes(t, "a"), tail...)
+			n, err := s.Append(context.Background(), body)
+			require.NoError(t, err)
+			require.Equal(t, len(body)-8-len(tail), n)
+
+			_, err = s.Append(context.Background(), segmentBytes(t, "b"))
+			require.NoError(t, err)
+			require.Equal(t, []string{"a", "b"}, values(t, s))
+		})
+	}
+}

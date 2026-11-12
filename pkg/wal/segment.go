@@ -362,17 +362,23 @@ var appendLockWait = 100 * time.Millisecond
 // Append appends a raw blocks to the segment.  This is used for appending blocks that have already been compressed.
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
 func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
-	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
-	if err != nil {
+	// Check the segment header.
+	if _, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf))); err != nil {
 		return 0, err
 	}
 
-	// Verify the block is valid before appending
-	if n, err := iter.Verify(); err != nil {
+	// Verify the blocks before appending them.  Bytes after the last whole block, which Verify ignores, are dropped
+	// rather than appended, since a reader stops at them and would not see blocks appended after them.
+	end, blocks, err := verifiedBlocks(buf[8:])
+	if err != nil {
 		return 0, err
-	} else if n == 0 {
+	} else if blocks == 0 {
 		return 0, nil
 	}
+	if dropped := len(buf) - 8 - end; dropped > 0 {
+		logger.Warnf("Dropping %d bytes after the last whole block of an append to segment %s", dropped, s.path)
+	}
+	buf = buf[:8+end]
 	raw, err := blocksRawSize(buf[8:])
 	if err != nil {
 		return 0, err
@@ -413,6 +419,28 @@ func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) (
 	s.mu.RUnlock()
 
 	return s.blockWrite(buf, opts...)
+}
+
+// verifiedBlocks checks the checksum of each length and CRC prefixed block in blocks, as segmentIterator.Verify does,
+// and returns the number of blocks and the length of blocks they span.  Like Verify, it stops without an error at bytes
+// that cannot start a block: fewer than a block header's 8 bytes, or a block length of 0, as in trailing zeros.
+func verifiedBlocks(blocks []byte) (end, n int, err error) {
+	for len(blocks)-end >= 8 {
+		blockLen := int(binary.BigEndian.Uint32(blocks[end : end+4]))
+		if blockLen == 0 {
+			break
+		}
+		if len(blocks)-end-8 < blockLen {
+			return 0, 0, io.ErrUnexpectedEOF
+		}
+		block := blocks[end+8 : end+8+blockLen]
+		if crc32.ChecksumIEEE(block) != binary.BigEndian.Uint32(blocks[end+4:end+8]) {
+			return 0, 0, fmt.Errorf("block checksum verification failed")
+		}
+		end += 8 + blockLen
+		n++
+	}
+	return end, n, nil
 }
 
 // blocksRawSize returns the uncompressed size of the values in a sequence of length and CRC prefixed blocks, read
