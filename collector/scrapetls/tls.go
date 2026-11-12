@@ -59,10 +59,10 @@ func ValidateTarget(target string) error {
 func (p Profile) readCA(ctx context.Context) ([]byte, error) {
 	ca, err := promconfig.NewFileSecret(p.CAFile).Fetch(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("CA file: %w", err)
+		return nil, &FileError{fmt.Errorf("CA file: %w", err)}
 	}
 	if !x509.NewCertPool().AppendCertsFromPEM([]byte(ca)) {
-		return nil, errors.New("CA file holds no PEM certificates")
+		return nil, &FileError{errors.New("CA file holds no PEM certificates")}
 	}
 	return []byte(ca), nil
 }
@@ -91,15 +91,16 @@ func (p Profile) Validate() error {
 	return nil
 }
 
-// CredentialError reports credential files that cannot be read or do not hold
-// usable Basic auth credentials. The request was not sent.
-type CredentialError struct {
+// FileError reports profile files that cannot be read or do not hold usable
+// Basic auth credentials or CA certificates. It describes a local problem
+// with the profile, not with a target, and the request was not sent.
+type FileError struct {
 	Err error
 }
 
-func (e *CredentialError) Error() string { return "scrape TLS credentials: " + e.Err.Error() }
+func (e *FileError) Error() string { return "scrape TLS profile files: " + e.Err.Error() }
 
-func (e *CredentialError) Unwrap() error { return e.Err }
+func (e *FileError) Unwrap() error { return e.Err }
 
 // readCredentials reads and validates the Basic auth credentials. Surrounding
 // whitespace is trimmed. The username must be nonempty valid UTF-8 without
@@ -107,17 +108,17 @@ func (e *CredentialError) Unwrap() error { return e.Err }
 func (p Profile) readCredentials(ctx context.Context) (string, string, error) {
 	username, err := promconfig.NewFileSecret(p.UsernameFile).Fetch(ctx)
 	if err != nil {
-		return "", "", &CredentialError{fmt.Errorf("username file: %w", err)}
+		return "", "", &FileError{fmt.Errorf("username file: %w", err)}
 	}
 	if username == "" || strings.Contains(username, ":") || !utf8.ValidString(username) {
-		return "", "", &CredentialError{errors.New("username file is empty, contains ':' or is not valid UTF-8")}
+		return "", "", &FileError{errors.New("username file is empty, contains ':' or is not valid UTF-8")}
 	}
 	password, err := promconfig.NewFileSecret(p.PasswordFile).Fetch(ctx)
 	if err != nil {
-		return "", "", &CredentialError{fmt.Errorf("password file: %w", err)}
+		return "", "", &FileError{fmt.Errorf("password file: %w", err)}
 	}
 	if password == "" {
-		return "", "", &CredentialError{errors.New("password file is empty")}
+		return "", "", &FileError{errors.New("password file is empty")}
 	}
 	return username, password, nil
 }
@@ -138,12 +139,13 @@ func (p Profile) CheckFiles() (string, error) {
 	return username, nil
 }
 
-// Transport rejects requests that do not satisfy ValidateTarget, replaces
-// caller-supplied credentials with the profile's, and returns a
-// *CredentialError without sending the request if they are unusable. It
-// re-reads the CA bundle on every request and, when it changes, replaces the
-// connection pool with one built from that same snapshot. TLS verification is
-// delegated to the Prometheus HTTP client.
+// Transport rejects requests that do not satisfy ValidateTarget and replaces
+// caller-supplied credentials with the profile's. It re-reads the profile
+// files on every request and returns a *FileError without sending the request
+// if they are unusable. When the CA bundle changes, the connection pool is
+// replaced with one built from that same snapshot. TLS verification is
+// delegated to the Prometheus HTTP client, so a target that fails it returns
+// an ordinary error.
 type Transport struct {
 	profile     Profile
 	dialTimeout time.Duration
@@ -197,7 +199,7 @@ func (t *Transport) clientFor(ca []byte) (*http.Client, error) {
 	}
 	client, err := t.profile.newCAClient(ca, t.dialTimeout)
 	if err != nil {
-		return nil, err
+		return nil, &FileError{fmt.Errorf("CA file: %w", err)}
 	}
 	t.client.CloseIdleConnections()
 	t.caData, t.client = ca, client

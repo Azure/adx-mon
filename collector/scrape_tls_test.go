@@ -581,6 +581,45 @@ func TestScrapeTLSInvalidCredentialsBetweenChecks(t *testing.T) {
 		})
 	}
 
+	caPEM, err := os.ReadFile(profile.CAFile)
+	require.NoError(t, err)
+	for _, tc := range []string{"missing-ca", "bad-ca"} {
+		t.Run(tc, func(t *testing.T) {
+			requests.Store(0)
+			if tc == "missing-ca" {
+				require.NoError(t, os.Remove(profile.CAFile))
+			} else {
+				require.NoError(t, os.WriteFile(profile.CAFile, []byte("not a CA"), 0600))
+			}
+			// A local CA file failure between checks makes the profile unavailable for later targets too.
+			_, err := c.FetchMetricsWithProfile(srv.URL, name)
+			require.Error(t, err)
+			_, err = c.FetchMetricsIteratorWithProfile(context.Background(), srv.URL, name)
+			require.ErrorContains(t, err, "unavailable")
+			require.Zero(t, requests.Load())
+			require.Empty(t, scrapeTLSInfoUsernames(t, name))
+
+			require.NoError(t, os.WriteFile(profile.CAFile, caPEM, 0600))
+			_, err = c.FetchMetricsWithProfile(srv.URL, name)
+			require.ErrorContains(t, err, "unavailable")
+			c.profilesMu.Lock()
+			c.profiles[name].checked = time.Time{}
+			c.profilesMu.Unlock()
+			_, err = c.FetchMetricsWithProfile(srv.URL, name)
+			require.NoError(t, err)
+			require.Equal(t, []string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
+		})
+	}
+
+	// A target-specific TLS failure does not affect the profile.
+	_, untrusted := scrapeTLSFixture(t)
+	other := startScrapeTLSServer(t, untrusted, func(w http.ResponseWriter, r *http.Request) { t.Error("untrusted server received a request") })
+	_, err = c.FetchMetricsWithProfile(other.URL, name)
+	require.Error(t, err)
+	_, err = c.FetchMetricsWithProfile(srv.URL, name)
+	require.NoError(t, err)
+	require.Equal(t, []string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
+
 	// An invalid UTF-8 username found by a periodic check makes the profile unavailable instead of panicking.
 	require.NoError(t, os.WriteFile(profile.UsernameFile, []byte("synthetic-user\xff"), 0600))
 	c.profilesMu.Lock()
