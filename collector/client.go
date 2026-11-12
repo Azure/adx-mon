@@ -264,12 +264,12 @@ func (c *MetricsClient) do(req *http.Request, target, profile string) (*http.Res
 	}
 
 	resp, err := client.Do(req)
-	var credErr *scrapetls.CredentialError
-	if profile != "" && errors.As(err, &credErr) {
-		// The credentials changed since the last check and were not sent.  Stop advertising the profile until a
-		// later check finds usable files.
+	var fileErr *scrapetls.FileError
+	if profile != "" && errors.As(err, &fileErr) {
+		// The profile files became unusable since the last check and nothing was sent.  Stop advertising the profile
+		// until a later check finds usable files.  Target TLS and network errors leave the profile available.
 		c.profilesMu.Lock()
-		c.setProfileErrorLocked(profile, c.profiles[profile], credErr, time.Now())
+		c.setProfileErrorLocked(profile, c.profiles[profile], fileErr, time.Now())
 		c.profilesMu.Unlock()
 	}
 	return resp, err

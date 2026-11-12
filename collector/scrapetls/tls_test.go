@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -327,14 +328,12 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 				require.NoError(t, err)
 				resp.Body.Close()
 				require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-			case "missing-ca", "bad-ca":
-				get(t, c, srv.URL, true)
 			default:
-				// Unusable credentials are rejected before any request is sent.
+				// Unusable files are reported before any request is sent.
 				_, err := c.Get(srv.URL)
-				var credErr *CredentialError
-				require.ErrorAs(t, err, &credErr)
-				require.Equal(t, before, requests.Load(), "unusable credentials were sent")
+				var fileErr *FileError
+				require.ErrorAs(t, err, &fileErr)
+				require.Equal(t, before, requests.Load(), "request sent with unusable profile files")
 			}
 			switch tc {
 			case "unreadable-username":
@@ -349,9 +348,13 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 		})
 	}
 
-	// A CA update that no longer trusts the pooled peer must reject it.
+	// A CA update that no longer trusts the pooled peer must reject it. This
+	// is a target verification failure, not a problem with the files.
 	writeFile(t, p.CAFile, other.pem)
-	get(t, c, srv.URL, true)
+	_, err := c.Get(srv.URL)
+	var fileErr *FileError
+	require.Error(t, err)
+	require.False(t, errors.As(err, &fileErr), "TLS verification failure reported as a file error")
 	pair2 := other.leaf(t, "exporter.test", false)
 	serving.Store(&pair2)
 	// Same endpoint, replaced server CA, same Basic credentials.
