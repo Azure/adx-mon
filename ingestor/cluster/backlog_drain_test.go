@@ -151,3 +151,48 @@ func TestSplitPrefixNStopsAtLimitAfterAgeBoundary(t *testing.T) {
 		require.Equal(t, i < 3, n == 1, "segment %d", i)
 	}
 }
+
+// A delivered batch makes room for one more batch, not a whole allowance: batches still queued or running count
+// against maxTableBatches, so refilling a backlog never makes batches the queue would reject.
+func TestQueuedBatcher_DeliveryRefillsOnlyTheRoomItMade(t *testing.T) {
+	env := newBacklogEnv(t, 30)
+	require.Equal(t, 2, env.b.maxTableBatches)
+	env.open(t)
+	first, second := receiveBatch(t, env.upload, time.Second), receiveBatch(t, env.upload, time.Second)
+
+	// As a worker does, the batch is removed, which wakes the batcher, before it is released.
+	require.NoError(t, first.Remove())
+	first.Release()
+	next := receiveBatch(t, env.upload, time.Second)
+	require.Len(t, next.Segments, 3)
+	select {
+	case b := <-env.upload:
+		t.Fatalf("one delivery made a second batch %v while %d were outstanding", b.Paths(), 2)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// A batch merged into another while it waits for a worker frees its place too.
+	second.finish()
+	receiveBatch(t, env.upload, time.Second)
+}
+
+// A batch released for retry, such as after a failed delivery, frees its place without overriding the backoff.
+func TestQueuedBatcher_FailedBatchKeepsBackoff(t *testing.T) {
+	env := newBacklogEnv(t, 30)
+	env.open(t)
+	first := receiveBatch(t, env.upload, time.Second)
+	receiveBatch(t, env.upload, time.Second)
+
+	first.Release()
+	env.b.queued.mu.Lock()
+	retryAfter := env.b.queued.pending["db_Cpu"].retryAfter
+	_, outstanding := env.b.queued.outstanding["db_Cpu"]
+	env.b.queued.mu.Unlock()
+	require.True(t, retryAfter.After(time.Now()), "the failed batch's backoff is kept")
+	require.True(t, outstanding)
+	select {
+	case b := <-env.upload:
+		t.Fatalf("a failed batch was retried at once: %v", b.Paths())
+	case <-time.After(100 * time.Millisecond):
+	}
+}

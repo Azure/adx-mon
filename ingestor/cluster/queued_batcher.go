@@ -59,8 +59,13 @@ func (p queuedPolicy) sizeTrigger() int64 {
 	return p.b.minUploadSize
 }
 
-// batches makes at most maxTableBatches batches, the most a table may have queued, so a backlog is batched as earlier
-// batches are delivered rather than released by a full queue.
-func (p queuedPolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo) (owned, notOwned []*Batch) {
-	return b.splitPrefixN(prefix, segments, b.maxTableBatches)
+// maxBatches is maxTableBatches, the most batches a table may have queued, so a backlog is batched as earlier batches
+// are delivered rather than released by a full queue.
+func (p queuedPolicy) maxBatches() int {
+	return p.b.maxTableBatches
+}
+
+// batches makes at most maxBatches batches, the room left by the prefix's outstanding batches.
+func (p queuedPolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo, maxBatches int) (owned, notOwned []*Batch) {
+	return b.splitPrefixN(prefix, segments, maxBatches)
 }

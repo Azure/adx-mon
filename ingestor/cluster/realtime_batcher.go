@@ -51,7 +51,10 @@ func (p realtimePolicy) sizeTrigger() int64 {
 
 // batches splits segments into batches of at most MaxBatchBytes and maxBatchSegments and marks each segment as part of
 // a batch.  Realtime batches are always uploaded by this node and never transferred to peers.
-func (p realtimePolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo) (owned, notOwned []*Batch) {
+// maxBatches sets no limit: realtime batches are bounded by their size and latency instead.
+func (p realtimePolicy) maxBatches() int { return 0 }
+
+func (p realtimePolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo, _ int) (owned, notOwned []*Batch) {
 	db, table, _, _, err := wal.ParseFilename(segments[0].Path)
 	if err != nil {
 		logger.Errorf("Failed to parse segment filename: %s", err)
