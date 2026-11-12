@@ -117,6 +117,24 @@ type Batch struct {
 	retryDelay time.Duration
 	// queueFull is set when the batch is released unsent because its destination's queue was full.
 	queueFull bool
+	// done, when set, is called once when the batch is finished: released, or merged into another batch.
+	done     func()
+	finished bool
+}
+
+// finish calls the batch's done hook the first time the batch is released or merged into another batch.
+func (b *Batch) finish() {
+	b.mu.Lock()
+	if b.finished {
+		b.mu.Unlock()
+		return
+	}
+	b.finished = true
+	done := b.done
+	b.mu.Unlock()
+	if done != nil {
+		done()
+	}
 }
 
 // Release releases the segments in the batch so they can be processed again.
@@ -132,6 +150,7 @@ func (b *Batch) Release() {
 	if b.batcher != nil {
 		b.batcher.Release(b)
 	}
+	b.finish()
 	if completion != nil {
 		completion(delay)
 	}

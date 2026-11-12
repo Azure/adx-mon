@@ -498,6 +498,8 @@ func mergeBatch(queued, next *Batch, opts FairQueueOpts) bool {
 	queued.mu.Lock()
 	queued.Segments = append(queued.Segments, next.Segments...)
 	queued.mu.Unlock()
+	// next is not sent or released on its own, so it is finished here and stops counting against its table's batches.
+	next.finish()
 	return true
 }
 

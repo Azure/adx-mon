@@ -22,7 +22,9 @@ func (transferPolicy) accepts(si wal.SegmentInfo) bool {
 func (transferPolicy) maxLatency(string) time.Duration { return time.Hour }
 func (transferPolicy) sizeTrigger() int64              { return 1 << 40 }
 
-func (transferPolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo) (owned, notOwned []*Batch) {
+func (transferPolicy) maxBatches() int { return 0 }
+
+func (transferPolicy) batches(b *batcher, prefix string, segments []wal.SegmentInfo, _ int) (owned, notOwned []*Batch) {
 	batch := &Batch{Prefix: prefix, Priority: ingestpolicy.PriorityQueued, batcher: b}
 	for _, si := range segments {
 		batch.Segments = append(batch.Segments, si)

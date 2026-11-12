@@ -36,9 +36,14 @@ type eventPolicy interface {
 	// maxLatency.
 	sizeTrigger() int64
 
-	// batches splits the unbatched segments of a prefix into batches and marks each segment as part of a batch.
-	// owned batches are uploaded by this node and notOwned batches are transferred to a peer.
-	batches(b *batcher, prefix string, segments []wal.SegmentInfo) (owned, notOwned []*Batch)
+	// maxBatches is the most batches of a prefix that may be outstanding, queued or running, at once, or 0 for no
+	// limit.
+	maxBatches() int
+
+	// batches splits the unbatched segments of a prefix into at most maxBatches batches, or any number when
+	// maxBatches is 0, and marks each segment as part of a batch.  owned batches are uploaded by this node and
+	// notOwned batches are transferred to a peer.
+	batches(b *batcher, prefix string, segments []wal.SegmentInfo, maxBatches int) (owned, notOwned []*Batch)
 }
 
 // eventBatcher batches segments as they close rather than on the periodic scan.  A policy determines which segments
@@ -68,6 +73,8 @@ type eventBatcher struct {
 	// batches as the policy allows, or one of their batches was released, such as by a full queue.  They are batched
 	// again as soon as one of their batches is delivered.
 	backlog map[string]bool
+	// outstanding counts each prefix's batches that are queued or running, when the policy limits them.
+	outstanding map[string]int
 
 	// emitMu serializes building batches so segments are never added to more than one batch.
 	emitMu  sync.Mutex
@@ -89,6 +96,7 @@ func newEventBatcher(b *batcher, policy eventPolicy, sweepInterval time.Duration
 		releases:      make(map[string]int),
 		failed:        make(map[string]bool),
 		backlog:       make(map[string]bool),
+		outstanding:   make(map[string]int),
 	}
 }
 
@@ -411,7 +419,15 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 	}
 
 	r.clearPending(prefix, p.seq)
-	owned, notOwned := r.policy.batches(r.b, prefix, segments)
+	room, ok := r.room(prefix)
+	if !ok {
+		// Every batch the prefix may have is still outstanding.  The prefix is batched again when one finishes.
+		r.b.markMu.Unlock()
+		return
+	}
+	owned, notOwned := r.policy.batches(r.b, prefix, segments, room)
+	r.track(prefix, owned)
+	r.track(prefix, notOwned)
 	r.setBacklog(prefix, batchedSegments(owned)+batchedSegments(notOwned) < len(segments))
 	r.b.markMu.Unlock()
 	r.send(ctx, owned, r.b.uploadQueueFor)
@@ -430,6 +446,59 @@ func (r *eventBatcher) send(ctx context.Context, batches []*Batch, queueFor func
 			}
 			return
 		}
+	}
+}
+
+// room returns how many more batches of prefix may be made, or 0 when the policy sets no limit.  It returns false,
+// and marks the prefix as having a backlog, when the prefix already has as many batches outstanding as the policy
+// allows; the backlog flag is set under the same hold of mu as the count is read, so a batch that finishes in between
+// sees it and batches the prefix again.
+func (r *eventBatcher) room(prefix string) (int, bool) {
+	limit := r.policy.maxBatches()
+	if limit <= 0 {
+		return 0, true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	room := limit - r.outstanding[prefix]
+	if room <= 0 {
+		r.backlog[prefix] = true
+		return 0, false
+	}
+	return room, true
+}
+
+// track counts batches of prefix as outstanding until each finishes, when the policy limits them.
+func (r *eventBatcher) track(prefix string, batches []*Batch) {
+	if r.policy.maxBatches() <= 0 || len(batches) == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.outstanding[prefix] += len(batches)
+	r.mu.Unlock()
+	for _, b := range batches {
+		b.done = func() { r.batchDone(prefix) }
+	}
+}
+
+// batchDone is called when an outstanding batch of prefix finishes, by being released or merged into another batch.
+// It makes room for another batch, so a prefix with a backlog is batched again at once, unless it is backing off
+// because a batch was released for retry, such as after a failed delivery.
+func (r *eventBatcher) batchDone(prefix string) {
+	r.mu.Lock()
+	if r.outstanding[prefix]--; r.outstanding[prefix] <= 0 {
+		delete(r.outstanding, prefix)
+	}
+	wake := r.backlog[prefix]
+	if p, ok := r.pending[prefix]; ok && p.retryAfter.After(time.Now()) {
+		wake = false
+	}
+	if wake {
+		r.retryNow(prefix)
+	}
+	r.mu.Unlock()
+	if wake {
+		r.signal()
 	}
 }
 

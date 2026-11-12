@@ -102,6 +102,7 @@ func newStreamingTestEnv(t *testing.T) *streamingTestEnv {
 	b, err := cluster.NewBatcher(cluster.BatcherOpts{
 		StorageDir:              env.dir,
 		MaxTransferAge:          time.Hour,
+		MaxTableBatches:         100, // tests take several of a table's batches before any finishes, as the ingestor allows
 		Partitioner:             localPartitioner{},
 		Segmenter:               env.idx,
 		UploadQueue:             env.queued,
