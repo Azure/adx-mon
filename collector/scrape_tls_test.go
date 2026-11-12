@@ -659,3 +659,41 @@ func TestScrapeTLSUsernameRotationBetweenChecks(t *testing.T) {
 	require.NoError(t, c.Close())
 	require.Empty(t, scrapeTLSInfoUsernames(t, name))
 }
+
+func TestScrapeTLSUnusedProfilesAreRefreshed(t *testing.T) {
+	const name = "unused-exporter"
+	profile, _ := scrapeTLSFixture(t)
+	username, err := os.ReadFile(profile.UsernameFile)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(profile.UsernameFile))
+
+	// No target selects the profile, so only the periodic refresh can update its gauge.
+	c, err := NewMetricsClient(ClientOpts{
+		ScrapeTLSProfiles:        map[string]scrapetls.Profile{name: profile},
+		ScrapeTLSRefreshInterval: 10 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer c.Close()
+	require.Empty(t, scrapeTLSInfoUsernames(t, name))
+
+	require.NoError(t, os.WriteFile(profile.UsernameFile, username, 0600))
+	require.Eventually(t, func() bool {
+		return slices.Equal([]string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
+	}, 5*time.Second, 5*time.Millisecond, "a file that appears later is not advertised")
+
+	require.NoError(t, os.WriteFile(profile.UsernameFile, []byte("synthetic-user-g2"), 0600))
+	require.Eventually(t, func() bool {
+		return slices.Equal([]string{"synthetic-user-g2"}, scrapeTLSInfoUsernames(t, name))
+	}, 5*time.Second, 5*time.Millisecond, "a rotated username is not advertised")
+
+	require.NoError(t, os.Remove(profile.PasswordFile))
+	require.Eventually(t, func() bool {
+		return len(scrapeTLSInfoUsernames(t, name)) == 0
+	}, 5*time.Second, 5*time.Millisecond, "an invalid profile is still advertised")
+
+	// The refresh stops when the client closes.
+	require.NoError(t, c.Close())
+	require.NoError(t, os.WriteFile(profile.PasswordFile, []byte("synthetic-password"), 0600))
+	time.Sleep(50 * time.Millisecond)
+	require.Empty(t, scrapeTLSInfoUsernames(t, name))
+}
