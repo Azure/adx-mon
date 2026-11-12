@@ -629,3 +629,33 @@ func TestScrapeTLSInvalidCredentialsBetweenChecks(t *testing.T) {
 	require.ErrorContains(t, err, "unavailable")
 	require.Empty(t, scrapeTLSInfoUsernames(t, name))
 }
+
+func TestScrapeTLSUsernameRotationBetweenChecks(t *testing.T) {
+	const name = "rotating-username-exporter"
+	profile, pair := scrapeTLSFixture(t)
+	var sent atomic.Value
+	srv := startScrapeTLSServer(t, pair, func(w http.ResponseWriter, r *http.Request) {
+		u, _, _ := r.BasicAuth()
+		sent.Store(u)
+		fmt.Fprint(w, "keep_metric 1\n")
+	})
+	c, err := NewMetricsClient(ClientOpts{
+		ScrapeTLSProfiles:        map[string]scrapetls.Profile{name: profile},
+		ScrapeTLSRefreshInterval: time.Hour,
+	})
+	require.NoError(t, err)
+	defer c.Close()
+	_, err = c.FetchMetricsWithProfile(srv.URL, name)
+	require.NoError(t, err)
+	require.Equal(t, []string{"synthetic-user"}, scrapeTLSInfoUsernames(t, name))
+
+	// The rotation happens before the next periodic check; the gauge follows the username that was sent.
+	require.NoError(t, os.WriteFile(profile.UsernameFile, []byte("synthetic-user-g2"), 0600))
+	_, err = c.FetchMetricsWithProfile(srv.URL, name)
+	require.NoError(t, err)
+	require.Equal(t, "synthetic-user-g2", sent.Load())
+	require.Equal(t, []string{"synthetic-user-g2"}, scrapeTLSInfoUsernames(t, name))
+
+	require.NoError(t, c.Close())
+	require.Empty(t, scrapeTLSInfoUsernames(t, name))
+}
