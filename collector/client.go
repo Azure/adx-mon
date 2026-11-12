@@ -353,7 +353,7 @@ func (c *MetricsClient) refreshProfileLocked(name string, state *scrapeTLSProfil
 		err = errors.New("metrics client closed")
 	}
 	if err == nil && state.client == nil {
-		state.client, err = c.newProfileClient(state.profile)
+		state.client, err = c.newProfileClient(name, state.profile)
 	}
 	if err != nil {
 		c.setProfileErrorLocked(name, state, err, now)
@@ -385,12 +385,21 @@ func (c *MetricsClient) isClosed() bool {
 	}
 }
 
-func (c *MetricsClient) newProfileClient(profile scrapetls.Profile) (*http.Client, error) {
+func (c *MetricsClient) newProfileClient(name string, profile scrapetls.Profile) (*http.Client, error) {
 	client, err := scrapetls.NewClient(profile, c.opts.DialTimeout)
 	if err != nil {
 		return nil, err
 	}
 	client.Timeout = c.opts.ScrapeTimeOut
+	// The transport validates the files on every request, so a rotated username is sent before the next periodic
+	// check.  Publish it as it is sent so the gauge always reports the identity in use.
+	client.Transport.(*scrapetls.Transport).OnSend = func(username string) {
+		c.profilesMu.Lock()
+		defer c.profilesMu.Unlock()
+		if state := c.profiles[name]; state.err == nil && !c.isClosed() {
+			c.setProfileUsernameLocked(name, state, username)
+		}
+	}
 	return client, nil
 }
 

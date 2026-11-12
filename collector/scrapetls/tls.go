@@ -150,6 +150,10 @@ type Transport struct {
 	profile     Profile
 	dialTimeout time.Duration
 
+	// OnSend, if set, is called with the username of each request just
+	// before it is sent. Set it before the first request.
+	OnSend func(username string)
+
 	mu     sync.Mutex
 	caData []byte
 	client *http.Client
@@ -225,6 +229,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	clone.Header.Del("Proxy-Authorization")
 	clone.SetBasicAuth(username, password)
+	if t.OnSend != nil {
+		t.OnSend(username)
+	}
 	return client.Transport.RoundTrip(clone)
 }
 
