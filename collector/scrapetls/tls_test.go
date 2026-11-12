@@ -361,6 +361,18 @@ func TestUpdatesAndKeepalive(t *testing.T) {
 	get(t, c, srv.URL, true)
 }
 
+func TestCARotationDuringNewClient(t *testing.T) {
+	ca, other := newCA(t), newCA(t)
+	p := profileFiles(t, ca.pem, []byte("client"), []byte("synthetic-password"))
+	testHookCALoaded = func() { writeFile(t, p.CAFile, other.pem) }
+	c, _ := secureClient(t, p)
+	testHookCALoaded = func() {}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })
+	// The rotation is seen as a change: the new CA is trusted and the removed one is not.
+	require.Equal(t, "ok", get(t, c, tlsServer(t, other, ok).URL, false))
+	get(t, c, tlsServer(t, ca, ok).URL, true)
+}
+
 func TestPolicyAndIsolation(t *testing.T) {
 	ca := newCA(t)
 	p := profileFiles(t, ca.pem, []byte("client"), []byte("synthetic-password"))

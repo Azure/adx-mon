@@ -1,15 +1,16 @@
 // Package scrapetls builds HTTP clients that scrape Prometheus exporters with
 // HTTP Basic authentication over verified TLS.
 //
-// A Profile names a CA bundle and a pair of credential files. The credential
-// files are read and validated on every request, and the CA bundle is
-// re-read by the underlying Prometheus HTTP client, so rotated credentials
-// and CA bundles are picked up without a restart.
+// A Profile names a CA bundle and a pair of credential files. The files are
+// read and validated on every request, so rotated credentials and CA bundles
+// are picked up without a restart.
 package scrapetls
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -17,7 +18,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -52,12 +53,32 @@ func ValidateTarget(target string) error {
 	return nil
 }
 
-func (p Profile) tlsConfig() promconfig.TLSConfig {
-	return promconfig.TLSConfig{
-		CAFile:     p.CAFile,
-		ServerName: p.ServerName,
-		MinVersion: promconfig.TLSVersion(tls.VersionTLS12),
+// readCA reads the CA bundle once and checks that it holds at least one PEM
+// certificate. An empty bundle is rejected rather than falling back to the
+// system roots.
+func (p Profile) readCA(ctx context.Context) ([]byte, error) {
+	ca, err := promconfig.NewFileSecret(p.CAFile).Fetch(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("CA file: %w", err)
 	}
+	if !x509.NewCertPool().AppendCertsFromPEM([]byte(ca)) {
+		return nil, errors.New("CA file holds no PEM certificates")
+	}
+	return []byte(ca), nil
+}
+
+// newCAClient returns a Prometheus HTTP client that trusts exactly ca. The
+// CA is passed inline so the client never re-reads the file; Transport
+// detects rotation by comparing the same bytes it built the client from.
+func (p Profile) newCAClient(ca []byte, dialTimeout time.Duration) (*http.Client, error) {
+	return promconfig.NewClientFromConfig(promconfig.HTTPClientConfig{
+		TLSConfig: promconfig.TLSConfig{
+			CA:         string(ca),
+			ServerName: p.ServerName,
+			MinVersion: promconfig.TLSVersion(tls.VersionTLS12),
+		},
+		FollowRedirects: false,
+	}, "adx-mon-collector", promconfig.WithDialContextFunc((&net.Dialer{Timeout: dialTimeout}).DialContext))
 }
 
 // Validate checks only the structure of the profile. Missing or invalid files
@@ -111,8 +132,7 @@ func (p Profile) CheckFiles() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cfg := p.tlsConfig()
-	if _, err := promconfig.NewTLSConfig(&cfg); err != nil {
+	if _, err := p.readCA(context.Background()); err != nil {
 		return "", err
 	}
 	return username, nil
@@ -120,37 +140,71 @@ func (p Profile) CheckFiles() (string, error) {
 
 // Transport rejects requests that do not satisfy ValidateTarget, replaces
 // caller-supplied credentials with the profile's, and returns a
-// *CredentialError without sending the request if they are unusable. CA
-// loading, TLS verification and connection-pool replacement are delegated to
-// the Prometheus HTTP client.
+// *CredentialError without sending the request if they are unusable. It
+// re-reads the CA bundle on every request and, when it changes, replaces the
+// connection pool with one built from that same snapshot. TLS verification is
+// delegated to the Prometheus HTTP client.
 type Transport struct {
-	profile Profile
-	client  *http.Client
-	closed  atomic.Bool
+	profile     Profile
+	dialTimeout time.Duration
+
+	mu     sync.Mutex
+	caData []byte
+	client *http.Client
+	closed bool
 }
+
+// testHookCALoaded is called after NewClient reads the CA bundle.
+var testHookCALoaded = func() {}
 
 // NewClient returns an HTTP client for p. Its Transport is a *Transport.
 // Redirects are not followed and proxies from the environment are ignored.
 func NewClient(p Profile, dialTimeout time.Duration) (*http.Client, error) {
-	if _, err := p.CheckFiles(); err != nil {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	client, err := promconfig.NewClientFromConfig(promconfig.HTTPClientConfig{
-		TLSConfig:       p.tlsConfig(),
-		FollowRedirects: false,
-	}, "adx-mon-collector", promconfig.WithDialContextFunc((&net.Dialer{Timeout: dialTimeout}).DialContext))
+	if _, _, err := p.readCredentials(context.Background()); err != nil {
+		return nil, err
+	}
+	// The trusted roots and the data later compared to detect rotation come
+	// from this single read, so a rotation during construction is seen as a
+	// change by the next request.
+	ca, err := p.readCA(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	inner := *client
-	client.Transport = &Transport{profile: p, client: &inner}
+	testHookCALoaded()
+	inner, err := p.newCAClient(ca, dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Transport:     &Transport{profile: p, dialTimeout: dialTimeout, caData: ca, client: inner},
+		CheckRedirect: inner.CheckRedirect,
+	}, nil
+}
+
+// clientFor returns the client that trusts ca, replacing the current one if
+// the bundle changed.
+func (t *Transport) clientFor(ca []byte) (*http.Client, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil, errors.New("scrape TLS transport closed")
+	}
+	if bytes.Equal(ca, t.caData) {
+		return t.client, nil
+	}
+	client, err := t.profile.newCAClient(ca, t.dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	t.client.CloseIdleConnections()
+	t.caData, t.client = ca, client
 	return client, nil
 }
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.closed.Load() {
-		return nil, errors.New("scrape TLS transport closed")
-	}
 	if err := ValidateTarget(req.URL.String()); err != nil {
 		return nil, err
 	}
@@ -158,18 +212,30 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	ca, err := t.profile.readCA(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	client, err := t.clientFor(ca)
+	if err != nil {
+		return nil, err
+	}
 	clone := req.Clone(req.Context())
 	clone.Header.Del("Proxy-Authorization")
 	clone.SetBasicAuth(username, password)
-	return t.client.Transport.RoundTrip(clone)
+	return client.Transport.RoundTrip(clone)
 }
 
 func (t *Transport) CloseIdleConnections() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.client.CloseIdleConnections()
 }
 
 // Close rejects further requests and closes idle connections.
 func (t *Transport) Close() {
-	t.closed.Store(true)
-	t.CloseIdleConnections()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	t.client.CloseIdleConnections()
 }
