@@ -438,34 +438,40 @@ func (g *groupWaits) done(group string) {
 // next returns the destination that has waited longest for a group that now has room and is ready to run.  It stays
 // at the head of the group's waiters until dispatched removes it, so if its batch isn't sent this time it is still
 // first next time.  Waiting destinations that are no longer ready, such as ones without work or retrying, stop
-// waiting; they wait again if they are skipped for a full group later.  A ready destination whose next batch is now
-// for another group moves to that group's waiters, keeping its place.
+// waiting; they wait again if they are skipped for a full group later.
 func (g *groupWaits) next(tables map[wal.Destination]*fairTable, ready func(*fairTable) bool) (wal.Destination, bool) {
+	g.regroup(tables, ready)
 	for group := range g.waiting {
 		if g.running[group] >= g.limit {
 			continue
 		}
 		for len(g.waiting[group]) > 0 {
 			d := g.waiting[group][0]
-			t := tables[d]
-			if !ready(t) {
+			if !ready(tables[d]) {
 				g.remove(d, group)
-				continue
-			}
-			if moved := g.group(t.queue[0]); moved != group {
-				seq := g.queued[d].seq
-				g.remove(d, group)
-				g.insert(d, moved, seq)
-				if g.running[moved] < g.limit {
-					// moved has room, but someone may have waited for it longer, so look again from its head.
-					return g.next(tables, ready)
-				}
 				continue
 			}
 			return d, true
 		}
 	}
 	return wal.Destination{}, false
+}
+
+// regroup moves each ready waiter whose next batch is now for another group, because its table changed owner, to that
+// group's waiters, keeping its place by when it started waiting.  It checks every waiter, including those waiting for
+// a full group, so a waiter is not passed over for a group it now belongs to while its old group stays full.
+func (g *groupWaits) regroup(tables map[wal.Destination]*fairTable, ready func(*fairTable) bool) {
+	var moved []wal.Destination
+	for d, w := range g.queued {
+		if t := tables[d]; ready(t) && g.group(t.queue[0]) != w.group {
+			moved = append(moved, d)
+		}
+	}
+	for _, d := range moved {
+		w := g.queued[d]
+		g.remove(d, w.group)
+		g.insert(d, g.group(tables[d].queue[0]), w.seq)
+	}
 }
 
 // dispatched records that d's next batch was dispatched, so it no longer waits for any group.

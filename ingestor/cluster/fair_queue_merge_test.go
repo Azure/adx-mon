@@ -376,3 +376,25 @@ func TestGroupWaitsMovedWaiterQueuesBehindOlderWaiters(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, a, d)
 }
+
+// A waiter whose table moved to another group is found even while its old group stays full: when only the new group
+// frees a slot, the waiter goes before destinations that started waiting for the new group after it.
+func TestGroupWaitsMovesWaiterOutOfFullGroup(t *testing.T) {
+	groups := map[string]string{"a": "peer1", "b": "peer2"}
+	g := newGroupWaits(func(b *Batch) string { return groups[b.Table] }, 1)
+	a, b := wal.Destination{Database: "DB", Table: "a"}, wal.Destination{Database: "DB", Table: "b"}
+	tables := map[wal.Destination]*fairTable{
+		a: {queue: []*Batch{fairBatch("a", "s", 1)}},
+		b: {queue: []*Batch{fairBatch("b", "s", 1)}},
+	}
+	ready := func(t *fairTable) bool { return t != nil && len(t.queue) > 0 }
+	g.running["peer1"], g.running["peer2"] = 1, 1
+	g.wait(a, tables[a].queue[0])
+	g.wait(b, tables[b].queue[0])
+
+	groups["a"] = "peer2"
+	g.done("peer2")
+	d, ok := g.next(tables, ready)
+	require.True(t, ok)
+	require.Equal(t, a, d)
+}
