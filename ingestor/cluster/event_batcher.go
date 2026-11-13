@@ -262,14 +262,49 @@ func (r *eventBatcher) signal() {
 }
 
 // sweep marks every prefix in the index with unbatched segments accepted by the policy as pending.  Prefixes whose
-// segments are all part of a batch are skipped so they are not reprocessed.
+// segments are all part of a batch are skipped so they are not reprocessed.  It also prunes the release, failure,
+// backlog and outstanding tracking of prefixes that are no longer in the index, since those entries are only otherwise
+// cleared on specific delivery and removal paths and would otherwise linger for prefixes whose segments were removed
+// by another path, such as a peer transfer, an audit, or a manual deletion.
 func (r *eventBatcher) sweep() {
 	now := time.Now()
 	var segments []wal.SegmentInfo
+	live := make(map[string]struct{})
 	for _, prefix := range r.prefixes() {
+		live[prefix] = struct{}{}
 		segments = r.b.Segmenter.Get(segments[:0], prefix)
 		if len(segments) > 0 && r.policy.accepts(segments[0]) && r.hasUnbatched(segments) {
 			r.markPending(prefix, now.Add(r.policy.maxLatency(prefix)))
+		}
+	}
+
+	r.pruneDead(live)
+}
+
+// pruneDead deletes entries in the tracking maps for prefixes that are no longer in live, bounding the maps to the
+// prefixes that still exist in the index.  r.mu must not be held.
+func (r *eventBatcher) pruneDead(live map[string]struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for p := range r.releases {
+		if _, ok := live[p]; !ok {
+			delete(r.releases, p)
+		}
+	}
+	for p := range r.failed {
+		if _, ok := live[p]; !ok {
+			delete(r.failed, p)
+		}
+	}
+	for p := range r.backlog {
+		if _, ok := live[p]; !ok {
+			delete(r.backlog, p)
+		}
+	}
+	for p := range r.outstanding {
+		if _, ok := live[p]; !ok {
+			delete(r.outstanding, p)
 		}
 	}
 }
