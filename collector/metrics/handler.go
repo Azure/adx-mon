@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -20,6 +21,12 @@ import (
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+// maxRemoteWriteBodyBytes bounds the size of a prometheus remote-write request
+// body. It mirrors maxMetricsBodyBytes / maxLogsBodyBytes in the OTLP
+// handlers: a client-supplied body larger than this cap is rejected with 413
+// instead of being read in full, preventing unbounded per-request allocation.
+var maxRemoteWriteBodyBytes int64 = 64 << 20
 
 type SeriesCounter interface {
 	AddSeries(key string, id uint64)
@@ -109,10 +116,17 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	defer pool.BytesBufferPool.Put(bodyBuf)
 	bodyBuf.Reset()
 
-	_, err := io.Copy(bodyBuf, r.Body)
+	// Bound the body read so a client cannot force an unbounded allocation.
+	// Read up to one byte past the cap so we can detect an oversized body.
+	n, err := io.Copy(bodyBuf, io.LimitReader(r.Body, maxRemoteWriteBodyBytes+1))
 	if err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if n > maxRemoteWriteBodyBytes {
+		m.WithLabelValues(strconv.Itoa(http.StatusRequestEntityTooLarge)).Inc()
+		http.Error(w, fmt.Sprintf("Request body larger than %d bytes", maxRemoteWriteBodyBytes), http.StatusRequestEntityTooLarge)
 		return
 	}
 
