@@ -1,0 +1,112 @@
+package clickhouse
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+// reconcilingConnection models a ClickHouse connection whose Select returns a
+// fixed set of existing table names for the system.tables reconcile query.  It
+// also records every query it runs so the test can prove the reconcile issued
+// the expected system.tables lookup.
+type reconcilingConnection struct {
+	fakeConnection
+	existingTables []string
+}
+
+// Select intercepts the schema-cache reconcile's list-tables query and returns
+// the configured existing-table names; any other query falls through to the
+// fake.  Overriding fakeConnection.Select here (instead of embedding a real
+// driver.Conn) keeps the test hermetic and fast.
+func (c *reconcilingConnection) Select(ctx context.Context, dest any, query string, args ...any) error {
+	c.mu.Lock()
+	c.execs = append(c.execs, strings.TrimSpace(query))
+	c.mu.Unlock()
+
+	if strings.Contains(query, "system.tables") {
+		names, ok := dest.(*[]string)
+		if !ok {
+			return context.DeadlineExceeded
+		}
+		*names = append([]string(nil), c.existingTables...)
+		return nil
+	}
+	return c.fakeConnection.Select(ctx, dest, query, args...)
+}
+
+// TestUploaderEvictsSchemaForDroppedTable demonstrates finding M8: a table that
+// is dropped from ClickHouse keeps its Schema (a []Column slice) in the
+// uploader's u.schemas map forever, because ensureSchema only ever adds and
+// nothing ever evicts.  The ADX syncer reconciles its cache every 15 minutes;
+// the ClickHouse side had no equivalent.
+//
+// Pre-fix, evictSchemasForDroppedTables does not exist, so the entry survives
+// the call and this test fails.  Post-fix, the evict helper removes the entry
+// for the dropped table and keeps the surviving one.
+func TestUploaderEvictsSchemaForDroppedTable(t *testing.T) {
+	conn := &reconcilingConnection{existingTables: []string{"surviving"}}
+	withFakeConnectionManager(t, conn)
+
+	cfg := Config{Database: "metricsdb", DSN: "clickhouse://localhost"}
+	u, err := NewUploader(cfg, nil)
+	require.NoError(t, err)
+	impl := u.(*uploader)
+
+	// Populate the schema cache with two tables: one that survives and one
+	// that has been dropped from ClickHouse.
+	impl.schemaMu.Lock()
+	impl.schemas["surviving"] = Schema{Table: "surviving", Columns: []Column{{Name: "Timestamp", Type: "DateTime64"}}}
+	impl.schemas["dropped"] = Schema{Table: "dropped", Columns: []Column{{Name: "Timestamp", Type: "DateTime64"}}}
+	impl.schemaMu.Unlock()
+
+	existing := map[string]struct{}{"surviving": {}}
+	impl.evictSchemasForDroppedTables(existing)
+
+	impl.schemaMu.Lock()
+	_, droppedStillCached := impl.schemas["dropped"]
+	_, survivingStillCached := impl.schemas["surviving"]
+	impl.schemaMu.Unlock()
+
+	require.False(t, droppedStillCached, "schema for dropped table must be evicted from u.schemas")
+	require.True(t, survivingStillCached, "schema for a table still present must be kept")
+}
+
+// TestUploaderReconcileQueriesSystemTables proves the periodic reconcile
+// actually asks the database which tables exist (the SELECT against
+// system.tables) before it evicts.  A fake that records queries returns the
+// dropped table absent from the result set.
+func TestUploaderReconcileQueriesSystemTables(t *testing.T) {
+	conn := &reconcilingConnection{existingTables: []string{}}
+	withFakeConnectionManager(t, conn)
+
+	cfg := Config{Database: "metricsdb", DSN: "clickhouse://localhost"}
+	u, err := NewUploader(cfg, nil)
+	require.NoError(t, err)
+	impl := u.(*uploader)
+
+	impl.schemaMu.Lock()
+	impl.schemas["gone"] = Schema{Table: "gone", Columns: []Column{{Name: "Timestamp", Type: "DateTime64"}}}
+	impl.schemaMu.Unlock()
+
+	impl.reconcileSchemas(context.Background())
+
+	// The reconcile must have issued a list-tables query.
+	require.Eventually(t, func() bool {
+		for _, q := range conn.execQueries() {
+			if strings.Contains(q, "system.tables") {
+				return true
+			}
+		}
+		return false
+	}, time.Second, time.Millisecond, "reconcile did not query system.tables")
+
+	// With no tables reported, the lone cached schema is evicted.
+	impl.schemaMu.Lock()
+	_, stillCached := impl.schemas["gone"]
+	impl.schemaMu.Unlock()
+	require.False(t, stillCached, "schema must be evicted when the table is no longer present")
+}

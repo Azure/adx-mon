@@ -31,6 +31,12 @@ import (
 // blocking its worker for the service lifetime.
 var batchUploadTimeout = 10 * time.Minute
 
+// schemaReconcileInterval is how often the uploader checks its schema cache
+// against the tables that still exist in ClickHouse.  It mirrors the ADX
+// syncer's reconcileInterval so a table dropped from ClickHouse does not keep
+// its cached Schema in memory indefinitely.
+var schemaReconcileInterval = 15 * time.Minute
+
 // Uploader exposes the contract shared by all storage backends so that the
 // ingestor service can remain agnostic of the implementation details.
 type Uploader interface {
@@ -57,6 +63,11 @@ type uploader struct {
 
 	workers int
 	wg      sync.WaitGroup
+
+	// schemaReconcileWG tracks the schema-cache reconcile goroutine.  It is
+	// separate from wg (the workers) so Close can join it deterministically
+	// without entangling the upload workers' lifecycle.
+	schemaReconcileWG sync.WaitGroup
 }
 
 // NewUploader constructs a ClickHouse-backed uploader
@@ -124,6 +135,9 @@ func (u *uploader) Open(ctx context.Context) error {
 		go u.worker(i)
 	}
 
+	u.schemaReconcileWG.Add(1)
+	go u.schemaReconcileLoop()
+
 	u.log.Info("clickhouse uploader ready")
 
 	return nil
@@ -142,6 +156,7 @@ func (u *uploader) Close() error {
 
 	cancel()
 	u.wg.Wait()
+	u.schemaReconcileWG.Wait()
 
 	if err := u.conn.Close(); err != nil {
 		u.log.Warn("failed to close clickhouse connection", slog.String("error", err.Error()))
@@ -174,6 +189,72 @@ func (u *uploader) Schemas() map[string]Schema {
 		cp[k] = Schema{Table: v.Table, Columns: cols}
 	}
 	return cp
+}
+
+// schemaReconcileLoop periodically evicts schema-cache entries for tables that
+// no longer exist in ClickHouse.  It runs for the lifetime of an open uploader
+// and exits once the service context is canceled.
+func (u *uploader) schemaReconcileLoop() {
+	defer u.schemaReconcileWG.Done()
+
+	t := time.NewTicker(schemaReconcileInterval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-u.ctx.Done():
+			return
+		case <-t.C:
+			u.reconcileSchemas(u.ctx)
+		}
+	}
+}
+
+// reconcileSchemas lists the tables that still exist in the uploader's database
+// and evicts any cached schemas whose table has been dropped.
+func (u *uploader) reconcileSchemas(ctx context.Context) {
+	existing, err := u.listTables(ctx)
+	if err != nil {
+		if u.log != nil {
+			u.log.Warn("schema reconcile: list tables failed", slog.String("error", err.Error()))
+		}
+		return
+	}
+	u.evictSchemasForDroppedTables(existing)
+}
+
+// listTables returns the set of table names present in the uploader's database.
+// It queries ClickHouse's system.tables catalog for the configured database.
+func (u *uploader) listTables(ctx context.Context) (map[string]struct{}, error) {
+	query := "SELECT name FROM system.tables WHERE database = " + quoteLiteral(u.cfg.Database)
+	var names []string
+	if err := u.conn.Select(ctx, &names, query); err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		set[name] = struct{}{}
+	}
+	return set, nil
+}
+
+// evictSchemasForDroppedTables removes every schema-cache entry whose table (the
+// key's part before the optional "@schemaID" suffix) is no longer present in
+// existingTables.  It is safe to run concurrently with ensureSchema and
+// Schemas because it takes schemaMu for the duration of its scan.
+func (u *uploader) evictSchemasForDroppedTables(existingTables map[string]struct{}) {
+	u.schemaMu.Lock()
+	defer u.schemaMu.Unlock()
+
+	for key := range u.schemas {
+		table, _, _ := strings.Cut(key, "@")
+		if _, ok := existingTables[table]; !ok {
+			if u.log != nil {
+				u.log.Debug("evicting cached schema for dropped table", slog.String("table", table))
+			}
+			delete(u.schemas, key)
+		}
+	}
 }
 
 func (u *uploader) worker(_ int) {
