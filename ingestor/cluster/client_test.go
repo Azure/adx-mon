@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -301,8 +303,78 @@ func TestClientMarksPeerTransfers(t *testing.T) {
 	}
 }
 
-// A 423 from the peer is reported as ErrSegmentLocked carrying the request's ID, so the sender retries the segment
-// later.
+// TestClient_Close_ReleasesIdleConnections demonstrates that without a
+// Close method the keep-alive connection the client established to a peer
+// persists on the server side until the transport's 90s IdleConnTimeout
+// fires, leaking the connection and its TLS context / sync.Pool buffers.
+// After the fix, Client.Close() calls CloseIdleConnections and the server
+// observes the connection drop promptly.
+func TestClient_Close_ReleasesIdleConnections(t *testing.T) {
+	var openConns atomic.Int64
+
+	// Wrap the listener to track how many connections are currently open.
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	ln := &trackingListener{Listener: raw, open: &openConns}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	server.Listener = ln
+	server.Start()
+	defer server.Close()
+
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+		DisableGzip:        true,
+		IdleConnTimeout:    time.Hour, // long: the idle conn should NOT time out on its own during this test
+	})
+	require.NoError(t, err)
+
+	// Establish one keep-alive connection to the peer.
+	require.NoError(t, client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata")))
+	require.EqualValues(t, 1, openConns.Load(), "one connection should be open after the request")
+
+	// Close must release the idle keep-alive connection.
+	require.NoError(t, client.Close())
+
+	// The server should observe the connection close promptly.
+	require.Eventually(t, func() bool {
+		return openConns.Load() == 0
+	}, 2*time.Second, 10*time.Millisecond,
+		"idle connection was not released by Client.Close; it will leak until the transport's IdleConnTimeout fires")
+}
+
+// trackingListener counts open connections: it increments on each accepted
+// connection and decrements when the underlying connection's Close is called
+// by the http transport (which is exactly what happens when
+// CloseIdleConnections runs, and when the server drops the connection).
+type trackingListener struct {
+	net.Listener
+	open *atomic.Int64
+}
+
+func (l *trackingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.open.Add(1)
+	return &trackingConn{Conn: c, open: l.open}, nil
+}
+
+type trackingConn struct {
+	net.Conn
+	open *atomic.Int64
+	once sync.Once
+}
+
+func (c *trackingConn) Close() error {
+	c.once.Do(func() { c.open.Add(-1) })
+	return c.Conn.Close()
+}
+
 func TestClient_Write_SegmentLocked(t *testing.T) {
 	var requestId string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
