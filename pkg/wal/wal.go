@@ -511,11 +511,11 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		return
 	}
 
-	// Proactively create the next segment so writers do not create it while holding w.mu.  It is created before
-	// acquiring w.mu so writers are not blocked on file creation during rotation.  If the WAL is idle, the next
-	// segment is created lazily by the next write instead to avoid repeatedly creating and removing empty segments.
+	// Only precreate a successor when a write is in flight. Data in the old segment does not imply another write
+	// will arrive: creating a successor for every burst otherwise creates and deletes an extra unique filename.
+	// Writers already in flight keep proactive creation outside w.mu; other writes use the existing lazy path.
 	var next Segment
-	if !w.isIdle(cur) {
+	if w.inflightWriteBytes.Load() > 0 {
 		next = w.createNextSegment()
 	}
 
@@ -527,8 +527,8 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		return
 	}
 
-	// A write may have arrived after the WAL was considered idle.  Keep the next segment proactive in that case.
-	if next == nil && !w.isIdle(cur) {
+	// A write may have arrived while acquiring the lock. Keep the next segment proactive in that case.
+	if next == nil && w.inflightWriteBytes.Load() > 0 {
 		next = w.createNextSegment()
 	}
 
@@ -553,12 +553,6 @@ func (w *WAL) rotateSegmentIfNecessary() {
 			_ = w.Remove(toClose.Path())
 		}
 	}
-}
-
-// isIdle returns true if seg is empty and no writes are in flight, meaning the WAL received no writes for a full
-// rotation period.
-func (w *WAL) isIdle(seg Segment) bool {
-	return seg != nil && seg.Size() <= 8 && w.inflightWriteBytes.Load() == 0
 }
 
 // createNextSegment creates the next segment, logging and returning nil on failure so the next write creates it.
