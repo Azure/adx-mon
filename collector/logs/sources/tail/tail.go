@@ -3,6 +3,7 @@ package tail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,9 @@ var (
 	noopAck          = func() {}
 	noopAckGenerator = func(*types.Log) func() { return noopAck }
 )
+
+// ErrTargetExists is returned by AddTarget when the file is already tailed or its previous tailer is still being removed.
+var ErrTargetExists = errors.New("target already exists")
 
 // FileTailTarget describes a file to tail, how to parse it, and the destination for the parsed logs.
 // It is used in the list of StaticTargets in TailSourceConfig, or used in AddTarget.
@@ -80,7 +84,9 @@ type TailSource struct {
 
 	ackGenerator func(*types.Log) func()
 	tailers      map[string]*Tailer
-	// protects tailers
+	// file paths whose tailers have been stopped but are still draining
+	removing map[string]struct{}
+	// protects tailers and removing
 	mu sync.RWMutex
 
 	podDiscovery *PodDiscovery
@@ -125,9 +131,14 @@ func (s *TailSource) Open(ctx context.Context) error {
 	}
 
 	s.tailers = map[string]*Tailer{}
+	s.removing = map[string]struct{}{}
 	for _, target := range s.staticTargets {
 
 		err := s.AddTarget(target, nil)
+		if errors.Is(err, ErrTargetExists) {
+			logger.Warnf("TailSource open: ignoring duplicate static target %q", target.FilePath)
+			continue
+		}
 		if err != nil {
 			// On startup, if we fail to add a target, we should close all the tailers we've opened so far and return.
 			s.Close()
@@ -171,12 +182,16 @@ func (s *TailSource) Name() string {
 // AddTarget adds a new file to tail.
 // updateChan is an optional channel to provide updated FileTailTarget metadata during runtime.
 // Does not support updating FilePath or LogType.
+// Returns ErrTargetExists if the file is already tailed or still being removed; updateChan is not used in that case.
 func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTailTarget) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.tailers[target.FilePath]; ok {
-		return nil // already exists
+		return fmt.Errorf("AddTarget %q: %w", target.FilePath, ErrTargetExists)
+	}
+	if _, ok := s.removing[target.FilePath]; ok {
+		return fmt.Errorf("AddTarget %q: previous tailer is still being removed: %w", target.FilePath, ErrTargetExists)
 	}
 
 	tailerConfig := TailerConfig{
@@ -202,17 +217,25 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 
 // RemoveTarget removes a file from being tailed.
 // This also removes the cursor file, so this should only be called when the file is not longer expected to be tailed in the future.
+// Waiting for the tailer to drain happens without holding the lock, so other targets can be added and removed meanwhile.
 func (s *TailSource) RemoveTarget(filePath string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	tailer, ok := s.tailers[filePath]
-	if ok {
-		tailer.Stop()
-		tailer.Wait()
-		delete(s.tailers, filePath)
-		cleanCursor(cursorPath(s.cursorDirectory, filePath))
+	if !ok {
+		s.mu.Unlock()
+		return
 	}
+	delete(s.tailers, filePath)
+	s.removing[filePath] = struct{}{}
+	tailer.Stop()
+	s.mu.Unlock()
+
+	tailer.Wait()
+	cleanCursor(cursorPath(s.cursorDirectory, filePath))
+
+	s.mu.Lock()
+	delete(s.removing, filePath)
+	s.mu.Unlock()
 }
 
 func (s *TailSource) ackBatch(cursor_file_name, cursor_file_id string, cursor_position int64) {
