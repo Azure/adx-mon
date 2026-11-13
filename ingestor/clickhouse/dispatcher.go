@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	monlogger "github.com/Azure/adx-mon/pkg/logger"
@@ -15,6 +16,7 @@ type dispatcher struct {
 	uploaders map[string]Uploader
 	queue     chan *cluster.Batch
 	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 // NewDispatcher builds a dispatcher that multiplexes batches to the provided
@@ -52,7 +54,11 @@ func (d *dispatcher) Open(ctx context.Context) error {
 		}
 	}
 
-	go d.dispatch(c)
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.dispatch(c)
+	}()
 	return nil
 }
 
@@ -65,6 +71,10 @@ func (d *dispatcher) Close() error {
 			d.log.Warn("failed to close clickhouse uploader", slog.String("database", u.Database()), slog.String("error", err.Error()))
 		}
 	}
+	// Wait for the dispatch goroutine to exit so Close does not return before
+	// it has drained; otherwise queued batches are abandoned and a concurrent
+	// enqueue can race the exit.
+	d.wg.Wait()
 	return nil
 }
 

@@ -22,6 +22,7 @@ type dispatcher struct {
 	queue         chan *cluster.Batch
 	realtimeQueue chan *cluster.Batch
 	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 
 	unroutableDelay time.Duration
 
@@ -56,7 +57,11 @@ func (d *dispatcher) Open(ctx context.Context) error {
 		}
 	}
 
-	go d.upload(c)
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.upload(c)
+	}()
 	return nil
 }
 
@@ -65,6 +70,10 @@ func (d *dispatcher) Close() error {
 	for _, u := range d.uploaders {
 		u.Close()
 	}
+	// Wait for the dispatch goroutines to exit so Close does not return before
+	// they have drained; otherwise queued batches are abandoned and a
+	// concurrent enqueue can race the exit.
+	d.wg.Wait()
 	return nil
 }
 
