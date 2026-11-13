@@ -12,6 +12,7 @@ import (
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/pool"
 	connect "github.com/bufbuild/connect-go"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -62,6 +63,9 @@ func (s *MetricsService) Export(ctx context.Context, req *connect.Request[v1.Exp
 	return connect.NewResponse(resp), nil
 }
 
+// maxMetricsBodyBytes bounds the size of an OTLP metrics request body.
+var maxMetricsBodyBytes int64 = 64 << 20
+
 // Handler handles OTLP/HTTP metrics requests
 // See https://opentelemetry.io/docs/specs/otlp/#otlphttp
 func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
@@ -72,24 +76,25 @@ func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Content-Type") {
 	case "application/x-protobuf":
 
-		// Consume the request body and marshal into a protobuf
-		b := gbp.Get(int(r.ContentLength))
-		defer gbp.Put(b)
+		// Consume the request body and marshal into a protobuf.  The body is read up to the limit rather than sized
+		// from Content-Length, which is -1 for chunked requests and is not trusted for its size.
+		bodyBuf := pool.BytesBufferPool.Get(512 * 1024).(*gbp.Buffer)
+		defer pool.BytesBufferPool.Put(bodyBuf)
+		bodyBuf.Reset()
 
-		n, err := io.ReadFull(r.Body, b)
+		n, err := io.Copy(bodyBuf, io.LimitReader(r.Body, maxMetricsBodyBytes+1))
 		if err != nil {
 			s.logger.Error("Failed to read request body", "Error", err)
-			status := newErrorStatus("Failed to read request body.")
+			status := newErrorStatus("Failed to read request body")
 			writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
 			return
 		}
-		if n < int(r.ContentLength) {
-			s.logger.Warn("Short read")
-			status := newErrorStatus("Body did not contain enough bytes.")
-			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
+		if n > maxMetricsBodyBytes {
+			status := newErrorStatus(fmt.Sprintf("Request body larger than %d bytes", maxMetricsBodyBytes))
+			writeErrorStatusResponse(w, http.StatusRequestEntityTooLarge, status, m)
 			return
 		}
-		b = b[:n]
+		b := bodyBuf.Bytes()
 
 		if logger.IsDebug() {
 			s.logger.Debug("Received request body", "Bytes", n)
@@ -98,7 +103,7 @@ func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
 		msg := &v1.ExportMetricsServiceRequest{}
 		if err := proto.Unmarshal(b, msg); err != nil {
 			s.logger.Error("Failed to unmarshal request body", "Error", err)
-			status := newErrorStatus("Unable to unmarshal ExportMetricsServiceRequest.")
+			status := newErrorStatus(fmt.Sprintf("Failed to unmarshal request body: %v", err))
 			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
 			return
 		}
