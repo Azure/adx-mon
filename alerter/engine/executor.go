@@ -51,6 +51,11 @@ type Executor struct {
 
 	mu      sync.RWMutex
 	workers map[string]*worker
+
+	// runOnceCtx, when non-nil, is invoked by RunOnce with the derived context
+	// it creates. It exists solely so tests can observe the context RunOnce
+	// derives and verify it is canceled when RunOnce returns.
+	runOnceCtx func(context.Context)
 }
 
 type ExecutorOpts struct {
@@ -357,7 +362,12 @@ func asInt64(value azvalue.Kusto) (int64, error) {
 }
 
 func (e *Executor) RunOnce(ctx context.Context) {
-	ctx, e.closeFn = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	e.closeFn = cancel
+	defer cancel()
+	if e.runOnceCtx != nil {
+		e.runOnceCtx(ctx)
+	}
 	for _, r := range e.ruleStore.Rules() {
 		worker := e.newWorker(r)
 		worker.ExecuteQuery(ctx)
