@@ -289,6 +289,87 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 	})
 }
 
+func TestPodDiscoveryUpdatesDoNotBlockOnStuckTailer(t *testing.T) {
+	_, tailSource, podDiscovery := create()
+	defer tailSource.Close()
+	tailSource.ignoreUpdates = true
+
+	pod := scrapedPod("pod1")
+	podDiscovery.OnAdd(pod, false)
+	require.Len(t, tailSource.targetAdds, 1)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, table := range []string{"t1", "t2", "t3"} {
+			pod.Annotations["adx-mon/log-destination"] = "db:" + table
+			podDiscovery.OnUpdate(nil, pod)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(assertPollMax):
+		t.Fatal("OnUpdate blocked on a tailer that is not reading updates")
+	}
+
+	select {
+	case latest := <-tailSource.lastUpdateChan:
+		require.Equal(t, "t3", latest.Table)
+	default:
+		t.Fatal("expected the latest update to be pending")
+	}
+}
+
+func TestPodDiscoverySlowRemovalDoesNotBlockPodEvents(t *testing.T) {
+	fakeNow, tailSource, podDiscovery := create()
+	defer tailSource.Close()
+	tailSource.removeRelease = make(chan struct{})
+
+	oldPod := scrapedPod("old")
+	podDiscovery.OnAdd(oldPod, false)
+	podDiscovery.OnDelete(oldPod)
+	fakeNow.Advance(time.Minute + time.Millisecond)
+	<-tailSource.targetAdds
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		podDiscovery.cleanTombstonedTargets()
+	}()
+	removed := <-tailSource.targetRemoves
+
+	// RemoveTarget is blocked; pod events must still be processed.
+	eventDone := make(chan struct{})
+	go func() {
+		defer close(eventDone)
+		podDiscovery.OnAdd(scrapedPod("new"), false)
+		// Re-adding the pod being removed must wait for the removal to finish.
+		podDiscovery.OnUpdate(nil, oldPod)
+	}()
+	select {
+	case <-eventDone:
+	case <-time.After(assertPollMax):
+		t.Fatal("pod events blocked on a slow target removal")
+	}
+	added := <-tailSource.targetAdds
+	require.NotEqual(t, removed, added.FilePath)
+	require.Empty(t, tailSource.targetAdds)
+
+	close(tailSource.removeRelease)
+	<-cleanupDone
+
+	readded := <-tailSource.targetAdds
+	require.Equal(t, removed, readded.FilePath)
+
+	podDiscovery.mut.Lock()
+	defer podDiscovery.mut.Unlock()
+	require.Empty(t, podDiscovery.removing)
+	target := podDiscovery.podidToTargets[string(oldPod.UID)][removed]
+	require.NotNil(t, target)
+	require.False(t, target.pendingStart)
+	require.NotNil(t, target.UpdateChan)
+}
+
 func cleanTombstonedTargets(podDiscovery *PodDiscovery) {
 	// Simulate the separate goroutine that cleans tombstoned targets
 	errGroup, _ := errgroup.WithContext(context.Background())
@@ -378,6 +459,12 @@ type fakeTailSource struct {
 	addErrFunc    func(FileTailTarget) error
 	closeFunc     context.CancelFunc
 	ctx           context.Context
+
+	// ignoreUpdates simulates a tailer that never reads its update channel.
+	ignoreUpdates  bool
+	lastUpdateChan <-chan FileTailTarget
+	// removeRelease, when set, makes RemoveTarget block until it is closed.
+	removeRelease chan struct{}
 }
 
 func newFakeTailSource() *fakeTailSource {
@@ -407,6 +494,10 @@ func (f *fakeTailSource) AddTarget(target FileTailTarget, updateChan <-chan File
 	if err != nil {
 		return err
 	}
+	f.lastUpdateChan = updateChan
+	if f.ignoreUpdates {
+		return nil
+	}
 	go func() {
 		for {
 			select {
@@ -422,6 +513,9 @@ func (f *fakeTailSource) AddTarget(target FileTailTarget, updateChan <-chan File
 
 func (f *fakeTailSource) RemoveTarget(filePath string) {
 	f.targetRemoves <- filePath
+	if f.removeRelease != nil {
+		<-f.removeRelease
+	}
 }
 
 type fakeNow struct {

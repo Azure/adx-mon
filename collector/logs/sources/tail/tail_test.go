@@ -182,8 +182,8 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 		},
 		nil,
 	)
-	// Same source as first, so NOOP
-	tailSource.AddTarget(
+	// Same source as first, so not added again
+	err = tailSource.AddTarget(
 		FileTailTarget{
 			FilePath: testFileOne,
 			Database: "Logs",
@@ -191,6 +191,7 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 		},
 		nil,
 	)
+	require.ErrorIs(t, err, ErrTargetExists)
 
 	<-sink.DoneChan()
 
@@ -214,6 +215,13 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, _, err = readCursor(cursorPath(testDir, testFileTwo))
 	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// A path whose previous tailer is still draining cannot be added until removal finishes.
+	tailSource.mu.Lock()
+	tailSource.removing[testFileOne] = struct{}{}
+	tailSource.mu.Unlock()
+	err = tailSource.AddTarget(FileTailTarget{FilePath: testFileOne, Database: "Logs", Table: "TestService"}, nil)
+	require.ErrorIs(t, err, ErrTargetExists)
 }
 
 func TestTailSourceDynamicUtilizesCursors(t *testing.T) {

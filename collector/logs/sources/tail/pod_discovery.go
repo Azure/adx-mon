@@ -14,8 +14,11 @@ import (
 
 type currenttarget struct {
 	CurrentTarget FileTailTarget
-	UpdateChan    chan<- FileTailTarget
+	UpdateChan    chan FileTailTarget
 	ExpireTime    time.Time
+	// pendingStart marks a target whose path is still being removed from a previous tailer.
+	// It is started once that removal finishes.
+	pendingStart bool
 }
 
 type TailerSourceInterface interface {
@@ -46,7 +49,9 @@ type PodDiscovery struct {
 	tailsource TailerSourceInterface
 	// pod uid -> filename -> target
 	podidToTargets map[string]map[string]*currenttarget
-	mut            sync.Mutex // protect podidToTargets
+	// file paths whose tailers are being removed outside of mut
+	removing map[string]struct{}
+	mut      sync.Mutex // protect podidToTargets and removing
 
 	cancel               context.CancelFunc
 	podInformer          k8s.PodInformerInterface
@@ -61,6 +66,7 @@ func NewPodDiscovery(opts PodDiscoveryOpts, tailsource TailerSourceInterface) *P
 		podInformer:      opts.PodInformer,
 		tailsource:       tailsource,
 		podidToTargets:   make(map[string]map[string]*currenttarget),
+		removing:         make(map[string]struct{}),
 		staticPodTargets: opts.StaticPodTargets,
 	}
 }
@@ -188,6 +194,12 @@ func (i *PodDiscovery) OnDelete(obj any) {
 }
 
 func (i *PodDiscovery) startTailing(target FileTailTarget, existingTargets map[string]*currenttarget) error {
+	if _, ok := i.removing[target.FilePath]; ok {
+		logger.Infof("Deferring target %s until its previous tailer is removed", target.FilePath)
+		existingTargets[target.FilePath] = &currenttarget{CurrentTarget: target, pendingStart: true}
+		return nil
+	}
+
 	logger.Infof("Adding target %s", target.FilePath)
 	// We're not tailing this target yet. Add it.
 	updateChan := make(chan FileTailTarget, 1)
@@ -209,8 +221,31 @@ func (i *PodDiscovery) updateTarget(target FileTailTarget, existingCurrentTarget
 		// No longer should be tombstoned
 		existingCurrentTarget.ExpireTime = time.Time{}
 	}
-	existingCurrentTarget.UpdateChan <- target
 	existingCurrentTarget.CurrentTarget = target
+	if !existingCurrentTarget.pendingStart {
+		sendLatestTarget(existingCurrentTarget.UpdateChan, target)
+	}
+}
+
+// sendLatestTarget replaces any unread update with target without blocking, so a tailer that is slow or no longer
+// reading cannot stall pod discovery. Each update is a full snapshot, so only the latest matters.
+// Callers must hold PodDiscovery.mut, which makes PodDiscovery the only sender.
+func sendLatestTarget(updateChan chan FileTailTarget, target FileTailTarget) {
+	select {
+	case updateChan <- target:
+		return
+	default:
+	}
+
+	select {
+	case <-updateChan:
+	default:
+	}
+
+	select {
+	case updateChan <- target:
+	default:
+	}
 }
 
 func (i *PodDiscovery) tombstoneTarget(existingCurrentTarget *currenttarget) {
@@ -225,17 +260,60 @@ func (i *PodDiscovery) tombstoneTarget(existingCurrentTarget *currenttarget) {
 	}
 }
 
+// cleanTombstonedTargets removes expired targets. Tailer removal can be slow (it waits for pending logs to be
+// handed off), so it runs without holding mut to avoid stalling pod events.
 func (i *PodDiscovery) cleanTombstonedTargets() {
+	paths := i.takeExpiredTargets()
+	for _, path := range paths {
+		logger.Infof("Removing tombstoned target %s", path)
+		i.tailsource.RemoveTarget(path)
+		i.finishRemoval(path)
+	}
+}
+
+// takeExpiredTargets forgets expired targets and marks their paths as being removed.
+func (i *PodDiscovery) takeExpiredTargets() []string {
 	i.mut.Lock()
 	defer i.mut.Unlock()
 
+	var paths []string
+	now := i.nowFunc()
 	for podID, existingTargets := range i.podidToTargets {
 		for path, existingTarget := range existingTargets {
-			if !existingTarget.ExpireTime.IsZero() && i.nowFunc().After(existingTarget.ExpireTime) {
-				logger.Infof("Removing tombstoned target %s", path)
-				i.tailsource.RemoveTarget(existingTarget.CurrentTarget.FilePath)
-				delete(existingTargets, path)
+			if existingTarget.ExpireTime.IsZero() || !now.After(existingTarget.ExpireTime) {
+				continue
 			}
+			delete(existingTargets, path)
+			if !existingTarget.pendingStart {
+				i.removing[path] = struct{}{}
+				paths = append(paths, path)
+			}
+		}
+		if len(existingTargets) == 0 {
+			delete(i.podidToTargets, podID)
+		}
+	}
+	return paths
+}
+
+// finishRemoval starts a target that was re-added for path while its previous tailer was being removed.
+func (i *PodDiscovery) finishRemoval(path string) {
+	i.mut.Lock()
+	defer i.mut.Unlock()
+
+	delete(i.removing, path)
+	for podID, existingTargets := range i.podidToTargets {
+		existingTarget, ok := existingTargets[path]
+		if !ok || !existingTarget.pendingStart {
+			continue
+		}
+
+		delete(existingTargets, path)
+		if err := i.startTailing(existingTarget.CurrentTarget, existingTargets); err != nil {
+			logger.Errorf("failed to start tailing %q: %s", path, err)
+		} else {
+			// Preserve a tombstone set while the start was pending.
+			existingTargets[path].ExpireTime = existingTarget.ExpireTime
 		}
 		if len(existingTargets) == 0 {
 			delete(i.podidToTargets, podID)
