@@ -86,3 +86,47 @@ func TestEventBatcher_SweepSkipsBatchedPrefixes(t *testing.T) {
 	require.False(t, realtimePending)
 	require.Len(t, e.pending, 1)
 }
+
+func TestEventBatcher_SweepPrunesStalePrefixEntries(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
+	e := newEventBatcher(env.b, transferPolicy{}, time.Hour)
+
+	// A live prefix to prove the prune is scoped to the live set, not unconditional.
+	live := env.add(t, "Live", 100, ingestpolicy.PriorityQueued)
+
+	// Seed stale entries for a prefix in the maps that track retry/backoff state.
+	const prefix = "db_Gone"
+	e.mu.Lock()
+	e.releases[prefix] = 3
+	e.failed[prefix] = true
+	e.backlog[prefix] = true
+	e.outstanding[prefix] = 2
+	e.pending[prefix] = pendingPrefix{deadline: time.Now().Add(time.Hour), seq: e.seq + 1}
+	e.mu.Unlock()
+
+	// Remove the prefix's segments from the index so it is no longer live, as after a peer transfer, audit, or manual
+	// removal.  The state maps are only cleared on specific delivery/removal paths, so the entries linger until the
+	// sweep prunes them.
+	for i := 0; i < 2; i++ {
+		env.idx.Remove(env.add(t, "Gone", 100, ingestpolicy.PriorityQueued))
+	}
+
+	e.sweep()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// The stale entries are pruned, but pending is left alone since it is cleaned separately.
+	_, release := e.releases[prefix]
+	_, failed := e.failed[prefix]
+	_, backlog := e.backlog[prefix]
+	_, outstanding := e.outstanding[prefix]
+	_, pending := e.pending[prefix]
+	require.False(t, release, "stale releases entry was not pruned")
+	require.False(t, failed, "stale failed entry was not pruned")
+	require.False(t, backlog, "stale backlog entry was not pruned")
+	require.False(t, outstanding, "stale outstanding entry was not pruned")
+	require.True(t, pending, "pending entries are managed separately and must survive the prune")
+	// The live prefix is untouched by the prune.
+	_, livePending := e.pending[live.Prefix]
+	require.True(t, livePending, "a live prefix with unbatched segments must be marked pending by the sweep")
+}
