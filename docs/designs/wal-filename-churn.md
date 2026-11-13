@@ -68,6 +68,48 @@ than the WAL PVC. In particular, multiplying every live delete by 304 bytes
 would predict about 412 MiB/hour, far above the observed slope. The measured
 54–59 negative dentries/second is much lower than file turnover.
 
+### Independent live pprof follow-up
+
+At 23:53–23:54 UTC, raw archived profiles were independently analyzed with
+`go tool pprof`, then compared with new profiles fetched through temporary
+localhost-only port-forwards to ingestor-0 and ingestor-2. Both pods still ran
+the verified baseline digest with zero restarts; this PR was not deployed.
+Each new post-GC profile requested `heap?gc=1`, which triggers one Go GC.
+
+| Pod | Earlier post-GC live heap | Fresh post-GC live heap |
+| --- | --- | --- |
+| ingestor-0 | 59.94 MiB at 23:18:17; 62.09 MiB at 23:25:13 | 60.55 MiB at 23:53:20; 61.33 MiB at 23:54:10 |
+| ingestor-2 | 60.77 MiB at 23:18:45 | 62.17 MiB at 23:53:21; 63.28 MiB at 23:54:11 |
+
+Pod 0 process RSS was 283.44 MiB in the archived 23:25 metrics and
+278.17–281.84 MiB in the fresh pre-profile snapshots. Pod 2 RSS was
+304.63 MiB in the earlier snapshot and 309.25–314.18 MiB in the fresh ones.
+Go `heap_sys` stayed around 182 and 211 MiB respectively; `sys` stayed around
+236 and 267 MiB. Fresh connection counts were approximately 1,670–1,690,
+and goroutine counts approximately 2,500. These process measurements do not
+show the reported 40–50 MiB/hour growth as retained Go heap, steadily growing
+Go reservation, or comparable sustained process RSS growth over this interval.
+They do not exclude a smaller independent leak.
+
+Both `inuse_space` and `inuse_objects`, cumulative `alloc_space`, goroutine
+stacks, and profile differences were inspected. On pod 0, TLS buffer growth
+stacks account for approximately 18 MiB of live heap. WAL segment construction
+stacks account for approximately 6.3 MiB, including about 5.4 MiB allocated by
+the writer-buffer pool. Allocation stacks are not an object ownership graph:
+the approximately 72% cumulative attribution to `net/http.(*conn).serve`
+includes request-handler allocations, including WAL state, and must not all
+be labeled connection-buffer memory. The roughly 5 TiB cumulative allocation
+total in the archived profile is allocation traffic, not retained heap.
+
+Fresh cgroup/working-set data was unavailable through the attempted paths:
+the metrics API denied access, and the ingestor image has no `cat` executable.
+No diagnostic pod was created. Therefore the fresh profiles strengthen the
+case against a Go-heap explanation but do not independently remeasure current
+slab growth, establish its precise call-site attribution, or demonstrate the
+memory benefit of this patch. Raw captures, timestamps, profile summaries,
+and diffs are under `/tmp/zan-pprof-followup-20261113` on the investigation
+machine. Both temporary port-forwards were stopped after collection.
+
 ## Why there are so many filenames
 
 `NewSegment` writes an eight-byte header to a new prefix + flake-ID filename.
