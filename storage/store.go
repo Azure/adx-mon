@@ -19,7 +19,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -29,15 +28,15 @@ import (
 )
 
 var (
-	csvWriterPool = pool.NewGeneric(1000, func(sz int) any {
+	csvWriterPool = newCSVPool(func(sz int) any {
 		return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
-	nativeLogsCSVWriterPool = pool.NewGeneric(1000, func(sz int) any {
+	nativeLogsCSVWriterPool = newCSVPool(func(sz int) any {
 		return transform2.NewCSVNativeLogsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
-	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) any {
+	metricsCSVWriterPool = newCSVPool(func(sz int) any {
 		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 )
