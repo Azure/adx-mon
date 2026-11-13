@@ -73,9 +73,9 @@ func TestStore_ReloadPeriodically_BoundedCadence(t *testing.T) {
 		// finishes, so reloads chain back-to-back (~slow each). With
 		// time.After, each reload is followed by a full additional interval
 		// wait (~slow + interval each).
-		slow   = 30 * time.Millisecond
-		wantN  = 6 // total List calls (initial + 5 periodic)
-		bound  = 225 * time.Millisecond // ~ (wantN-1)*slow with a ticker; time.After drifts past this
+		slow  = 30 * time.Millisecond
+		wantN = 6                      // total List calls (initial + 5 periodic)
+		bound = 225 * time.Millisecond // ~ (wantN-1)*slow with a ticker; time.After drifts past this
 	)
 
 	scheme := runtime.NewScheme()
