@@ -57,5 +57,3 @@ func TestInflightReclaimBoundsGrowth(t *testing.T) {
 		require.Empty(t, s.inflight, "idle per-entity locks must not accumulate across reclaim cycles")
 	}
 }
-
-

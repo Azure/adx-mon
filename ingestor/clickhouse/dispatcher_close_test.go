@@ -24,9 +24,9 @@ import (
 // until the gate is released.
 func TestDispatcher_CloseWaitsForDispatchGoroutine(t *testing.T) {
 	u := &blockingClickhouseUploader{
-		queue:  make(chan *cluster.Batch, 1),
+		queue:   make(chan *cluster.Batch, 1),
 		entered: make(chan struct{}),
-		resume:   make(chan struct{}),
+		resume:  make(chan struct{}),
 	}
 	d := NewDispatcher(slog.Default(), []Uploader{u})
 	require.NoError(t, d.Open(context.Background()))
@@ -74,9 +74,9 @@ type blockingClickhouseUploader struct {
 }
 
 func (b *blockingClickhouseUploader) Open(ctx context.Context) error { return nil }
-func (b *blockingClickhouseUploader) Close() error                { return nil }
-func (b *blockingClickhouseUploader) Database() string            { return "db" }
-func (b *blockingClickhouseUploader) DSN() string                 { return "clickhouse://fake" }
+func (b *blockingClickhouseUploader) Close() error                   { return nil }
+func (b *blockingClickhouseUploader) Database() string               { return "db" }
+func (b *blockingClickhouseUploader) DSN() string                    { return "clickhouse://fake" }
 
 func (b *blockingClickhouseUploader) UploadQueue() chan *cluster.Batch {
 	close(b.entered)
