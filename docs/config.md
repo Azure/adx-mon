@@ -390,6 +390,14 @@ Available log types:
 *   **`plain`**: Treats each line as plain text without any structured format. Uses the current timestamp as the log timestamp.
 *   **unset/empty**: Defaults to plain text parsing when no log type is specified.
 
+#### Partial messages
+
+CRI, Docker (including auto-detected Kubernetes logs), and journald reassemble split messages. Each reader retains at most 1 MiB per assembled message, 8 MiB of partial payloads, and 128 stream IDs (each at most 256 bytes). These are fixed assembly limits, not limits on complete unsplit messages.
+
+Assemblies idle for one minute expire; readers sweep every second even while quiet or waiting for the output queue. Oversized assemblies are dropped through their final fragment, using an expiring zero-payload marker. Capacity eviction removes the oldest stream, or drops an assembly that cannot fit. After expiry or eviction, later fragments start fresh because these formats do not identify message boundaries beyond the final-fragment flag.
+
+Drops are reported by `adxmon_collector_partial_messages_dropped_total{source,reason}` with sources `cri`, `docker`, or `journald` and reasons `size`, `timeout`, `capacity`, or `stream_id`. Stream IDs and paths are not metric labels.
+
 ### Log Parsers
 
 Parsers are used within `file-target`, `journal-target`, and in pod `adx-mon/log-parsers` annotations. These configurations configure processing the raw log message extracted from the source (e.g., a file line or a journald entry). They are defined in the `parsers` array and are applied sequentially.

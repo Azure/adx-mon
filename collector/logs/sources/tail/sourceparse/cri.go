@@ -5,16 +5,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/sources/partial"
 	"github.com/Azure/adx-mon/collector/logs/types"
 )
 
 type CriParser struct {
-	streamPartials map[string]string
+	streamPartials partial.Assembler
 }
 
 func NewCriParser() *CriParser {
 	return &CriParser{
-		streamPartials: make(map[string]string),
+		streamPartials: partial.New("cri"),
 	}
 }
 
@@ -44,16 +45,9 @@ func (p *CriParser) Parse(line string, log *types.Log) (message string, isPartia
 	isPartial = tag == "P"
 	currentLogMsg := rest
 
-	previousLog, hasPreviousLog := p.streamPartials[stream]
-	if hasPreviousLog {
-		currentLogMsg = previousLog + currentLogMsg
-	}
-
+	currentLogMsg, isPartial = p.streamPartials.Add(stream, currentLogMsg, isPartial, time.Now())
 	if isPartial {
-		p.streamPartials[stream] = currentLogMsg
 		return "", true, nil
-	} else if hasPreviousLog {
-		delete(p.streamPartials, stream)
 	}
 
 	parsedTimestamp, err := time.Parse(time.RFC3339Nano, timestamp)
@@ -67,3 +61,5 @@ func (p *CriParser) Parse(line string, log *types.Log) (message string, isPartia
 
 	return currentLogMsg, false, nil
 }
+
+func (p *CriParser) ExpirePartials(now time.Time) { p.streamPartials.Expire(now) }

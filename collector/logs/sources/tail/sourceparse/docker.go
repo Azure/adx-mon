@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/sources/partial"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/pquerna/ffjson/ffjson"
 )
@@ -31,13 +32,13 @@ func (d *DockerLog) Reset() {
 }
 
 type DockerParser struct {
-	streamPartials map[string]string
+	streamPartials partial.Assembler
 	parsed         *DockerLog
 }
 
 func NewDockerParser() *DockerParser {
 	return &DockerParser{
-		streamPartials: make(map[string]string),
+		streamPartials: partial.New("docker"),
 		parsed:         &DockerLog{},
 	}
 }
@@ -46,6 +47,7 @@ func NewDockerParser() *DockerParser {
 // Not safe for concurrent use.
 func (p *DockerParser) Parse(line string, log *types.Log) (message string, isPartial bool, err error) {
 	p.parsed.Reset()
+	defer p.parsed.Reset()
 	err = ffjson.Unmarshal([]byte(line), p.parsed)
 	if err != nil {
 		return "", false, fmt.Errorf("parseDockerLog: %w", err)
@@ -56,16 +58,9 @@ func (p *DockerParser) Parse(line string, log *types.Log) (message string, isPar
 	isPartial = !strings.HasSuffix(p.parsed.Log, dockerCompleteLogSuffix)
 	currentLogMsg := p.parsed.Log
 
-	previousLog, hasPreviousLog := p.streamPartials[p.parsed.Stream]
-	if hasPreviousLog { //combine
-		currentLogMsg = previousLog + currentLogMsg
-	}
-
+	currentLogMsg, isPartial = p.streamPartials.Add(p.parsed.Stream, currentLogMsg, isPartial, time.Now())
 	if isPartial {
-		p.streamPartials[p.parsed.Stream] = currentLogMsg
 		return "", true, nil
-	} else if hasPreviousLog {
-		delete(p.streamPartials, p.parsed.Stream)
 	}
 
 	parsedTime, err := time.Parse(time.RFC3339Nano, p.parsed.Time)
@@ -80,3 +75,5 @@ func (p *DockerParser) Parse(line string, log *types.Log) (message string, isPar
 
 	return msg, false, nil
 }
+
+func (p *DockerParser) ExpirePartials(now time.Time) { p.streamPartials.Expire(now) }

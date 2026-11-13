@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/sources/partial"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/coreos/go-systemd/sdjournal"
 	"github.com/stretchr/testify/require"
@@ -105,7 +106,7 @@ func testTailer(t *testing.T) *tailer {
 	return &tailer{
 		database: "testdb", table: "testtable",
 		cursorFilePath: filepath.Join(t.TempDir(), "cursor"),
-		streamPartials: make(map[string]string),
+		streamPartials: partial.New("journald"),
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
@@ -311,7 +312,7 @@ func TestReadErrorsRecoverAndClearPartials(t *testing.T) {
 			require.Equal(t, 1, old.closeCount)
 			require.Equal(t, 1, fresh.closeCount)
 			require.Equal(t, 2, opens)
-			require.Empty(t, tailer.streamPartials)
+			require.Zero(t, tailer.streamPartials.Len())
 			require.Equal(t, []string{"tail", "previous"}, fresh.calls[:2])
 		})
 	}
@@ -510,7 +511,7 @@ func TestReadFile(t *testing.T) {
 		cursorFilePath: cursorPath,
 		journalPath:    journalDir,
 		batchQueue:     queue,
-		streamPartials: make(map[string]string),
+		streamPartials: partial.New("journald"),
 	}
 
 	ctx, cancel, done := startTestTailer(t, tailer)
@@ -540,7 +541,7 @@ func TestReadFromJournalNonExisting(t *testing.T) {
 		cursorFilePath: cursorPath,
 		journalPath:    filepath.Join(t.TempDir(), "non_existing_dir"),
 		batchQueue:     queue,
-		streamPartials: make(map[string]string),
+		streamPartials: partial.New("journald"),
 	}
 
 	ctx, _, done := startTestTailer(t, tailer)

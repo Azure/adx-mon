@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
+	"github.com/Azure/adx-mon/collector/logs/sources/partial"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/coreos/go-systemd/sdjournal"
@@ -89,7 +90,7 @@ func (s *Source) Open(ctx context.Context) error {
 			logLineParsers: target.LogLineParsers,
 			batchQueue:     batchQueue,
 
-			streamPartials: make(map[string]string),
+			streamPartials: partial.New("journald"),
 		}
 
 		s.wg.Go(func() {

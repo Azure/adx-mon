@@ -626,6 +626,10 @@ var HostLogDescription = "The host log config configures file, journald, and ker
 	"*   **`kubernetes`**: Auto-detects whether the log file is in Docker or CRI format and applies the appropriate parser automatically.\n" +
 	"*   **`plain`**: Treats each line as plain text without any structured format. Uses the current timestamp as the log timestamp.\n" +
 	"*   **unset/empty**: Defaults to plain text parsing when no log type is specified.\n\n" +
+	"#### Partial messages\n\n" +
+	"CRI, Docker (including auto-detected Kubernetes logs), and journald reassemble split messages. Each reader retains at most 1 MiB per assembled message, 8 MiB of partial payloads, and 128 stream IDs (each at most 256 bytes). These are fixed assembly limits, not limits on complete unsplit messages.\n\n" +
+	"Assemblies idle for one minute expire; readers sweep every second even while quiet or waiting for the output queue. Oversized assemblies are dropped through their final fragment, using an expiring zero-payload marker. Capacity eviction removes the oldest stream, or drops an assembly that cannot fit. After expiry or eviction, later fragments start fresh because these formats do not identify message boundaries beyond the final-fragment flag.\n\n" +
+	"Drops are reported by `adxmon_collector_partial_messages_dropped_total{source,reason}` with sources `cri`, `docker`, or `journald` and reasons `size`, `timeout`, `capacity`, or `stream_id`. Stream IDs and paths are not metric labels.\n\n" +
 	"### Log Parsers\n\n" +
 	"Parsers are used within `file-target`, `journal-target`, and in pod `adx-mon/log-parsers` annotations. These configurations configure processing the raw log message extracted from the source (e.g., a file line or a journald entry). They are defined in the `parsers` array and are applied sequentially.\n\n" +
 	"The `parsers` array accepts a list of strings, each specifying a parser type. The collector attempts to apply each parser in the order they are listed. The first parser that successfully processes the log message stops the parsing process for that message. If a parser succeeds, the resulting fields are added to the log's body.\n\n" +
