@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -52,9 +51,10 @@ type KubeletPodInformer struct {
 
 	// Guards against concurrent modifications of handlers and currentPods.
 	// Ensures we are only doing one of the following at a time:
-	//  - polling the kubelet, updating currentPods, and applying updates to existing handlers.
-	//  - adding a handler and sending initial adds with currentPods.
+	//  - polling the kubelet, updating currentPods, and queueing updates for existing handlers.
+	//  - adding a handler and queueing initial adds with currentPods.
 	//  - removing a handler.
+	// Handlers are never invoked while this is held; each registration delivers events on its own goroutine.
 	processingMut sync.Mutex
 	handlers      map[*kubeletRegistration]struct{}
 	currentPods   map[types.UID]*corev1.Pod
@@ -71,35 +71,6 @@ type KubeletPodInformer struct {
 type podListClient interface {
 	ListPods(ctx context.Context) ([]corev1.Pod, error)
 	Close() error
-}
-
-type kubeletRegistration struct {
-	informer *KubeletPodInformer
-	handler  cache.ResourceEventHandler
-	synced   atomic.Bool
-	syncedCh chan struct{}
-}
-
-var _ cache.ResourceEventHandlerRegistration = (*kubeletRegistration)(nil)
-
-func (r *kubeletRegistration) HasSynced() bool {
-	return r.synced.Load()
-}
-
-func (r *kubeletRegistration) HasSyncedChecker() cache.DoneChecker {
-	return kubeletRegistrationDoneChecker{registration: r}
-}
-
-type kubeletRegistrationDoneChecker struct {
-	registration *kubeletRegistration
-}
-
-func (c kubeletRegistrationDoneChecker) Name() string {
-	return "kubelet pod handler"
-}
-
-func (c kubeletRegistrationDoneChecker) Done() <-chan struct{} {
-	return c.registration.syncedCh
 }
 
 // NewKubeletPodInformer creates a new informer that sources pod events from the local kubelet.
@@ -230,8 +201,10 @@ func (k *KubeletPodInformer) Close() error {
 	return nil
 }
 
-// Add registers a handler for pod events. The handler receives add, update, and delete notifications.
+// Add registers a handler for pod events. The handler receives add, update, and delete notifications on a
+// dedicated goroutine, so a slow handler only delays its own events.
 // The informer must be started with Open() before calling Add().
+// Add returns once the handler has processed the initial list of pods, or with an error if ctx is done first.
 func (k *KubeletPodInformer) Add(ctx context.Context, handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
 	k.runningMut.Lock()
 	if k.client == nil {
@@ -240,22 +213,30 @@ func (k *KubeletPodInformer) Add(ctx context.Context, handler cache.ResourceEven
 	}
 	k.runningMut.Unlock()
 
+	reg := newKubeletRegistration(k, handler)
+	go reg.run()
+
 	k.processingMut.Lock()
-
 	for _, pod := range k.currentPods {
-		handler.OnAdd(pod, true)
+		reg.enqueueAdd(pod, true)
 	}
-	reg := &kubeletRegistration{informer: k, handler: handler, syncedCh: make(chan struct{})}
 	k.handlers[reg] = struct{}{}
-	reg.synced.Store(true)
-	close(reg.syncedCh)
-
 	k.processingMut.Unlock()
+	reg.markInitialListQueued()
 
-	return reg, nil
+	select {
+	case <-reg.syncedCh:
+		return reg, nil
+	case <-ctx.Done():
+		if err := k.Remove(reg); err != nil {
+			logger.Warnf("kubelet pod informer: remove handler after cancelled add: %v", err)
+		}
+		return nil, fmt.Errorf("kubelet pod informer: wait for handler initial sync: %w", ctx.Err())
+	}
 }
 
-// Remove unregisters the handler.
+// Remove unregisters the handler. It does not wait for an in-progress handler call to return; no further calls are
+// started after Remove returns.
 func (k *KubeletPodInformer) Remove(reg cache.ResourceEventHandlerRegistration) error {
 	registration, ok := reg.(*kubeletRegistration)
 	if !ok || registration.informer != k {
@@ -269,6 +250,7 @@ func (k *KubeletPodInformer) Remove(reg cache.ResourceEventHandlerRegistration) 
 		return fmt.Errorf("kubelet pod informer: handler not registered")
 	}
 	delete(k.handlers, registration)
+	registration.stop()
 
 	return nil
 }
@@ -347,15 +329,14 @@ func (k *KubeletPodInformer) applyPodList(pods []corev1.Pod) {
 	}
 
 	for reg := range k.handlers {
-		handler := reg.handler
 		for _, added := range additions {
-			handler.OnAdd(added, false)
+			reg.enqueueAdd(added, false)
 		}
 		for _, update := range updates {
-			handler.OnUpdate(update.old, update.new)
+			reg.enqueueUpdate(update.old, update.new)
 		}
 		for _, removed := range deletions {
-			handler.OnDelete(removed)
+			reg.enqueueDelete(removed)
 		}
 	}
 	k.processingMut.Unlock()
