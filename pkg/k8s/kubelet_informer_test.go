@@ -241,6 +241,223 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 	require.NoError(t, informer.Close())
 }
 
+func TestKubeletPodInformerSlowHandlerDoesNotBlockOthers(t *testing.T) {
+	fakeClient := newFakePodClient()
+	clk := clocktesting.NewFakeClock(time.Now())
+
+	informer, err := NewKubeletPodInformer(KubeletInformerOptions{
+		ClientFactory: func() (podListClient, error) { return fakeClient, nil },
+		PollInterval:  time.Minute,
+		Clock:         clk,
+	})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	pod := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
+	fakeClient.UpsertPod(pod)
+
+	require.NoError(t, informer.Open(ctx))
+	defer informer.Close()
+
+	slow := newBlockingUpdateHandler()
+	slowReg, err := informer.Add(ctx, slow)
+	require.NoError(t, err)
+	require.True(t, slow.waitAdd(t).Initial)
+
+	fast := newFakeHandler()
+	_, err = informer.Add(ctx, fast)
+	require.NoError(t, err)
+	require.True(t, fast.waitAdd(t).Initial)
+
+	upsertLabel := func(value string) {
+		updated := pod.DeepCopy()
+		updated.Labels = map[string]string{"v": value}
+		fakeClient.UpsertPod(*updated)
+		clk.Step(time.Minute)
+	}
+
+	upsertLabel("1")
+	require.Equal(t, "1", fast.waitUpdate(t).NewPod.Labels["v"])
+	slow.waitEntered(t)
+
+	// The slow handler is blocked; polling and the fast handler continue.
+	upsertLabel("2")
+	require.Equal(t, "2", fast.waitUpdate(t).NewPod.Labels["v"])
+	upsertLabel("3")
+	require.Equal(t, "3", fast.waitUpdate(t).NewPod.Labels["v"])
+	fakeClient.UpsertPod(corev1.Pod{Name: "pod-2", UID: types.UID("pod-2")})
+	clk.Step(time.Minute)
+	require.Equal(t, "pod-2", fast.waitAdd(t).Pod.Name)
+	fast.assertNoMoreEvents(t)
+
+	close(slow.release)
+
+	// The in-flight update completes, then the queued updates for pod-1 arrive merged into one.
+	first := slow.waitUpdate(t)
+	require.Equal(t, "1", first.NewPod.Labels["v"])
+	merged := slow.waitUpdate(t)
+	require.Equal(t, "1", merged.OldPod.Labels["v"])
+	require.Equal(t, "3", merged.NewPod.Labels["v"])
+	require.Equal(t, "pod-2", slow.waitAdd(t).Pod.Name)
+	slow.assertNoMoreEvents(t)
+
+	require.NoError(t, informer.Remove(slowReg))
+}
+
+func TestKubeletPodInformerRemoveAndCloseDoNotWaitForBlockedHandler(t *testing.T) {
+	fakeClient := newFakePodClient()
+	clk := clocktesting.NewFakeClock(time.Now())
+
+	informer, err := NewKubeletPodInformer(KubeletInformerOptions{
+		ClientFactory: func() (podListClient, error) { return fakeClient, nil },
+		PollInterval:  time.Minute,
+		Clock:         clk,
+	})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	pod := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
+	fakeClient.UpsertPod(pod)
+	require.NoError(t, informer.Open(ctx))
+
+	slow := newBlockingUpdateHandler()
+	defer close(slow.release)
+	reg, err := informer.Add(ctx, slow)
+	require.NoError(t, err)
+	slow.waitAdd(t)
+
+	updated := pod.DeepCopy()
+	updated.Labels = map[string]string{"v": "1"}
+	fakeClient.UpsertPod(*updated)
+	clk.Step(time.Minute)
+	slow.waitEntered(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, informer.Remove(reg))
+		require.NoError(t, informer.Close())
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Remove and Close blocked on a stuck handler")
+	}
+}
+
+func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
+	podVersion := func(version string) *corev1.Pod {
+		return &corev1.Pod{Name: "pod-1", UID: types.UID("pod-1"), Labels: map[string]string{"v": version}}
+	}
+
+	tests := []struct {
+		name    string
+		enqueue func(r *kubeletRegistration)
+		want    *podNotification
+	}{
+		{
+			name: "add then update delivers add with latest state",
+			enqueue: func(r *kubeletRegistration) {
+				r.enqueueAdd(podVersion("1"), false)
+				r.enqueueUpdate(podVersion("1"), podVersion("2"))
+			},
+			want: &podNotification{kind: podNotificationAdd, newPod: podVersion("2")},
+		},
+		{
+			name: "add then delete delivers nothing",
+			enqueue: func(r *kubeletRegistration) {
+				r.enqueueAdd(podVersion("1"), false)
+				r.enqueueDelete(podVersion("1"))
+			},
+		},
+		{
+			name: "update then update keeps first old and latest new",
+			enqueue: func(r *kubeletRegistration) {
+				r.enqueueUpdate(podVersion("1"), podVersion("2"))
+				r.enqueueUpdate(podVersion("2"), podVersion("3"))
+			},
+			want: &podNotification{kind: podNotificationUpdate, oldPod: podVersion("1"), newPod: podVersion("3")},
+		},
+		{
+			name: "update then delete delivers delete",
+			enqueue: func(r *kubeletRegistration) {
+				r.enqueueUpdate(podVersion("1"), podVersion("2"))
+				r.enqueueDelete(podVersion("2"))
+			},
+			want: &podNotification{kind: podNotificationDelete, oldPod: podVersion("2")},
+		},
+		{
+			name: "delete then add delivers update from last seen state",
+			enqueue: func(r *kubeletRegistration) {
+				r.enqueueDelete(podVersion("1"))
+				r.enqueueAdd(podVersion("2"), false)
+			},
+			want: &podNotification{kind: podNotificationUpdate, oldPod: podVersion("1"), newPod: podVersion("2")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newKubeletRegistration(nil, nil)
+			tt.enqueue(r)
+
+			got, ok := r.next()
+			if tt.want == nil {
+				require.False(t, ok)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, *tt.want, got)
+			_, ok = r.next()
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestKubeletRegistrationSyncedWhenInitialAddIsDropped(t *testing.T) {
+	r := newKubeletRegistration(nil, nil)
+	pod := &corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
+
+	r.enqueueAdd(pod, true)
+	r.markInitialListQueued()
+	require.False(t, r.HasSynced())
+
+	r.enqueueDelete(pod)
+	require.True(t, r.HasSynced())
+	_, ok := r.next()
+	require.False(t, ok)
+}
+
+type blockingUpdateHandler struct {
+	*fakeHandler
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingUpdateHandler() *blockingUpdateHandler {
+	return &blockingUpdateHandler{
+		fakeHandler: newFakeHandler(),
+		entered:     make(chan struct{}, 16),
+		release:     make(chan struct{}),
+	}
+}
+
+func (h *blockingUpdateHandler) OnUpdate(oldObj, newObj any) {
+	h.entered <- struct{}{}
+	<-h.release
+	h.fakeHandler.OnUpdate(oldObj, newObj)
+}
+
+func (h *blockingUpdateHandler) waitEntered(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler to block")
+	}
+}
+
 type fakePodClient struct {
 	mu   sync.RWMutex
 	pods map[types.UID]corev1.Pod
@@ -623,10 +840,9 @@ func benchmarkApplyPodList(b *testing.B, podCount, handlerCount int, updateRatio
 	handlers := make([]*benchHandler, handlerCount)
 	for i := range handlerCount {
 		handler := &benchHandler{}
-		reg := &kubeletRegistration{
-			informer: informer,
-			handler:  handler,
-		}
+		reg := newKubeletRegistration(informer, handler)
+		go reg.run()
+		b.Cleanup(reg.stop)
 		informer.handlers[reg] = struct{}{}
 		handlers[i] = handler
 	}
