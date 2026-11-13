@@ -709,6 +709,52 @@ func TestExecutor_RunOnce(t *testing.T) {
 
 }
 
+// TestExecutor_RunOnce_CancelsDerivedContext demonstrates that the context
+// RunOnce derives is actually canceled when RunOnce returns. Before the fix,
+// RunOnce created `ctx, e.closeFn = context.WithCancel(ctx)` but never called
+// cancel, so the derived context (and everything derived from it) lingered
+// until the Executor was garbage-collected.
+//
+// We capture the derived context directly via the runOnceCtx hook (which
+// RunOnce invokes with the context it derives, before defer cancel() runs).
+// After RunOnce returns, the fix's defer cancel() has canceled the derived
+// context. We assert it is canceled. The test's own parent context must remain
+// alive, confirming the cancellation came from the executor, not the test.
+func TestExecutor_RunOnce_CancelsDerivedContext(t *testing.T) {
+	parentCtx, parentCancel := context.WithCancel(t.Context())
+	t.Cleanup(parentCancel)
+
+	var mu sync.Mutex
+	var derivedCtx context.Context
+
+	e := Executor{
+		kustoClient: &fakeKustoClient{},
+		ruleStore:   &fakeRuleStore{rules: []*rules.Rule{{Namespace: "ns", Name: "one", Interval: time.Hour}}},
+		runOnceCtx: func(ctx context.Context) {
+			mu.Lock()
+			derivedCtx = ctx
+			mu.Unlock()
+		},
+	}
+
+	e.RunOnce(parentCtx)
+
+	mu.Lock()
+	require.NotNil(t, derivedCtx, "RunOnce must have invoked the runOnceCtx hook with the derived context")
+	captured := derivedCtx
+	mu.Unlock()
+
+	// The test's own parent must still be alive; the cancellation came from the
+	// executor's derived context, not from the test.
+	require.NoError(t, parentCtx.Err(), "test parent context must remain alive")
+
+	// After RunOnce returns, the fix's defer cancel() must have canceled the
+	// derived context. Before the fix it was never canceled.
+	require.Eventually(t, func() bool { return captured.Err() != nil },
+		2*time.Second, 10*time.Millisecond,
+		"RunOnce's derived context was not canceled; it lingers after RunOnce returned")
+}
+
 func TestExecutor_syncWorkers_Remove(t *testing.T) {
 	ctx := t.Context()
 	e := Executor{
