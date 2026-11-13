@@ -27,20 +27,6 @@ import (
 	gbp "github.com/libp2p/go-buffer-pool"
 )
 
-var (
-	csvWriterPool = newCSVPool(func(sz int) any {
-		return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
-	})
-
-	nativeLogsCSVWriterPool = newCSVPool(func(sz int) any {
-		return transform2.NewCSVNativeLogsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
-	})
-
-	metricsCSVWriterPool = newCSVPool(func(sz int) any {
-		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
-	})
-)
-
 // ErrIntakeMemoryExhausted reports that too many concurrent requests are
 // already buffered. It is retryable: the sender keeps its data.
 var ErrIntakeMemoryExhausted = errors.New("intake memory exhausted")
@@ -67,6 +53,11 @@ type LocalStore struct {
 
 	mu         sync.RWMutex
 	repository *wal.Repository
+
+	// Writers retain lifted-column configuration, so pools belong to this store.
+	csvWriterPool           *csvPool
+	nativeLogsCSVWriterPool *csvPool
+	metricsCSVWriterPool    *csvPool
 
 	inflightWriteBytes atomic.Int64
 	unregisterBudget   func()
@@ -138,6 +129,15 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			Owned:                     opts.Owned,
 			RealtimeReservedDiskBytes: opts.RealtimeReservedDiskBytes,
 			Admission:                 opts.Admission,
+		}),
+		csvWriterPool: newCSVPool(func(sz int) any {
+			return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+		}),
+		nativeLogsCSVWriterPool: newCSVPool(func(sz int) any {
+			return transform2.NewCSVNativeLogsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+		}),
+		metricsCSVWriterPool: newCSVPool(func(sz int) any {
+			return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 		}),
 	}
 }
@@ -273,8 +273,8 @@ func (s *LocalStore) WALCount() int {
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error {
 	var outcome WriteOutcome
-	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
-	defer metricsCSVWriterPool.Put(enc)
+	enc := s.metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
+	defer s.metricsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedLabels)
 
 	b := gbp.Get(256)
@@ -488,8 +488,8 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 		return nil // Do not retry - move on
 	}
 
-	enc := csvWriterPool.Get(8 * 1024).(*transform2.CSVWriter)
-	defer csvWriterPool.Put(enc)
+	enc := s.csvWriterPool.Get(8 * 1024).(*transform2.CSVWriter)
+	defer s.csvWriterPool.Put(enc)
 
 	key := gbp.Get(256)
 	defer gbp.Put(key)
@@ -537,8 +537,8 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
 	var outcome WriteOutcome
-	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
-	defer nativeLogsCSVWriterPool.Put(enc)
+	enc := s.nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
+	defer s.nativeLogsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedResources)
 
 	key := gbp.Get(256)
