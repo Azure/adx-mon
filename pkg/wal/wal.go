@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bufio"
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -44,6 +45,12 @@ func init() {
 
 type WAL struct {
 	opts WALOpts
+
+	// Lease state is guarded by repository.lifecycle. Standalone WALs need no lease.
+	repository *Repository
+	users      int
+	idleSince  time.Time
+	idleEntry  *list.Element
 
 	schemaPath string
 

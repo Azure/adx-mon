@@ -165,6 +165,7 @@ func (s *LocalStore) Close() error {
 	return s.repository.Close()
 }
 
+// GetWAL acquires a WAL lease. Call Release after the last use of the returned handle.
 func (s *LocalStore) GetWAL(ctx context.Context, key []byte) (*wal.WAL, error) {
 	return s.repository.Get(ctx, key)
 }
@@ -342,6 +343,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 		if err != nil {
 			return err
 		}
+		defer w.Release()
 
 		enc.Reset()
 		for _, v := range t.series {
@@ -507,6 +509,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	if err != nil {
 		return err
 	}
+	defer w.Release()
 
 	enc.Reset()
 	if err := enc.MarshalLog(logs); err != nil {
@@ -615,6 +618,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		if err != nil {
 			return err
 		}
+		defer w.Release()
 
 		enc.Reset()
 		for _, j := range t.logs {
@@ -730,6 +734,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer w.Release()
 
 	s.inflightWriteBytes.Add(n)
 	defer s.inflightWriteBytes.Add(-n)
@@ -758,6 +763,7 @@ func (s *LocalStore) Remove(path string) error {
 	if err != nil {
 		return err
 	}
+	defer wal.Release()
 	return wal.Remove(path)
 }
 

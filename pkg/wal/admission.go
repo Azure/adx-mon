@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"container/list"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -101,7 +102,10 @@ type TableBudget struct {
 	files           map[string]fileUsage
 	// oldest caches the oldest resident file time. It is invalidated only when
 	// the oldest file is removed, so scrapes do not scan every file.
-	oldest time.Time
+	oldest    time.Time
+	users     int
+	pending   int
+	idleSince time.Time
 }
 
 // Admission reserves disk capacity before writes. All values are physical WAL
@@ -109,8 +113,14 @@ type TableBudget struct {
 type Admission struct {
 	opts AdmissionOpts
 
-	mu     sync.RWMutex
-	tables map[Destination]*TableBudget
+	mu         sync.RWMutex
+	tables     map[Destination]*TableBudget
+	idleTables list.List
+	// Process-lifetime totals survive destination retirement. Per-table Status
+	// values describe the current resident lifecycle, like the backlog gauges.
+	wouldReject     atomic.Int64
+	rejectedRecords atomic.Int64
+	rejectedBytes   atomic.Int64
 
 	// Global totals are claimed atomically so the instance limit cannot be
 	// exceeded by concurrent reservations on different tables.
@@ -138,26 +148,34 @@ func (a *Admission) resolveLimit(d Destination) Usage {
 	return a.opts.Default
 }
 
-// Table returns the budget for a destination, creating it on first use. The
-// returned handle is stable and should be cached by writers.
+// Table acquires the budget for a destination, creating it on first use. The
+// handle is stable until the caller calls Release after its last use.
 func (a *Admission) Table(d Destination) *TableBudget {
 	if a == nil {
 		return nil
 	}
 	a.mu.RLock()
 	t := a.tables[d]
-	a.mu.RUnlock()
 	if t != nil {
+		t.mu.Lock()
+		t.users++
+		t.mu.Unlock()
+		a.mu.RUnlock()
 		return t
 	}
+	a.mu.RUnlock()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if t = a.tables[d]; t != nil {
+		t.mu.Lock()
+		t.users++
+		t.mu.Unlock()
 		return t
 	}
-	t = &TableBudget{a: a, d: d, limit: a.resolveLimit(d), globalBytes: a.globalBytesLimit(d), files: make(map[string]fileUsage)}
+	t = &TableBudget{a: a, d: d, limit: a.resolveLimit(d), globalBytes: a.globalBytesLimit(d), files: make(map[string]fileUsage), users: 1}
 	a.tables[d] = t
+	a.idleTables.PushBack(t)
 	return t
 }
 
@@ -208,6 +226,7 @@ func (a *Admission) FitsTable(d Destination, bytes int64) bool {
 		return true
 	}
 	t := a.Table(d)
+	defer t.Release()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.limit.Bytes <= 0 || t.usage.Bytes+bytes <= t.limit.Bytes
@@ -229,7 +248,7 @@ func (a *Admission) Limit(d Destination) Usage {
 	if a == nil {
 		return Usage{}
 	}
-	return a.Table(d).limit
+	return a.resolveLimit(d)
 }
 
 // Enforced reports whether table budgets reject writes. When false they are
@@ -264,7 +283,9 @@ func (a *Admission) Reserve(path string, d Destination, bytes, segments int64) (
 	if a == nil {
 		return nil, nil
 	}
-	return a.Table(d).Reserve(path, bytes, segments)
+	t := a.Table(d)
+	defer t.Release()
+	return t.Reserve(path, bytes, segments)
 }
 
 // Reserve claims capacity for a pending write. The caller must call Finish with
@@ -297,7 +318,9 @@ func (t *TableBudget) Reserve(path string, bytes, segments int64) (*Reservation,
 		}
 		// Observe-only: record that the budget was exceeded, then admit.
 		t.wouldReject++
+		t.a.wouldReject.Add(1)
 	}
+	t.pending++
 	t.usage.Bytes += bytes
 	t.usage.Segments += segments
 	t.mu.Unlock()
@@ -327,6 +350,8 @@ func (t *TableBudget) releaseLocal(bytes, segments int64) {
 	t.mu.Lock()
 	t.usage.Bytes -= bytes
 	t.usage.Segments -= segments
+	t.pending--
+	t.idleSince = time.Now()
 	t.mu.Unlock()
 }
 
@@ -337,6 +362,11 @@ func (r *Reservation) Release() {
 		return
 	}
 	r.Finish(0)
+	t := r.t
+	t.mu.Lock()
+	t.pending--
+	t.idleSince = time.Now()
+	t.mu.Unlock()
 	*r = Reservation{}
 	reservationPool.Put(r)
 }
@@ -387,6 +417,7 @@ func (a *Admission) Restore(path string, d Destination, bytes int64) {
 		return
 	}
 	t := a.Table(d)
+	defer t.Release()
 
 	createdAt := time.Now()
 	if _, _, _, epoch, err := ParseFilename(path); err == nil {
@@ -440,6 +471,7 @@ func (a *Admission) Forget(d Destination, path string) {
 		return
 	}
 	t := a.Table(d)
+	defer t.Release()
 
 	t.mu.Lock()
 	f, ok := t.files[path]
@@ -558,6 +590,7 @@ func (a *Admission) Throttled(d Destination) (string, bool) {
 		return "", false
 	}
 	t := a.Table(d)
+	defer t.Release()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.throttled == "" || belowResume(t.usage, t.limit) {
@@ -573,13 +606,24 @@ func (a *Admission) RecordRejection(d Destination, records, bytes int64) bool {
 		return false
 	}
 	t := a.Table(d)
+	defer t.Release()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.rejectedRecords += records
 	t.rejectedBytes += bytes
+	a.rejectedRecords.Add(records)
+	a.rejectedBytes.Add(bytes)
 	shouldLog := time.Since(t.lastLogged) >= time.Minute
 	if shouldLog {
 		t.lastLogged = time.Now()
 	}
 	return shouldLog
+}
+
+// RejectionTotals returns process-lifetime totals, including retired tables.
+func (a *Admission) RejectionTotals() (wouldReject, records, bytes int64) {
+	if a == nil {
+		return
+	}
+	return a.wouldReject.Load(), a.rejectedRecords.Load(), a.rejectedBytes.Load()
 }
