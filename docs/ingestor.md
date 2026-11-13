@@ -190,6 +190,29 @@ the flag is not set, the ingestor uses `GOMEMLIMIT` if it is set, and otherwise 
 if the pod has one; the limit it uses is logged at startup.  The limit is soft: memory the ingestor really holds is
 never refused, and the garbage collector uses at most about half the CPU to stay under it.
 
+### WAL filename churn and kernel memory
+
+WAL file creation and deletion can leave reclaimable filesystem metadata in the Linux kernel even after the
+files are deleted. This memory can contribute to container working set without appearing in Go heap profiles.
+Go's memory limit does not bound these kernel caches. Compare cgroup v2 `slab_reclaimable` and
+`slab_unreclaimable` with `anon`, `file`, and post-GC Go heap before attributing rising working set to a Go leak.
+
+When a segment rotates with no write pending, its successor is created lazily by the next write. This avoids an
+unused empty successor after a burst, reducing unique filename churn and the associated demand for kernel
+metadata. It also avoids holding that successor's file descriptor, flusher goroutine, and active writer state
+while waiting for another write. Existing cached metadata is left for normal kernel reclamation, so deploying
+this change does not imply an immediate drop in working set.
+
+A local mixed-workload regression reduced unique creates/deletes by 10.6%, from 1,992 to 1,780, for the same
+data output. **The reduction in Linux slab growth or container memory has not been measured.** The file-operation
+percentage cannot be applied directly to memory usage: cache retention depends on filesystem activity and
+reclamation, and continuously busy streams still create data-bearing segments. Pooled Go buffers can remain
+retained, so reduced active segment state also does not establish a retained-heap saving. The first write after
+an uncontended rotation now pays for file creation; validate latency on the actual WAL disk.
+
+See the [WAL memory-impact investigation](designs/wal-filename-churn.md#expected-memory-impact) for measured
+memory categories, limitations, and staging validation of sustained growth and reclamation under pressure.
+
 ## Latency metrics
 
 Each stage records how long data waited before it left that stage, as histograms whose quantiles can be compared

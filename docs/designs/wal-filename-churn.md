@@ -5,6 +5,38 @@ successors when no write is pending. It does **not** eliminate the approximately
 400 data-bearing WAL files/second required by the observed workload and current
 rotation policy, or establish that production memory growth is resolved.
 
+## Expected memory impact
+
+The intended benefit is less **new reclaimable kernel filesystem metadata**
+from avoidable unique WAL names. No before/after Linux slab measurement or
+production memory saving is available for this patch. It is not possible to
+state a defensible MiB/hour reduction from the file-operation regression alone.
+
+| Memory component | Expected effect of this change | What has been measured |
+| --- | --- | --- |
+| Reclaimable slab / container working set | Avoiding empty successors reduces opportunities to populate inode, dentry, and related metadata caches. Existing cache entries remain until normal reclamation, so memory need not fall immediately. Continuously busy streams can see little benefit. | Before the patch, production reclaimable slab grew 44.36–46.71 MiB/hour. The isolated ext4 probe reproduced retention after deletion. Neither measurement is a patched-versus-baseline comparison. |
+| Live segment state / Go heap | While awaiting another write, a deferred successor holds no file descriptor, flusher goroutine, or active writer state. This can reduce simultaneous live state. Writer buffers returned to the existing pool may remain retained, so there is no established per-segment retained-heap saving. | Local sampled end-of-test heap was about 3.09 MiB before and 3.00 MiB after in one run. This small, noisy difference does not establish a heap reduction. |
+| Anonymous RSS | Less live segment state may affect process memory, but allocator, stack, and pool behavior prevent predicting an RSS reduction. | Local maximum total process RSS was 20.23 MiB before and 19.53 MiB after in one run. Anonymous RSS was not separately measured, and the difference is not a validated saving. |
+| File cache | The unused successor's header is never written, avoiding its cache activity. Data-bearing payloads still use the same WAL path. | No separate before/after file-cache measurement. |
+| Unreclaimable slab | No specific reduction is established; this is not the component showing the supplied production growth. | Production was approximately 1.8–2.6 MiB before the patch; no patched comparison. |
+
+The demonstrated result is **212 fewer unique creates and unlinks (10.6%)**
+in the finite mixed-workload regression, not 10.6% less container memory or
+slab growth. Do not apply that percentage to the production 44–47 MiB/hour
+slope or use the probe's approximately 304 bytes/name as a production savings
+estimate. Most observed production turnover already corresponds to data-bearing
+segments, and the fraction of eliminated names that would have stayed cached
+is unknown. Production benefit could be small even though the unused-file
+lifecycle is demonstrably removed.
+
+The memory acceptance test is a sustained baseline-versus-patched comparison
+on matching Linux/ext4 and WAL storage, at equal input rate and table mix,
+recording both memory slopes and file-operation counts, followed by controlled
+reclamation testing in disposable staging. Until then, this patch is an
+avoidable-churn reduction with an unquantified kernel-memory benefit. The
+[staging procedure below](#optional-linuxext4-experiment-and-staging-acceptance)
+defines the remaining measurements.
+
 ## Source and production evidence
 
 Baseline: [e27ca748](https://github.com/Azure/adx-mon/commit/e27ca74887b40a6ff5f2c855ccf764738024cdf9).
