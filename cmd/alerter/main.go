@@ -34,7 +34,7 @@ func main() {
 			&cli.StringFlag{Name: "auth-token", Usage: "Application token for authentication to Kusto"},
 			&cli.StringFlag{Name: "cloud", Usage: "Azure cloud"},
 			&cli.StringFlag{Name: "region", Usage: "Current region"},
-			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
+			&cli.StringSliceFlag{Name: "alerter-address", Usage: "Address of the alert notification service (may be specified multiple times)"},
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
 			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "Tag in the format of <key>=<value> that applies to execution context"},
@@ -96,12 +96,19 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
+	alertAddrs := ctx.StringSlice("alerter-address")
+	var primaryAlertAddr string
+	if len(alertAddrs) > 0 {
+		primaryAlertAddr = alertAddrs[0]
+	}
+
 	opts := &alerter.AlerterOpts{
 		Port:             ctx.Int("port"),
 		KustoEndpoints:   endpoints,
 		Region:           ctx.String("region"),
 		Cloud:            ctx.String("cloud"),
-		AlertAddr:        ctx.String("alerter-address"),
+		AlertAddr:        primaryAlertAddr,
+		AlertAddrs:       alertAddrs,
 		Concurrency:      ctx.Int("concurrency"),
 		MaxNotifications: ctx.Int("max-notifications"),
 		MSIID:            ctx.String("auth-msi-id"),
