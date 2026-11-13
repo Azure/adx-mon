@@ -53,7 +53,11 @@ func (w *worker) RunWaitingForStorage(stop context.Context) {
 			types.DisposeLogBatch(msg)
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), w.BatchTimeout)
+		parent := context.Background()
+		if stop != nil {
+			parent = stop
+		}
+		ctx, cancel := context.WithTimeout(parent, w.BatchTimeout)
 		if stop != nil {
 			ctx = types.WithStorageWait(ctx, stop)
 		}
