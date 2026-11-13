@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
+	"github.com/Azure/adx-mon/collector/logs/sources/partial"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -142,8 +143,12 @@ func (t *Tailer) Wait() {
 // is dropped: the batcher stops reading at shutdown, and the line was never acknowledged, so it is read again from the
 // cursor on restart.
 func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue chan<- *types.Log) {
+	expiry := time.NewTicker(partial.SweepInterval)
+	defer expiry.Stop()
 	for {
 		select {
+		case now := <-expiry.C:
+			sourceparse.ExpirePartials(tailer.logTypeParser, now)
 		case <-ctx.Done():
 			return
 		// Receive updates from the optional updateChannel.
@@ -197,12 +202,18 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 			log.SetAttributeValue(cursor_file_id, currentFileId)
 			log.SetAttributeValue(cursor_file_name, tailer.tail.Filename)
 
-			select {
-			case outputQueue <- log:
-			case <-ctx.Done():
-				log.Reset()
-				types.LogPool.Put(log)
-				return
+		send:
+			for {
+				select {
+				case outputQueue <- log:
+					break send
+				case now := <-expiry.C:
+					sourceparse.ExpirePartials(tailer.logTypeParser, now)
+				case <-ctx.Done():
+					log.Reset()
+					types.LogPool.Put(log)
+					return
+				}
 			}
 		}
 	}

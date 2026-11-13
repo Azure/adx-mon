@@ -1,6 +1,11 @@
 package sourceparse
 
-import "github.com/Azure/adx-mon/collector/logs/types"
+import (
+	"github.com/Azure/adx-mon/collector/logs/types"
+	"time"
+)
+
+func (p *KubernetesParser) ExpirePartials(now time.Time) { ExpirePartials(p.parser, now) }
 
 // KubernetesParser is a parser for Kubernetes logs.
 // Discovers the log type and parses with the docker or cri parser.

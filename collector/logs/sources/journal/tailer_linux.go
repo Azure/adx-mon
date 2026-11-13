@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/sources/partial"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -51,7 +52,7 @@ type tailer struct {
 	journalPath string
 
 	// streamPartials maps _STREAM_ID to the accumulated partial log messages
-	streamPartials map[string]string
+	streamPartials partial.Assembler
 
 	logger *slog.Logger
 
@@ -89,10 +90,14 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 		}
 	}()
 
+	expiry := time.NewTicker(partial.SweepInterval)
+	defer expiry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case now := <-expiry.C:
+			t.streamPartials.Expire(now)
 		default:
 		}
 
@@ -162,12 +167,18 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 			}
 		}
 
-		select {
-		case t.batchQueue <- log:
-		case <-ctx.Done():
-			log.Reset()
-			types.LogPool.Put(log)
-			return
+	send:
+		for {
+			select {
+			case t.batchQueue <- log:
+				break send
+			case now := <-expiry.C:
+				t.streamPartials.Expire(now)
+			case <-ctx.Done():
+				log.Reset()
+				types.LogPool.Put(log)
+				return
+			}
 		}
 	}
 }
@@ -270,8 +281,7 @@ func (t *tailer) recoverJournal(ctx context.Context, reader journalReader, opera
 		t.logger.Error("Unable to recover journal tailer, exiting. Failed to open journal tailer.", "operation", "reopen", "outcome", "exit", "err", err)
 		return nil, err
 	}
-	discarded := len(t.streamPartials)
-	clear(t.streamPartials)
+	discarded := t.streamPartials.Reset()
 	t.logger.Info("Journal recovery created a coverage gap", "recovery_policy", "skip_to_live", "discarded_partial_streams", discarded)
 	return reader, nil
 }
@@ -349,17 +359,5 @@ func (j *tailer) combinePartialMessages(entry *sdjournal.JournalEntry) (string, 
 	currentLogMsg := entry.Fields[sdjournal.SD_JOURNAL_FIELD_MESSAGE]
 
 	streamID := entry.Fields[journaldStreamIdField]
-	previousLog, hasPreviousLog := j.streamPartials[streamID]
-	if hasPreviousLog {
-		currentLogMsg = previousLog + currentLogMsg
-	}
-
-	if isPartial {
-		j.streamPartials[streamID] = currentLogMsg
-		return "", true
-	} else if hasPreviousLog {
-		// We have a complete message. Clear out the stored partial.
-		delete(j.streamPartials, streamID)
-	}
-	return currentLogMsg, false
+	return j.streamPartials.Add(streamID, currentLogMsg, isPartial, time.Now())
 }

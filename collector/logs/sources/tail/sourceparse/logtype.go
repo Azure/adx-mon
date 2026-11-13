@@ -1,6 +1,16 @@
 package sourceparse
 
-import "github.com/Azure/adx-mon/collector/logs/types"
+import (
+	"github.com/Azure/adx-mon/collector/logs/types"
+	"time"
+)
+
+// ExpirePartials is called by the owning tail reader, including while idle.
+func ExpirePartials(p LogTypeParser, now time.Time) {
+	if p, ok := p.(interface{ ExpirePartials(time.Time) }); ok {
+		p.ExpirePartials(now)
+	}
+}
 
 type Type string
 
