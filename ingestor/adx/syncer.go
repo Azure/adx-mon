@@ -586,6 +586,19 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 					}
 				}
 
+				// streamingPolicies is keyed by bare table name, so it prunes
+				// against tableExists directly.  It is guarded by streamingMu,
+				// not s.mu, so it is pruned under its own lock after s.mu is
+				// released by the deferred unlock.
+				s.streamingMu.Lock()
+				for tbl := range s.streamingPolicies {
+					if _, ok := tableExists[tbl]; !ok {
+						logger.Debugf("Removing cached streaming policy for table %s from %s", tbl, s.database)
+						delete(s.streamingPolicies, tbl)
+					}
+				}
+				s.streamingMu.Unlock()
+
 				return nil
 			}(); err != nil {
 				logger.Errorf("Error removing tables and mappings from cache: %s", err)
