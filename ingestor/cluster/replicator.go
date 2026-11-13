@@ -194,7 +194,9 @@ func (r *replicator) owner(batch *Batch) string {
 func (r *replicator) Close() error {
 	r.closeFn()
 	r.wg.Wait()
-	return nil
+	// Release the idle keep-alive connections the transfer client holds to
+	// peers; without this they survive until the transport's IdleConnTimeout.
+	return r.cli.Close()
 }
 
 func (r *replicator) TransferQueue() chan *Batch {
