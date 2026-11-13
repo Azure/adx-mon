@@ -16,7 +16,7 @@ func TestTableBudgetMetricsRetireDestinations(t *testing.T) {
 	require.NoError(t, registry.Register(c))
 	families, err := registry.Gather()
 	require.NoError(t, err)
-	require.Len(t, families, 11)
+	require.Len(t, families, 14)
 	for _, f := range families {
 		require.Len(t, f.Metric, 1)
 		if f.GetName() == "adxmon_table_backlog_bytes" {
@@ -26,5 +26,9 @@ func TestTableBudgetMetricsRetireDestinations(t *testing.T) {
 	budget.Forget(wal.Destination{Database: "DB", Table: "A"}, "a")
 	families, err = registry.Gather()
 	require.NoError(t, err)
-	require.Empty(t, families)
+	require.Len(t, families, 3, "process-lifetime counters remain after destination gauges disappear")
+	for _, f := range families {
+		require.NotNil(t, f.Metric[0].Counter)
+		require.Len(t, f.Metric[0].Label, 1, "totals have bounded component-only labels")
+	}
 }

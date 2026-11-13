@@ -27,12 +27,16 @@ type tableBudgetCollector struct {
 	mu           sync.Mutex
 	sources      map[string]*wal.Admission
 	descriptions []*prometheus.Desc
+	totals       []*prometheus.Desc
 }
 
 func newTableBudgetCollector() *tableBudgetCollector {
 	c := &tableBudgetCollector{sources: make(map[string]*wal.Admission)}
 	for _, name := range []string{"bytes", "segments", "limit_bytes", "limit_segments", "throttled", "throttled_seconds", "enforced", "would_reject", "rejected_records", "rejected_bytes", "oldest_age_seconds"} {
-		c.descriptions = append(c.descriptions, prometheus.NewDesc("adxmon_table_backlog_"+name, "Current table backlog budget; retired when its last file drains.", []string{"component", "database", "table"}, nil))
+		c.descriptions = append(c.descriptions, prometheus.NewDesc("adxmon_table_backlog_"+name, "Current destination lifecycle backlog budget; gauges disappear when its last file drains. Use table_budget totals for cumulative rejections.", []string{"component", "database", "table"}, nil))
+	}
+	for _, name := range []string{"would_reject", "rejected_records", "rejected_bytes"} {
+		c.totals = append(c.totals, prometheus.NewDesc("adxmon_table_budget_"+name+"_total", "Process-lifetime admission total, including retired destinations.", []string{"component"}, nil))
 	}
 	return c
 }
@@ -57,6 +61,9 @@ func (c *tableBudgetCollector) Describe(out chan<- *prometheus.Desc) {
 	for _, d := range c.descriptions {
 		out <- d
 	}
+	for _, d := range c.totals {
+		out <- d
+	}
 }
 func (c *tableBudgetCollector) Collect(out chan<- prometheus.Metric) {
 	c.mu.Lock()
@@ -64,6 +71,10 @@ func (c *tableBudgetCollector) Collect(out chan<- prometheus.Metric) {
 	maps.Copy(sources, c.sources)
 	c.mu.Unlock()
 	for component, budget := range sources {
+		would, records, bytes := budget.RejectionTotals()
+		for i, v := range []int64{would, records, bytes} {
+			out <- prometheus.MustNewConstMetric(c.totals[i], prometheus.CounterValue, float64(v), component)
+		}
 		for destination, s := range budget.Status() {
 			throttled := float64(0)
 			if s.Throttled {

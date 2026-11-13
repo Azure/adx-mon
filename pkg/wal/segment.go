@@ -156,6 +156,12 @@ func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 		}
 		budget = config.admission.Table(destination)
 	}
+	// Transfer the budget lease to the segment only after construction succeeds.
+	defer func() {
+		if budget != nil {
+			budget.Release()
+		}
+	}()
 	reservation, err := budget.Reserve(path, 8, 1)
 	if err != nil {
 		return nil, err
@@ -203,6 +209,7 @@ func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 
 	f.wg.Add(1)
 	go f.flusher()
+	budget = nil
 	return f, nil
 }
 
@@ -503,6 +510,7 @@ func (s *segment) Close() error {
 	// Close the channel without holding the lock so goroutines can exit cleanly
 	close(s.closing)
 	s.closed = true
+	defer s.budget.Release()
 
 	// Wait for flusher goroutine to flush any in-flight writes
 	s.wg.Wait()

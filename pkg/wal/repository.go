@@ -2,12 +2,14 @@ package wal
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
@@ -26,6 +28,11 @@ type Repository struct {
 	index *Index
 
 	wals *partmap.Map[*WAL]
+
+	// lifecycle serializes acquisition and retirement. WAL users hold a lease
+	// until Release; rotations are additionally protected by the WAL's locks.
+	lifecycle sync.Mutex
+	idleWALs  list.List
 
 	// scheduler rotates segments of all WALs in the repository.
 	scheduler *rotationScheduler
@@ -110,6 +117,8 @@ func (s *Repository) sweepRotations() {
 		}
 	}
 	s.scheduler.rotate(due)
+	s.retireIdle(time.Now(), retirementWork)
+	s.opts.Admission.retireIdle(time.Now(), retirementWork)
 }
 
 // unownedRotation reports whether WALs of tables owned by another node rotate by their own age limit.
@@ -303,11 +312,11 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		s.opts.Admission.Restore(path, d, fi.Size())
 	}
 
-	if _, err := s.wals.GetOrCreate(prefix, func() (*WAL, error) {
-		return s.newWAL(ctx, prefix)
-	}); err != nil {
+	w, err := s.Get(ctx, []byte(prefix))
+	if err != nil {
 		return err
 	}
+	w.Release()
 
 	return nil
 }
@@ -393,13 +402,23 @@ func (s *Repository) priority(prefix string) ingestpolicy.Priority {
 	return s.opts.Policy.Priority(database, table)
 }
 
+// Get acquires a WAL lease. The caller must call Release after its last use,
+// including on errors. A leased WAL cannot be retired or replaced.
 func (s *Repository) Get(ctx context.Context, key []byte) (*WAL, error) {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	v, err := s.wals.GetOrCreate(string(key), func() (*WAL, error) {
-		return s.newWAL(ctx, string(key))
+		w, err := s.newWAL(ctx, string(key))
+		if err == nil {
+			w.repository = s
+			w.idleEntry = s.idleWALs.PushBack(w)
+		}
+		return w, err
 	})
 	if err != nil {
 		return nil, err
 	}
+	v.users++
 	return v, nil
 }
 
@@ -408,6 +427,8 @@ func (s *Repository) Count() int {
 }
 
 func (s *Repository) Remove(key []byte) error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	wal, ok := s.wals.Get(string(key))
 	if !ok {
 		return nil
@@ -420,6 +441,10 @@ func (s *Repository) Remove(key []byte) error {
 	}
 
 	s.wals.Delete(string(key))
+	if w.idleEntry != nil {
+		s.idleWALs.Remove(w.idleEntry)
+		w.idleEntry = nil
+	}
 	return nil
 }
 
