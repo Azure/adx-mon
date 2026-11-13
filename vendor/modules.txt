@@ -141,11 +141,11 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/shared
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/version
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/managedidentity
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
-# github.com/ClickHouse/ch-go v0.74.0
-## explicit; go 1.25.0
+# github.com/ClickHouse/ch-go v0.75.0
+## explicit; go 1.26.0
 github.com/ClickHouse/ch-go/compress
 github.com/ClickHouse/ch-go/proto
-# github.com/ClickHouse/clickhouse-go/v2 v2.50.0
+# github.com/ClickHouse/clickhouse-go/v2 v2.51.0
 ## explicit; go 1.26.0
 github.com/ClickHouse/clickhouse-go/v2
 github.com/ClickHouse/clickhouse-go/v2/ext
@@ -170,7 +170,7 @@ github.com/Microsoft/go-winio/pkg/guid
 # github.com/VictoriaMetrics/easyproto v1.2.0
 ## explicit; go 1.18
 github.com/VictoriaMetrics/easyproto
-# github.com/andybalholm/brotli v1.2.6
+# github.com/andybalholm/brotli v1.2.7
 ## explicit; go 1.22
 github.com/andybalholm/brotli
 github.com/andybalholm/brotli/matchfinder
@@ -261,7 +261,7 @@ github.com/fxamacker/cbor/v2
 # github.com/go-faster/city v1.0.1
 ## explicit; go 1.17
 github.com/go-faster/city
-# github.com/go-faster/errors v0.7.1
+# github.com/go-faster/errors v0.8.0
 ## explicit; go 1.20
 github.com/go-faster/errors
 # github.com/go-logr/logr v1.4.4
@@ -486,7 +486,7 @@ github.com/opencontainers/image-spec/specs-go/v1
 # github.com/pandatix/go-abnf v0.5.3
 ## explicit; go 1.26.0
 github.com/pandatix/go-abnf
-# github.com/paulmach/orb v0.13.0
+# github.com/paulmach/orb v0.14.0
 ## explicit; go 1.18
 github.com/paulmach/orb
 # github.com/pelletier/go-toml/v2 v2.4.3
@@ -498,8 +498,8 @@ github.com/pelletier/go-toml/v2/unstable
 # github.com/philhofer/fwd v1.2.0
 ## explicit; go 1.20
 github.com/philhofer/fwd
-# github.com/pierrec/lz4/v4 v4.1.27
-## explicit; go 1.17
+# github.com/pierrec/lz4/v4 v4.1.33
+## explicit; go 1.22
 github.com/pierrec/lz4/v4
 github.com/pierrec/lz4/v4/internal/lz4block
 github.com/pierrec/lz4/v4/internal/lz4errors
