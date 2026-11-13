@@ -36,16 +36,12 @@ func TestCSVPoolBoundsRetainedCapacity(t *testing.T) {
 			s := NewLocalStore(StoreOpts{StorageDir: t.TempDir(), Admission: wal.NewAdmission(wal.AdmissionOpts{}), LiftedLabels: []string{"region"}, LiftedResources: []string{"region"}})
 			require.NoError(t, s.Open(t.Context()))
 			t.Cleanup(func() { require.NoError(t, s.Close()) })
-			// Drain the production pool so checkout/return ownership is deterministic.
-			p := metricsCSVWriterPool
+			p := s.metricsCSVWriterPool
 			switch kind {
 			case "native":
-				p = nativeLogsCSVWriterPool
+				p = s.nativeLogsCSVWriterPool
 			case "otlp":
-				p = csvWriterPool
-			}
-			for range 1000 {
-				p.Get(0)
+				p = s.csvWriterPool
 			}
 			write := func(payload string) {
 				switch kind {
