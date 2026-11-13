@@ -406,6 +406,30 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 	return name, nil
 }
 
+// reclaimInflight drops per-entity locks that are no longer held.  Without it
+// the map grows monotonically: every distinct table or mapping name that ever
+// flows through permanently allocates a mutex.  Safe to call at any time, e.g.
+// on each reconcileTables tick.
+func (s *Syncer) reclaimInflight() {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+
+	// TryLock on a free mutex proves nobody is using it: the next caller for
+	// that name gets a fresh mutex, and two concurrent callers can never both
+	// be blocked on the deleted one — if one holds it, TryLock fails and the
+	// entry is kept.  Holding inflightMu for the whole loop is what makes that
+	// reasoning airtight: mappingLock for the same name returns the same
+	// instance only through this map, so it cannot interleave here.  A
+	// successful TryLock leaves the mutex locked, so unlock it before the
+	// delete.
+	for name, m := range s.inflight {
+		if m.TryLock() {
+			m.Unlock()
+			delete(s.inflight, name)
+		}
+	}
+}
+
 // mappingLock returns the lock guarding a single mapping name.
 func (s *Syncer) mappingLock(name string) *sync.Mutex {
 	s.inflightMu.Lock()
@@ -513,6 +537,10 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+
+			// The per-entity lock map is reclaimed under its own lock; s.mu is
+			// not held here, so no deadlock with the prunes below.
+			s.reclaimInflight()
 
 			logger.Infof("Reconcile tables and ingestion mappings for database %s", s.database)
 			if err := func() error {
