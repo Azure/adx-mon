@@ -2,6 +2,7 @@ package alerter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
@@ -58,13 +59,18 @@ type Alerter struct {
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
-	wg        sync.WaitGroup
-	executor  *engine.Executor
-	ctx       context.Context
-	closeFn   context.CancelFunc
-	CtrlCli   client.Client
-	ruleStore ruleStore
-	metrics   alertermetrics.Service
+	wg         sync.WaitGroup
+	executor   *engine.Executor
+	ctx        context.Context
+	closeFn    context.CancelFunc
+	CtrlCli    client.Client
+	ruleStore  ruleStore
+	metrics    alertermetrics.Service
+	httpServer *http.Server
+
+	// goroutines accounts for the goroutines started in Open (the HTTP server
+	// listener and the health-check ticker) so Close can wait for them to finish.
+	goroutines sync.WaitGroup
 
 	alertHandler http.Handler
 }
@@ -216,15 +222,24 @@ func (l *Alerter) Open(ctx context.Context) error {
 		return fmt.Errorf("failed to open executor: %w", err)
 	}
 
+	l.httpServer = &http.Server{
+		Addr:              fmt.Sprintf(":%d", l.opts.Port),
+		Handler:           l.httpMux(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	l.goroutines.Add(1)
 	go func() {
+		defer l.goroutines.Done()
 		logger.Infof("Listening at :%d", l.opts.Port)
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), l.httpMux()); err != nil {
+		if err := l.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}()
 
+	l.goroutines.Add(1)
 	go func() {
+		defer l.goroutines.Done()
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -258,6 +273,17 @@ func (l *Alerter) httpMux() *http.ServeMux {
 
 func (l *Alerter) Close() error {
 	l.closeFn()
+
+	// Shut down the HTTP server so the listener stops accepting connections and
+	// the bound port is released before the other components are torn down.
+	if l.httpServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.httpServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("failed to shut down http server: %w", err)
+		}
+	}
+
 	if err := l.executor.Close(); err != nil {
 		return fmt.Errorf("failed to close executor: %w", err)
 	}
@@ -268,5 +294,8 @@ func (l *Alerter) Close() error {
 	if err := l.ruleStore.Close(); err != nil {
 		return fmt.Errorf("failed to close rule store: %w", err)
 	}
+
+	// Wait for the listener and health-check ticker goroutines to finish.
+	l.goroutines.Wait()
 	return nil
 }
