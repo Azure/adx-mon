@@ -25,6 +25,12 @@ import (
 	"github.com/Azure/adx-mon/schema"
 )
 
+// batchUploadTimeout bounds a single batch's upload.  It matches the ADX
+// uploader's batchUploadTimeout so a slow or wedged ClickHouse connection
+// (PrepareInsert, Append, or Send) releases the batch for retry instead of
+// blocking its worker for the service lifetime.
+var batchUploadTimeout = 10 * time.Minute
+
 // Uploader exposes the contract shared by all storage backends so that the
 // ingestor service can remain agnostic of the implementation details.
 type Uploader interface {
@@ -185,7 +191,14 @@ func (u *uploader) worker(_ int) {
 				continue
 			}
 
-			if err := u.processBatch(u.ctx, batch); err != nil {
+			// Bound each batch's upload.  Derive from the service context without
+			// inheriting its cancellation so one slow batch's timeout neither
+			// cancels the worker's exit path nor a sibling batch, and shutdown
+			// (Close) does not cancel an in-flight batch's bounded context.
+			uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), batchUploadTimeout)
+			defer cancel()
+
+			if err := u.processBatch(uploadCtx, batch); err != nil {
 				if u.log != nil {
 					u.log.Error("failed to upload batch", slog.String("prefix", batch.Prefix), slog.String("error", err.Error()))
 				}
