@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -31,6 +32,11 @@ type LogToFluentExporter struct {
 	destination        string
 	encoderPool        *sync.Pool
 
+	connMu sync.Mutex
+	dialer net.Dialer
+
+	// conn is the persistent connection to the destination, guarded by connMu.
+	// It is re-established on demand and reset to nil if a write fails.
 	conn net.Conn
 }
 
@@ -51,9 +57,12 @@ func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter,
 		return nil, fmt.Errorf("TagAttribute must be set")
 	}
 
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+
 	return &LogToFluentExporter{
 		destinationNetwork: destinationNetwork,
 		destination:        destination,
+		dialer:             dialer,
 		encoderPool: &sync.Pool{
 			New: func() any {
 				return newFluentEncoder(opts.TagAttribute)
@@ -67,7 +76,15 @@ func (e *LogToFluentExporter) Open(ctx context.Context) error {
 }
 
 func (e *LogToFluentExporter) Close() error {
-	return nil
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+
+	var err error
+	if e.conn != nil {
+		err = e.conn.Close()
+		e.conn = nil
+	}
+	return err
 }
 
 func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) error {
@@ -83,34 +100,73 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 		return nil // No logs to send
 	}
 
-	conn, err := e.dial(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+
+	if e.conn == nil || e.peerClosed() {
+		if e.conn != nil {
+			e.conn.Close()
+		}
+		conn, err := e.dialer.DialContext(ctx, e.destinationNetwork, e.destination)
+		if err != nil {
+			return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
+		}
+		e.conn = conn
 	}
-	defer conn.Close()
 
 	// Set write deadline
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetWriteDeadline(deadline)
+		e.conn.SetWriteDeadline(deadline)
 	} else {
-		conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		e.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	}
 
 	// Write the data
-	_, err = conn.Write(data)
+	_, err = e.conn.Write(data)
 	if err != nil {
+		// The connection is no longer usable; close it so the next Send reconnects.
+		e.conn.Close()
+		e.conn = nil
 		metrics.CollectorExporterFailed.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
 		return fmt.Errorf("failed to write to %s: %w", e.destination, err)
 	}
+
 	metrics.CollectorExporterSent.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
 	return nil
 }
 
-func (e *LogToFluentExporter) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	d.Timeout = 10 * time.Second // Adjust timeout as needed
-
-	return d.DialContext(ctx, e.destinationNetwork, e.destination)
+// peerClosed reports whether the persistent connection has been closed by the
+// peer. It performs a non-blocking liveness read with a short deadline, so it
+// returns quickly whether the connection is still healthy (no data arrives →
+// deadline exceeded) or the peer has closed it (EOF → reconnect). It returns
+// true when there is no connection or when the read observes a peer-initiated
+// close or a connection error.
+func (e *LogToFluentExporter) peerClosed() bool {
+	if e.conn == nil {
+		return true
+	}
+	buf := make([]byte, 16)
+	e.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	n, err := e.conn.Read(buf)
+	if err == nil && n > 0 {
+		// The peer sent data; the connection is still open. Discard it so a
+		// later send does not block on it.
+		return false
+	}
+	if err != nil {
+		// An I/O timeout means no data arrived within the window, which is
+		// the normal case for an idle connection: it is still open.
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return false
+		}
+		// Any other read error (including io.EOF, connection reset, or the
+		// connection being closed) means the peer closed the connection;
+		// treat it as closed so the next send reconnects.
+		return true
+	}
+	// err == nil and n == 0: the peer closed the connection (EOF).
+	return true
 }
 
 func (e *LogToFluentExporter) Name() string {
