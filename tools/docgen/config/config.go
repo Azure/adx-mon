@@ -9,6 +9,7 @@ import (
 	"text/template"
 
 	"github.com/Azure/adx-mon/cmd/collector/config"
+	"github.com/Azure/adx-mon/collector/scrapetls"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -184,7 +185,15 @@ func getContents() Contents {
 					"Each static target can independently set `scrape-interval` to a positive Go duration string such as `60s`, `500ms`, or `1m30s`. Omit the field on a static target to inherit the configured global interval. Explicitly empty, invalid, zero, and negative values fail collector configuration validation with the target index. For example:\n\n" +
 					"```toml\n[prometheus-scrape]\ndatabase = 'Metrics'\nscrape-interval = 30\nstatic-scrape-target = [\n  { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector', scrape-interval = '60s' }\n]\n```\n\n" +
 					"This example scrapes the static collector target every 60 seconds; other targets without overrides still use 30 seconds. Static target matching and labels are unchanged. Static configuration changes require a collector restart. Deploy an image containing static-target interval support before enabling this field.\n\n" +
-					"New targets are staggered within their interval. Up to `scrape-concurrency` targets (default 4) are scraped at once, so a slow target only delays itself. A target that is still being scraped when it is due again skips that interval. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` applies to every endpoint, capped at the endpoint's interval.",
+					"New targets are staggered within their interval. Up to `scrape-concurrency` targets (default 4) are scraped at once, so a slow target only delays itself. A target that is still being scraped when it is due again skips that interval. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` applies to every endpoint, capped at the endpoint's interval.\n\n" +
+					"#### Basic authentication over TLS\n\n" +
+					"Exporters that require HTTP Basic authentication over HTTPS, such as DCGM exporter or node-exporter configured with a web configuration file, can be scraped with a named profile in `scrape-tls-profiles`. " +
+					"A profile names a PEM CA bundle that verifies the exporter's serving certificate, an optional `server-name` to verify instead of the target host, and files containing the username and password. " +
+					"Static targets select a profile with `tls-profile`. Pods select one with the `adx-mon/tls-profile` annotation together with `adx-mon/scheme: https` (exactly `https`), and only pods in the profile's `allowed-namespaces` may use it; an empty list allows static targets only:\n\n" +
+					"```yaml\nadx-mon/scrape: \"true\"\nadx-mon/scheme: \"https\"\nadx-mon/port: \"metrics\"\nadx-mon/tls-profile: \"exporter\"\n```\n\n" +
+					"Profiled targets never fall back to plain HTTP, to the collector's service account token or to unauthenticated requests. A target that selects an unknown profile, uses a non-HTTPS URL or embeds credentials in its URL is rejected: static targets fail configuration validation and pods are not scraped. Redirects are not followed and proxy environment variables are ignored.\n\n" +
+					"The files are read on every scrape, so rotated credentials and CA bundles take effect without a restart. The files are validated before each request: nothing is sent if the CA bundle holds no PEM certificates, or if the username is empty, contains `:` or is not valid UTF-8, or the password is empty. If a file is missing or invalid, at startup or later, the profile is unavailable: its targets are not scraped and its files are rechecked at most every half scrape interval until they load. " +
+					"`adxmon_collector_scrape_tls_profile_info{profile,username}` is 1 for each available profile, with the username most recently sent or checked, and absent while it is unavailable. Every profile is also rechecked in the background about once per scrape interval, so the gauge tracks profiles that no target selects. The password is never exported. Profiles have no other effect unless a target selects one.",
 				Config: &config.Config{
 					PrometheusScrape: &config.PrometheusScrape{
 						Database:              "Metrics",
@@ -215,6 +224,23 @@ func getContents() Contents {
 								Namespace: "monitoring",
 								Pod:       "host-monitor",
 								Container: "host-monitor",
+							},
+							{
+								HostRegex:  ".*",
+								URL:        "https://$(HOSTNAME):9400/metrics",
+								Namespace:  "monitoring",
+								Pod:        "dcgm-exporter",
+								Container:  "dcgm-exporter",
+								TLSProfile: "exporter",
+							},
+						},
+						ScrapeTLSProfiles: map[string]scrapetls.Profile{
+							"exporter": {
+								CAFile:            "/etc/adx-mon/exporter/ca.crt",
+								ServerName:        "exporter.monitoring.svc",
+								UsernameFile:      "/etc/adx-mon/exporter/username",
+								PasswordFile:      "/etc/adx-mon/exporter/password",
+								AllowedNamespaces: []string{"monitoring"},
 							},
 						},
 					}},

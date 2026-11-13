@@ -46,14 +46,22 @@ scrape-interval = 30
 static-scrape-target = [
   { host-regex = '.*', url = 'http://node:3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector', scrape-interval = '60s' },
   { host-regex = '^node$', url = 'https://node:10250/metrics', namespace = 'kube-system', pod = 'kubelet', container = 'kubelet' },
-  { host-regex = '^other$', url = 'http://other/metrics', namespace = 'other', pod = 'other', container = 'other', scrape-interval = '5s' }
-]`), &cfg))
+  { host-regex = '^other$', url = 'http://other/metrics', namespace = 'other', pod = 'other', container = 'other', scrape-interval = '5s' },
+  { host-regex = '^node$', url = 'https://node:9443/metrics', namespace = 'exporter', pod = 'exporter', container = 'exporter', tls-profile = 'exporter' }
+]
+
+[prometheus-scrape.scrape-tls-profiles.exporter]
+ca-file = '/etc/exporter/ca.crt'
+username-file = '/etc/exporter/username'
+password-file = '/etc/exporter/password'`), &cfg))
 	require.NoError(t, cfg.PrometheusScrape.Validate())
 	targets, err := staticScrapeTargets(cfg.PrometheusScrape.StaticScrapeTarget, "node")
 	require.NoError(t, err)
 	require.Equal(t, []collector.ScrapeTarget{
 		{Static: true, Addr: "http://node:3100/metrics", Namespace: "adx-mon", Pod: "collector", Container: "collector", ScrapeInterval: time.Minute},
 		{Static: true, Addr: "https://node:10250/metrics", Namespace: "kube-system", Pod: "kubelet", Container: "kubelet"},
+		// A dropped profile would scrape the target with the default client and its service account token.
+		{Static: true, Addr: "https://node:9443/metrics", Namespace: "exporter", Pod: "exporter", Container: "exporter", TLSProfile: "exporter"},
 	}, targets)
 
 	// Changing only the interval preserves all static target identity fields.

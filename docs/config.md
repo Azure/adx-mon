@@ -169,6 +169,21 @@ This example scrapes the static collector target every 60 seconds; other targets
 
 New targets are staggered within their interval. Up to `scrape-concurrency` targets (default 4) are scraped at once, so a slow target only delays itself. A target that is still being scraped when it is due again skips that interval. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` applies to every endpoint, capped at the endpoint's interval.
 
+#### Basic authentication over TLS
+
+Exporters that require HTTP Basic authentication over HTTPS, such as DCGM exporter or node-exporter configured with a web configuration file, can be scraped with a named profile in `scrape-tls-profiles`. A profile names a PEM CA bundle that verifies the exporter's serving certificate, an optional `server-name` to verify instead of the target host, and files containing the username and password. Static targets select a profile with `tls-profile`. Pods select one with the `adx-mon/tls-profile` annotation together with `adx-mon/scheme: https` (exactly `https`), and only pods in the profile's `allowed-namespaces` may use it; an empty list allows static targets only:
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/scheme: "https"
+adx-mon/port: "metrics"
+adx-mon/tls-profile: "exporter"
+```
+
+Profiled targets never fall back to plain HTTP, to the collector's service account token or to unauthenticated requests. A target that selects an unknown profile, uses a non-HTTPS URL or embeds credentials in its URL is rejected: static targets fail configuration validation and pods are not scraped. Redirects are not followed and proxy environment variables are ignored.
+
+The files are read on every scrape, so rotated credentials and CA bundles take effect without a restart. The files are validated before each request: nothing is sent if the CA bundle holds no PEM certificates, or if the username is empty, contains `:` or is not valid UTF-8, or the password is empty. If a file is missing or invalid, at startup or later, the profile is unavailable: its targets are not scraped and its files are rechecked at most every half scrape interval until they load. `adxmon_collector_scrape_tls_profile_info{profile,username}` is 1 for each available profile, with the username most recently sent or checked, and absent while it is unavailable. Every profile is also rechecked in the background about once per scrape interval, so the gauge tracks profiles that no target selects. The password is never exported. Profiles have no other effect unless a target selects one.
+
 ```toml
 # Defines a prometheus format endpoint scraper.
 [prometheus-scrape]
@@ -209,6 +224,20 @@ New targets are staggered within their interval. Up to `scrape-concurrency` targ
     # The container label to add for metrics scraped at this URL.
     container = 'host-monitor'
 
+  [[prometheus-scrape.static-scrape-target]]
+    # The regex to match the host name against.  If the hostname matches, the URL will be scraped.
+    host-regex = '.*'
+    # The URL to scrape.
+    url = 'https://$(HOSTNAME):9400/metrics'
+    # The namespace label to add for metrics scraped at this URL.
+    namespace = 'monitoring'
+    # The pod label to add for metrics scraped at this URL.
+    pod = 'dcgm-exporter'
+    # The container label to add for metrics scraped at this URL.
+    container = 'dcgm-exporter'
+    # Optional name of a scrape TLS profile used to scrape this URL.  Requires an https URL.
+    tls-profile = 'exporter'
+
   # Regexes of metrics to keep if they have the given label and value.
   [[prometheus-scrape.keep-metrics-with-label-value]]
     # The regex to match the label value against.  If the label value matches, the metric will be kept.
@@ -221,6 +250,22 @@ New targets are staggered within their interval. Up to `scrape-concurrency` targ
     label-regex = 'type'
     # The regex to match the label value against.  If the label value matches, the metric will be kept.
     value-regex = 'frontend|backend'
+
+  # Named identities for scraping exporters with HTTP Basic authentication over verified TLS.  Targets select a profile by name.
+  [prometheus-scrape.scrape-tls-profiles]
+    [prometheus-scrape.scrape-tls-profiles.exporter]
+      # Path to the PEM CA bundle used to verify the exporter's serving certificate.
+      ca-file = '/etc/adx-mon/exporter/ca.crt'
+      # Optional TLS server name to verify instead of the host in the target URL.
+      server-name = 'exporter.monitoring.svc'
+      # Path to a file containing the Basic auth username.
+      username-file = '/etc/adx-mon/exporter/username'
+      # Path to a file containing the Basic auth password.
+      password-file = '/etc/adx-mon/exporter/password'
+      # Namespaces whose pods may select this profile with the adx-mon/tls-profile annotation.  Empty denies all discovered pods; static targets may still use the profile.
+      allowed-namespaces = [
+        'monitoring'
+      ]
 
 ```
 ## Prometheus Remote Write

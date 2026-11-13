@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/scrapetls"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/version"
@@ -32,11 +35,26 @@ type MetricsClient struct {
 	client    *http.Client
 	userAgent string
 
-	closing chan struct{}
+	profilesMu sync.Mutex
+	profiles   map[string]*scrapeTLSProfileState
+
+	closing   chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 
 	mu       sync.RWMutex
 	token    string
 	NodeName string
+}
+
+// scrapeTLSProfileState is guarded by MetricsClient.profilesMu.  A profile whose files are missing or invalid is
+// unavailable: its targets fail closed and its files are rechecked at most once per refresh interval.
+type scrapeTLSProfileState struct {
+	profile  scrapetls.Profile
+	client   *http.Client
+	username string
+	err      error
+	checked  time.Time
 }
 
 type ClientOpts struct {
@@ -44,6 +62,12 @@ type ClientOpts struct {
 	TLSHandshakeTimeout time.Duration
 	ScrapeTimeOut       time.Duration
 	NodeName            string
+
+	// ScrapeTLSProfiles are the named Basic auth over TLS identities that targets may select.
+	ScrapeTLSProfiles map[string]scrapetls.Profile
+
+	// ScrapeTLSRefreshInterval bounds how often the files of a profile are rechecked.  Defaults to 30s.
+	ScrapeTLSRefreshInterval time.Duration
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -51,6 +75,8 @@ func (c ClientOpts) WithDefaults() ClientOpts {
 		DialTimeout:         5 * time.Second,
 		TLSHandshakeTimeout: 5 * time.Second,
 		ScrapeTimeOut:       10 * time.Second,
+
+		ScrapeTLSRefreshInterval: 30 * time.Second,
 	}
 	if c.ScrapeTimeOut.Seconds() > 0 {
 		opts.ScrapeTimeOut = c.ScrapeTimeOut
@@ -63,7 +89,11 @@ func (c ClientOpts) WithDefaults() ClientOpts {
 	if c.TLSHandshakeTimeout.Seconds() > 0 {
 		opts.TLSHandshakeTimeout = c.TLSHandshakeTimeout
 	}
+	if c.ScrapeTLSRefreshInterval > 0 {
+		opts.ScrapeTLSRefreshInterval = c.ScrapeTLSRefreshInterval
+	}
 	opts.NodeName = c.NodeName
+	opts.ScrapeTLSProfiles = c.ScrapeTLSProfiles
 	return opts
 }
 
@@ -125,6 +155,15 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 		closing:   make(chan struct{}),
 	}
 
+	if err := c.initProfiles(); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if len(c.profiles) > 0 {
+		c.wg.Add(1)
+		go c.refreshProfiles(c.opts.ScrapeTLSRefreshInterval)
+	}
+
 	if token != "" {
 		go c.refreshToken()
 	}
@@ -133,6 +172,11 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 }
 
 func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.MetricFamily, error) {
+	return c.FetchMetricsWithProfile(target, "")
+}
+
+// FetchMetricsWithProfile fetches target using the named scrape TLS profile.  An empty profile uses the default client.
+func (c *MetricsClient) FetchMetricsWithProfile(target, profile string) (map[string]*prom_model.MetricFamily, error) {
 	parser := expfmt.NewTextParser(model.UTF8Validation)
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.ScrapeTimeOut)
@@ -145,15 +189,7 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("User-Agent", c.userAgent)
 
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
-
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req, target, profile)
 	if err != nil {
 		return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
 	}
@@ -180,6 +216,12 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 }
 
 func (c *MetricsClient) FetchMetricsIterator(ctx context.Context, target string) (*prompb.Iterator, error) {
+	return c.FetchMetricsIteratorWithProfile(ctx, target, "")
+}
+
+// FetchMetricsIteratorWithProfile fetches target using the named scrape TLS profile.  An empty profile uses the
+// default client.
+func (c *MetricsClient) FetchMetricsIteratorWithProfile(ctx context.Context, target, profile string) (*prompb.Iterator, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
@@ -187,15 +229,7 @@ func (c *MetricsClient) FetchMetricsIterator(ctx context.Context, target string)
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("User-Agent", c.userAgent)
 
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
-
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req, target, profile)
 	if err != nil {
 		return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
 	}
@@ -209,17 +243,206 @@ func (c *MetricsClient) FetchMetricsIterator(ctx context.Context, target string)
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		br, err = NewGzipReaderWithClose(resp.Body)
 		if err != nil {
-			defer br.Close()
+			resp.Body.Close()
 			return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
 		}
 	}
 	return prompb.NewIterator(br), nil
 }
 
+// do sends req with the client selected by profile.  The service account token is only sent without a profile, and
+// a profiled request never falls back to the default client.
+func (c *MetricsClient) do(req *http.Request, target, profile string) (*http.Response, error) {
+	client, err := c.clientForProfile(target, profile)
+	if err != nil {
+		return nil, err
+	}
+
+	if profile == "" {
+		c.mu.RLock()
+		token := c.token
+		c.mu.RUnlock()
+
+		if token != "" {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		}
+	}
+
+	resp, err := client.Do(req)
+	var fileErr *scrapetls.FileError
+	if profile != "" && errors.As(err, &fileErr) {
+		// The profile files became unusable since the last check and nothing was sent.  Stop advertising the profile
+		// until a later check finds usable files.  Target TLS and network errors leave the profile available.
+		c.profilesMu.Lock()
+		c.setProfileErrorLocked(profile, c.profiles[profile], fileErr, time.Now())
+		c.profilesMu.Unlock()
+	}
+	return resp, err
+}
+
 func (c *MetricsClient) Close() error {
-	close(c.closing)
-	c.client.CloseIdleConnections()
+	c.closeOnce.Do(func() {
+		close(c.closing)
+		c.wg.Wait()
+		c.client.CloseIdleConnections()
+
+		c.profilesMu.Lock()
+		defer c.profilesMu.Unlock()
+		for name, state := range c.profiles {
+			if state.client != nil {
+				state.client.Transport.(*scrapetls.Transport).Close()
+			}
+			c.setProfileUsernameLocked(name, state, "")
+		}
+	})
 	return nil
+}
+
+// initProfiles validates the structure of each profile and attempts to load it.  Structural errors are fatal; file
+// errors only leave the profile unavailable until a later retry succeeds.
+func (c *MetricsClient) initProfiles() error {
+	c.profiles = make(map[string]*scrapeTLSProfileState, len(c.opts.ScrapeTLSProfiles))
+	for name, profile := range c.opts.ScrapeTLSProfiles {
+		if name == "" {
+			return errors.New("scrape TLS profile name must not be empty")
+		}
+		if err := profile.Validate(); err != nil {
+			return fmt.Errorf("scrape TLS profile %q: %w", name, err)
+		}
+		c.profiles[name] = &scrapeTLSProfileState{profile: profile}
+	}
+
+	c.profilesMu.Lock()
+	defer c.profilesMu.Unlock()
+	now := time.Now()
+	for name, state := range c.profiles {
+		c.refreshProfileLocked(name, state, now)
+	}
+	return nil
+}
+
+// refreshProfiles rechecks every profile once its refresh interval has passed, so the gauge also tracks profiles that
+// no target selects.  It stops when the client closes.
+func (c *MetricsClient) refreshProfiles(interval time.Duration) {
+	defer c.wg.Done()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.closing:
+			return
+		case now := <-t.C:
+			if c.isClosed() {
+				return
+			}
+			c.profilesMu.Lock()
+			for name, state := range c.profiles {
+				if now.Sub(state.checked) >= interval {
+					c.refreshProfileLocked(name, state, now)
+				}
+			}
+			c.profilesMu.Unlock()
+		}
+	}
+}
+
+// validateProfileTarget checks that target may use profile.  It does not check whether the profile is available.
+func (c *MetricsClient) validateProfileTarget(target, profile string) error {
+	if profile == "" {
+		return nil
+	}
+	if _, ok := c.profiles[profile]; !ok {
+		return fmt.Errorf("unknown scrape TLS profile %q", profile)
+	}
+	return scrapetls.ValidateTarget(target)
+}
+
+func (c *MetricsClient) clientForProfile(target, profile string) (*http.Client, error) {
+	if profile == "" {
+		return c.client, nil
+	}
+	if err := c.validateProfileTarget(target, profile); err != nil {
+		return nil, err
+	}
+
+	c.profilesMu.Lock()
+	defer c.profilesMu.Unlock()
+	state := c.profiles[profile]
+	if now := time.Now(); now.Sub(state.checked) >= c.opts.ScrapeTLSRefreshInterval {
+		c.refreshProfileLocked(profile, state, now)
+	}
+	if state.err != nil {
+		return nil, fmt.Errorf("scrape TLS profile %q unavailable: %w", profile, state.err)
+	}
+	return state.client, nil
+}
+
+func (c *MetricsClient) refreshProfileLocked(name string, state *scrapeTLSProfileState, now time.Time) {
+	state.checked = now
+	username, err := state.profile.CheckFiles()
+	if err == nil && c.isClosed() {
+		err = errors.New("metrics client closed")
+	}
+	if err == nil && state.client == nil {
+		state.client, err = c.newProfileClient(name, state.profile)
+	}
+	if err != nil {
+		c.setProfileErrorLocked(name, state, err, now)
+		return
+	}
+	if state.err != nil {
+		logger.Infof("Scrape TLS profile %q loaded", name)
+	}
+	state.err = nil
+	c.setProfileUsernameLocked(name, state, username)
+}
+
+// setProfileErrorLocked makes the profile unavailable until a check after now plus the refresh interval succeeds.
+func (c *MetricsClient) setProfileErrorLocked(name string, state *scrapeTLSProfileState, err error, now time.Time) {
+	if state.err == nil {
+		logger.Warnf("Scrape TLS profile %q unavailable; its targets will not be scraped until it loads: %s", name, err)
+	}
+	state.err = err
+	state.checked = now
+	c.setProfileUsernameLocked(name, state, "")
+}
+
+func (c *MetricsClient) isClosed() bool {
+	select {
+	case <-c.closing:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *MetricsClient) newProfileClient(name string, profile scrapetls.Profile) (*http.Client, error) {
+	client, err := scrapetls.NewClient(profile, c.opts.DialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	client.Timeout = c.opts.ScrapeTimeOut
+	// The transport validates the files on every request, so a rotated username is sent before the next periodic
+	// check.  Publish it as it is sent so the gauge always reports the identity in use.
+	client.Transport.(*scrapetls.Transport).OnSend = func(username string) {
+		c.profilesMu.Lock()
+		defer c.profilesMu.Unlock()
+		if state := c.profiles[name]; state.err == nil && !c.isClosed() {
+			c.setProfileUsernameLocked(name, state, username)
+		}
+	}
+	return client, nil
+}
+
+// setProfileUsernameLocked publishes the username of an available profile.  The password is never exported.
+func (c *MetricsClient) setProfileUsernameLocked(name string, state *scrapeTLSProfileState, username string) {
+	if state.username != "" && state.username != username {
+		metrics.CollectorScrapeTLSProfileInfo.DeleteLabelValues(name, state.username)
+	}
+	state.username = username
+	if username != "" {
+		metrics.CollectorScrapeTLSProfileInfo.WithLabelValues(name, username).Set(1)
+	}
 }
 
 func (c *MetricsClient) readToken() (string, error) {
