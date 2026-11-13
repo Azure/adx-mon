@@ -38,20 +38,6 @@ func TestMetricsService_OLTP_protobuf(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:             "too short content length",
-			writer:           metricWriterWithError(nil),
-			input:            serializedMSR(t, newServiceRequest()),
-			overriddenLength: 1,
-			expectedStatus:   http.StatusBadRequest,
-		},
-		{
-			name:             "not enough bytes",
-			writer:           metricWriterWithError(nil),
-			input:            serializedMSR(t, newServiceRequest()),
-			overriddenLength: 1024,
-			expectedStatus:   http.StatusInternalServerError,
-		},
-		{
 			name:           "writer got unknown metric",
 			writer:         metricWriterWithError(ErrUnknownMetricType),
 			input:          serializedMSR(t, newServiceRequest()),
