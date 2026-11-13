@@ -102,6 +102,7 @@ func (e *Executor) Open(ctx context.Context) error {
 	logger.Infof("Begin executing %d queries", len(e.ruleStore.Rules()))
 
 	e.syncWorkers(ctx)
+	e.wg.Add(1)
 	go e.periodicSync(ctx)
 	return nil
 }
@@ -125,8 +126,29 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 	})
 }
 
+// Close cancels the executor context, then waits for every goroutine the
+// executor owns to drain: the tracked workers and the periodicSync loop.
 func (e *Executor) Close() error {
-	e.closeFn()
+	if e.closeFn != nil {
+		e.closeFn()
+	}
+
+	// Snapshot the tracked workers under the lock so we do not race with
+	// syncWorkers (which runs from periodicSync and may still be in flight)
+	// mutating the map. Then close each worker; worker.Close() cancels its own
+	// child context and waits for its Run goroutine to finish.
+	e.mu.RLock()
+	workers := make([]*worker, 0, len(e.workers))
+	for _, w := range e.workers {
+		workers = append(workers, w)
+	}
+	e.mu.RUnlock()
+
+	for _, w := range workers {
+		w.Close()
+	}
+
+	// Wait for periodicSync to observe the cancellation and exit.
 	e.wg.Wait()
 	return nil
 }
@@ -351,41 +373,57 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 	for _, r := range e.ruleStore.Rules() {
 		id := e.workerKey(r)
 		liveQueries[id] = struct{}{}
+
+		e.mu.Lock()
 		w, ok := e.workers[id]
 		if !ok {
-			logger.Infof("Starting new worker for %s", id)
 			worker := e.newWorker(r)
-			worker.Run(ctx)
 			e.workers[id] = worker
+			e.mu.Unlock()
+			logger.Infof("Starting new worker for %s", id)
+			worker.Run(ctx)
 			continue
 		}
 
 		// Rule has not changed, leave the existing working running
 		if w.rule.Version == r.Version {
+			e.mu.Unlock()
 			continue
 		}
 
 		logger.Infof("Rule %s has changed, restarting worker", id)
-		w.Close()
 		delete(e.workers, id)
+		e.mu.Unlock()
+
+		w.Close()
 		w = e.newWorker(r)
+		e.mu.Lock()
 		e.workers[id] = w
+		e.mu.Unlock()
 		w.Run(ctx)
 	}
 
 	// Shutdown any workers that no longer exist
+	e.mu.Lock()
+	removed := make(map[string]*worker)
 	for id := range e.workers {
 		if _, ok := liveQueries[id]; !ok {
-			logger.Infof("Shutting down worker for %s", id)
-			e.workers[id].Close()
+			removed[id] = e.workers[id]
 			delete(e.workers, id)
 		}
+	}
+	e.mu.Unlock()
+	for id, w := range removed {
+		logger.Infof("Shutting down worker for %s", id)
+		w.Close()
 	}
 }
 
 // periodicSync will periodically sync the workers with the current set of rules.
 func (e *Executor) periodicSync(ctx context.Context) {
+	defer e.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
