@@ -57,9 +57,13 @@ type uploader struct {
 
 	mu       sync.RWMutex
 	schemaMu sync.RWMutex
-	cancel   context.CancelFunc
-	ctx      context.Context
-	open     bool
+	// Per-table leases serialize schema creation with eviction without holding
+	// the cache-wide lock across ClickHouse I/O.
+	schemaLockMu sync.Mutex
+	schemaLocks  map[string]*schemaTableLock
+	cancel       context.CancelFunc
+	ctx          context.Context
+	open         bool
 
 	workers int
 	wg      sync.WaitGroup
@@ -68,6 +72,35 @@ type uploader struct {
 	// separate from wg (the workers) so Close can join it deterministically
 	// without entangling the upload workers' lifecycle.
 	schemaReconcileWG sync.WaitGroup
+}
+
+type schemaTableLock struct {
+	sync.Mutex
+	users int
+}
+
+func (u *uploader) lockSchemaTable(table string) func() {
+	u.schemaLockMu.Lock()
+	if u.schemaLocks == nil {
+		u.schemaLocks = make(map[string]*schemaTableLock)
+	}
+	l := u.schemaLocks[table]
+	if l == nil {
+		l = &schemaTableLock{}
+		u.schemaLocks[table] = l
+	}
+	l.users++ // Count waiters before releasing the map lock.
+	u.schemaLockMu.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		u.schemaLockMu.Lock()
+		l.users--
+		if l.users == 0 {
+			delete(u.schemaLocks, table)
+		}
+		u.schemaLockMu.Unlock()
+	}
 }
 
 // NewUploader constructs a ClickHouse-backed uploader
@@ -242,33 +275,49 @@ func (u *uploader) listTables(ctx context.Context) (map[string]struct{}, error) 
 	return set, nil
 }
 
-// evictSchemasForDroppedTables removes every schema-cache entry whose table (the
-// key's part before the optional "@schemaID" suffix) is no longer present in
-// existingTables.  It is safe to run concurrently with ensureSchema and
-// Schemas because it takes schemaMu for the duration of its scan.
+// evictSchemasForDroppedTables removes schemas and syncer entries for tables
+// absent from the catalog. Per-table locks coordinate eviction with creation;
+// the cache-wide locks are never held across ClickHouse I/O.
 func (u *uploader) evictSchemasForDroppedTables(existingTables map[string]struct{}) {
-	u.schemaMu.Lock()
-	defer u.schemaMu.Unlock()
-
-	for key, schema := range u.schemas {
-		table := schema.Table
-		if _, ok := existingTables[table]; !ok {
-			if u.log != nil {
-				u.log.Debug("evicting cached schema for dropped table", slog.String("table", table))
-			}
-			delete(u.schemas, key)
+	missing := make(map[string]struct{})
+	u.schemaMu.RLock()
+	for _, schema := range u.schemas {
+		if _, ok := existingTables[schema.Table]; !ok {
+			missing[schema.Table] = struct{}{}
 		}
 	}
-	// EnsureTable and reconciliation both run under schemaMu, so no in-flight
-	// ensure can repopulate either cache with a dropped table after eviction.
+	u.schemaMu.RUnlock()
 	u.syncer.mu.Lock()
 	for key := range u.syncer.ensured {
 		table, _, _ := strings.Cut(key, "@")
 		if _, ok := existingTables[table]; !ok {
-			delete(u.syncer.ensured, key)
+			missing[table] = struct{}{}
 		}
 	}
 	u.syncer.mu.Unlock()
+
+	for table := range missing {
+		unlock := u.lockSchemaTable(table)
+		u.schemaMu.Lock()
+		for key, schema := range u.schemas {
+			if schema.Table == table {
+				delete(u.schemas, key)
+			}
+		}
+		u.syncer.mu.Lock()
+		for key := range u.syncer.ensured {
+			name, _, _ := strings.Cut(key, "@")
+			if name == table {
+				delete(u.syncer.ensured, key)
+			}
+		}
+		u.syncer.mu.Unlock()
+		u.schemaMu.Unlock()
+		if u.log != nil {
+			u.log.Debug("evicting cached schema for dropped table", slog.String("table", table))
+		}
+		unlock()
+	}
 }
 
 func (u *uploader) worker(_ int) {
@@ -285,21 +334,30 @@ func (u *uploader) worker(_ int) {
 			if batch == nil {
 				continue
 			}
-
-			// Bound each batch's upload.  Derive from the service context without
-			// inheriting its cancellation so one slow batch's timeout neither
-			// cancels the worker's exit path nor a sibling batch, and shutdown
-			// (Close) does not cancel an in-flight batch's bounded context.
-			uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), batchUploadTimeout)
-			err := u.processBatch(uploadCtx, batch)
-			cancel()
-			if err != nil {
-				if u.log != nil {
-					u.log.Error("failed to upload batch", slog.String("prefix", batch.Prefix), slog.String("error", err.Error()))
-				}
+			if !u.runBatch(batch) {
+				return
 			}
 		}
 	}
+}
+
+// runBatch returns false when shutdown won the race with a queue hand-off.
+func (u *uploader) runBatch(batch *cluster.Batch) bool {
+	if u.ctx.Err() != nil {
+		batch.Release()
+		return false
+	}
+	// Bound each batch's upload.  Derive from the service context without
+	// inheriting its cancellation so one slow batch's timeout neither
+	// cancels the worker's exit path nor a sibling batch, and shutdown
+	// (Close) does not cancel an in-flight batch's bounded context.
+	uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), batchUploadTimeout)
+	err := u.processBatch(uploadCtx, batch)
+	cancel()
+	if err != nil && u.log != nil {
+		u.log.Error("failed to upload batch", slog.String("prefix", batch.Prefix), slog.String("error", err.Error()))
+	}
+	return true
 }
 
 func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error {
@@ -588,11 +646,21 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 func (u *uploader) ensureSchema(ctx context.Context, table, schemaID string, mapping schema.SchemaMapping) (Schema, error) {
 	key := schemaCacheKey(table, schemaID)
 
-	u.schemaMu.Lock()
-	defer u.schemaMu.Unlock()
+	u.schemaMu.RLock()
 	if existing, ok := u.schemas[key]; ok {
+		u.schemaMu.RUnlock()
 		return existing, nil
 	}
+	u.schemaMu.RUnlock()
+
+	unlock := u.lockSchemaTable(table)
+	defer unlock()
+	u.schemaMu.RLock()
+	if existing, ok := u.schemas[key]; ok {
+		u.schemaMu.RUnlock()
+		return existing, nil
+	}
+	u.schemaMu.RUnlock()
 
 	cols := convertToColumns(mapping)
 	schemaCopy := Schema{Table: table, Columns: make([]Column, len(cols))}
@@ -602,7 +670,9 @@ func (u *uploader) ensureSchema(ctx context.Context, table, schemaID string, map
 		return Schema{}, err
 	}
 
+	u.schemaMu.Lock()
 	u.schemas[key] = schemaCopy
+	u.schemaMu.Unlock()
 	return schemaCopy, nil
 }
 

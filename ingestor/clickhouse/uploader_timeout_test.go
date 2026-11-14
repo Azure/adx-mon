@@ -102,6 +102,16 @@ func newHangUploader(t *testing.T, conn connectionManager, timeout time.Duration
 	return u, cancel
 }
 
+func TestWorkerReleasesBatchDequeuedDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	u := &uploader{ctx: ctx}
+	batch := hangBatch(t, "CpuUsage")
+	setBatcher(t, batch, &stubBatcher{})
+	require.False(t, u.runBatch(batch))
+	require.True(t, batch.IsReleased())
+}
+
 // hangBatch builds a one-row WAL batch for the uploader's database and table.
 func hangBatch(t *testing.T, table string) *cluster.Batch {
 	t.Helper()
