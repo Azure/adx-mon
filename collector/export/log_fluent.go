@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -37,6 +38,24 @@ type LogToFluentExporter struct {
 	// conn is the persistent connection to the destination, guarded by connMu.
 	// It is re-established on demand and reset to nil if a write fails.
 	conn net.Conn
+	// The background reader observes EOF without delaying every Send. This is
+	// best-effort detection; delivery confirmation requires protocol acks.
+	connection *fluentConnection
+}
+
+type fluentConnection struct {
+	conn   net.Conn
+	closed atomic.Bool
+}
+
+func (c *fluentConnection) watch() {
+	var buf [256]byte
+	for {
+		if _, err := c.conn.Read(buf[:]); err != nil {
+			c.closed.Store(true)
+			return
+		}
+	}
 }
 
 func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter, error) {
@@ -82,6 +101,7 @@ func (e *LogToFluentExporter) Close() error {
 	if e.conn != nil {
 		err = e.conn.Close()
 		e.conn = nil
+		e.connection = nil
 	}
 	return err
 }
@@ -102,12 +122,19 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 	e.connMu.Lock()
 	defer e.connMu.Unlock()
 
+	if e.conn != nil && e.connection.closed.Load() {
+		_ = e.conn.Close()
+		e.conn = nil
+		e.connection = nil
+	}
 	if e.conn == nil {
 		conn, err := e.dialer.DialContext(ctx, e.destinationNetwork, e.destination)
 		if err != nil {
 			return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
 		}
 		e.conn = conn
+		e.connection = &fluentConnection{conn: conn}
+		go e.connection.watch()
 	}
 
 	// Set write deadline
@@ -123,6 +150,7 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 		// The connection is no longer usable; close it so the next Send reconnects.
 		e.conn.Close()
 		e.conn = nil
+		e.connection = nil
 		metrics.CollectorExporterFailed.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
 		return fmt.Errorf("failed to write to %s: %w", e.destination, err)
 	}
