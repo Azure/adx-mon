@@ -56,6 +56,8 @@ type Executor struct {
 	// it creates. It exists solely so tests can observe the context RunOnce
 	// derives and verify it is canceled when RunOnce returns.
 	runOnceCtx func(context.Context)
+	// syncTick is used by tests to drive the periodic loop deterministically.
+	syncTick <-chan time.Time
 }
 
 type ExecutorOpts struct {
@@ -138,10 +140,11 @@ func (e *Executor) Close() error {
 		e.closeFn()
 	}
 
-	// Snapshot the tracked workers under the lock so we do not race with
-	// syncWorkers (which runs from periodicSync and may still be in flight)
-	// mutating the map. Then close each worker; worker.Close() cancels its own
-	// child context and waits for its Run goroutine to finish.
+	// Let periodicSync finish publishing workers before taking the final
+	// snapshot; otherwise Close can miss a newly started worker.
+	e.wg.Wait()
+
+	// Close each worker; worker.Close cancels its context and joins its run loop.
 	e.mu.RLock()
 	workers := make([]*worker, 0, len(e.workers))
 	for _, w := range e.workers {
@@ -153,8 +156,6 @@ func (e *Executor) Close() error {
 		w.Close()
 	}
 
-	// Wait for periodicSync to observe the cancellation and exit.
-	e.wg.Wait()
 	return nil
 }
 
@@ -434,9 +435,13 @@ func (e *Executor) periodicSync(ctx context.Context) {
 	defer e.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	ticks := ticker.C
+	if e.syncTick != nil {
+		ticks = e.syncTick
+	}
 	for {
 		select {
-		case <-ticker.C:
+		case <-ticks:
 			e.syncWorkers(ctx)
 		case <-ctx.Done():
 			return

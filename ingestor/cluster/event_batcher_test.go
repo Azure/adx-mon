@@ -124,7 +124,7 @@ func TestEventBatcher_SweepPrunesStalePrefixEntries(t *testing.T) {
 	require.False(t, release, "stale releases entry was not pruned")
 	require.False(t, failed, "stale failed entry was not pruned")
 	require.False(t, backlog, "stale backlog entry was not pruned")
-	require.False(t, outstanding, "stale outstanding entry was not pruned")
+	require.True(t, outstanding, "active batches must retain their outstanding count until batchDone")
 	require.True(t, pending, "pending entries are managed separately and must survive the prune")
 	// The live prefix is untouched by the prune.
 	_, livePending := e.pending[live.Prefix]

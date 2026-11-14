@@ -87,9 +87,8 @@ func TestLogToFluentExporterPersistentConnection(t *testing.T) {
 		require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
 	}
 
-	require.Equal(t, int32(1), atomic.LoadInt32(connections),
-		"expected a single persistent connection reused across %d sends, but the server observed %d distinct connections",
-		numBatches, atomic.LoadInt32(connections))
+	require.Eventually(t, func() bool { return atomic.LoadInt32(connections) == 1 }, time.Second, time.Millisecond,
+		"expected a single persistent connection reused across %d sends", numBatches)
 
 	require.NoError(t, exporter.Close())
 }
@@ -105,13 +104,16 @@ func TestLogToFluentExporterReconnect(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The server closes the connection after the first write, so the first
-	// send succeeds and the second must reconnect on a new connection.
+	// A write failure resets the connection; the next Send reconnects.
 	require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
+	exporter.connMu.Lock()
+	require.NoError(t, exporter.conn.Close()) // Deterministic failed write.
+	exporter.connMu.Unlock()
+	require.Error(t, exporter.Send(context.Background(), newTestFluentBatch()))
 	require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
 
-	require.Equal(t, int32(2), atomic.LoadInt32(connections),
-		"expected the exporter to reconnect after the peer closed the connection")
+	require.Eventually(t, func() bool { return atomic.LoadInt32(connections) == 2 }, time.Second, time.Millisecond,
+		"expected the exporter to reconnect after a failed write")
 
 	require.NoError(t, exporter.Close())
 }

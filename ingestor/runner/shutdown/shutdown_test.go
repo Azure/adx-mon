@@ -167,8 +167,8 @@ func TestShutDownRunner_K8sCallsBoundedByRunDeadline(t *testing.T) {
 	// Using the real client path ensures the request context is honored
 	// (the fake clientset's reactor does not carry the request context).
 	restConfig := &rest.Config{
-		Host:        srv.URL,
-		ContentType: "application/json",
+		Host:          srv.URL,
+		ContentConfig: rest.ContentConfig{ContentType: "application/json"},
 	}
 	k8sClient, err := kubernetes.NewForConfig(restConfig)
 	assert.NoError(t, err)
