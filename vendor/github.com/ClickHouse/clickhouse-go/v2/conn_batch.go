@@ -289,10 +289,11 @@ func (b *batch) Flush() error {
 	// PrepareBatch clears its socket deadline before Flush. Mirror Send's
 	// watchdog so a stalled native write is interrupted by cancellation.
 	transport := b.conn.conn
-	stopCW := context.AfterFunc(b.ctx, func() { _ = transport.Close() })
+	stopCW := contextWatchdog(b.ctx, func() { _ = transport.Close() })
 	defer stopCW()
 	if b.block.Rows() != 0 {
 		if err := b.conn.sendData(b.block, ""); err != nil {
+			stopCW()
 			if ctxErr := b.ctx.Err(); ctxErr != nil {
 				b.release(ctxErr)
 				return ctxErr
@@ -304,7 +305,17 @@ func (b *batch) Flush() error {
 			return err
 		}
 		if b.closeOnFlush {
-			b.release(b.closeQuery())
+			err := b.closeQuery()
+			// The cancellation callback must no longer own this transport
+			// when release makes it available to another batch.
+			stopCW()
+			if ctxErr := b.ctx.Err(); ctxErr != nil {
+				err = ctxErr
+			}
+			b.release(err)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	b.block.Reset()
@@ -346,10 +357,12 @@ func (b *batch) Close() error {
 		return err
 	}
 	transport := b.conn.conn
-	stopCW := context.AfterFunc(b.ctx, func() { _ = transport.Close() })
+	stopCW := contextWatchdog(b.ctx, func() { _ = transport.Close() })
 	defer stopCW()
 
 	err := b.closeQuery()
+	// Join any in-progress transport close before handing the connection back.
+	stopCW()
 	if ctxErr := b.ctx.Err(); ctxErr != nil {
 		err = ctxErr
 	}

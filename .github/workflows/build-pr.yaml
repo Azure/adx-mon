@@ -50,6 +50,10 @@ jobs:
     - name: Test
       run: ENABLE_ASSERTIONS=true go test -race -mod=vendor -v -timeout=30m ./...
 
+    # ./... excludes vendor packages; keep the local driver patch covered.
+    - name: Test vendored ClickHouse batch cancellation
+      run: go test -race -mod=vendor -v -timeout=5m ./vendor/github.com/ClickHouse/clickhouse-go/v2 -run '^TestNativeBatch'
+
     - name: Ensure docs are updated
       run: |
         make gendocs
