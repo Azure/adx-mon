@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,6 +17,65 @@ import (
 type reconcilingConnection struct {
 	fakeConnection
 	existingTables []string
+}
+
+type blockingSchemaConnection struct {
+	fakeConnection
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingSchemaConnection) Exec(ctx context.Context, query string, args ...any) error {
+	if strings.Contains(query, "`Slow`") {
+		close(c.entered)
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return c.fakeConnection.Exec(ctx, query, args...)
+}
+
+func TestSchemaCreationDoesNotBlockOtherTables(t *testing.T) {
+	conn := &blockingSchemaConnection{entered: make(chan struct{}), release: make(chan struct{})}
+	withFakeConnectionManager(t, conn)
+	up, err := NewUploader(Config{Database: "metricsdb", DSN: "clickhouse://localhost"}, nil)
+	require.NoError(t, err)
+	u := up.(*uploader)
+	u.syncer.mu.Lock()
+	u.syncer.metadataReady = true
+	u.syncer.mu.Unlock()
+	finished := make(chan error, 1)
+	go func() {
+		_, err := u.ensureSchema(context.Background(), "Slow", "v1", schema.DefaultMetricsMapping)
+		finished <- err
+	}()
+	select {
+	case <-conn.entered:
+	case <-time.After(time.Second):
+		t.Fatal("slow schema operation did not start")
+	}
+	defer func() {
+		select {
+		case <-conn.release:
+		default:
+			close(conn.release)
+		}
+	}()
+	fast := make(chan error, 1)
+	go func() {
+		_, err := u.ensureSchema(context.Background(), "Fast", "v1", schema.DefaultMetricsMapping)
+		fast <- err
+	}()
+	select {
+	case err := <-fast:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("unrelated schema creation blocked behind Slow")
+	}
+	close(conn.release)
+	require.NoError(t, <-finished)
 }
 
 // Select intercepts the schema-cache reconcile's list-tables query and returns
