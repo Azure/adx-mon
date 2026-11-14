@@ -102,8 +102,13 @@ func (h *Health) IsHealthy() bool {
 }
 
 func (h *Health) UnhealthyReason() string {
-	segmentsTotal := h.QueueSizer.SegmentsTotal()
-	segmentsSize := h.QueueSizer.SegmentsSize()
+	var segmentsTotal, segmentsSize int64
+	if q, ok := h.QueueSizer.(interface{ QueueUsage() (int64, int64) }); ok {
+		segmentsTotal, segmentsSize = q.QueueUsage()
+	} else {
+		segmentsTotal = h.QueueSizer.SegmentsTotal()
+		segmentsSize = h.QueueSizer.SegmentsSize()
+	}
 
 	if h.opts.MaxSegmentCount > 0 && segmentsTotal >= h.opts.MaxSegmentCount {
 		return ReasonMaxSegmentsExceeded
@@ -198,7 +203,15 @@ func (h *Health) SetPeerHealthy(peer string) {
 		s.NextCheck = time.Time{}
 		s.pausedUntil = time.Time{}
 	}
-	h.state[peer] = s
+	if s.Healthy && s.NextCheck.IsZero() && s.pausedUntil.IsZero() {
+		// The peer is fully healthy with nothing pending, so drop it from the state map.  IsPeerHealthy already
+		// treats a missing entry as healthy, and SetPeerUnhealthyFor re-creates the entry on the next failure, so
+		// eviction is observably identical to keeping it.  This bounds the map to peers that are actually
+		// unhealthy, paused, or backing off, instead of the total distinct hostnames ever seen.
+		delete(h.state, peer)
+	} else {
+		h.state[peer] = s
+	}
 }
 
 func (h *Health) UploadQueueSize() int {

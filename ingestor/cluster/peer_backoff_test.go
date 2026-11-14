@@ -88,10 +88,16 @@ func TestReplicatorDefaultUnhealthyTimeoutUnchanged(t *testing.T) {
 	require.False(t, transferAfterTransientFailure(t, health, 3*time.Second))
 }
 
+// nextCheck reports the peer's NextCheck.  A fully healthy peer with nothing pending is evicted from the state map, so
+// a missing entry means there is no backoff (zero).
 func nextCheck(h *Health, peer string) time.Time {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.state[peer].NextCheck
+	s := h.state[peer]
+	if s == nil {
+		return time.Time{}
+	}
+	return s.NextCheck
 }
 
 // failAfterBackoff fails the peer once its previous backoff has expired and returns the new backoff.

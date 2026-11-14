@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -708,6 +709,52 @@ func TestExecutor_RunOnce(t *testing.T) {
 
 }
 
+// TestExecutor_RunOnce_CancelsDerivedContext demonstrates that the context
+// RunOnce derives is actually canceled when RunOnce returns. Before the fix,
+// RunOnce created `ctx, e.closeFn = context.WithCancel(ctx)` but never called
+// cancel, so the derived context (and everything derived from it) lingered
+// until the Executor was garbage-collected.
+//
+// We capture the derived context directly via the runOnceCtx hook (which
+// RunOnce invokes with the context it derives, before defer cancel() runs).
+// After RunOnce returns, the fix's defer cancel() has canceled the derived
+// context. We assert it is canceled. The test's own parent context must remain
+// alive, confirming the cancellation came from the executor, not the test.
+func TestExecutor_RunOnce_CancelsDerivedContext(t *testing.T) {
+	parentCtx, parentCancel := context.WithCancel(t.Context())
+	t.Cleanup(parentCancel)
+
+	var mu sync.Mutex
+	var derivedCtx context.Context
+
+	e := Executor{
+		kustoClient: &fakeKustoClient{},
+		ruleStore:   &fakeRuleStore{rules: []*rules.Rule{{Namespace: "ns", Name: "one", Interval: time.Hour}}},
+		runOnceCtx: func(ctx context.Context) {
+			mu.Lock()
+			derivedCtx = ctx
+			mu.Unlock()
+		},
+	}
+
+	e.RunOnce(parentCtx)
+
+	mu.Lock()
+	require.NotNil(t, derivedCtx, "RunOnce must have invoked the runOnceCtx hook with the derived context")
+	captured := derivedCtx
+	mu.Unlock()
+
+	// The test's own parent must still be alive; the cancellation came from the
+	// executor's derived context, not from the test.
+	require.NoError(t, parentCtx.Err(), "test parent context must remain alive")
+
+	// After RunOnce returns, the fix's defer cancel() must have canceled the
+	// derived context. Before the fix it was never canceled.
+	require.Eventually(t, func() bool { return captured.Err() != nil },
+		2*time.Second, 10*time.Millisecond,
+		"RunOnce's derived context was not canceled; it lingers after RunOnce returned")
+}
+
 func TestExecutor_syncWorkers_Remove(t *testing.T) {
 	ctx := t.Context()
 	e := Executor{
@@ -741,6 +788,163 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 	require.Equal(t, 0, len(e.workers))
 	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
+}
+
+// TestExecutor_Close_WaitsForWorkerGoroutine proves that Close() blocks until
+// the worker goroutine it spawned has drained. The worker's query blocks on a
+// test-controlled gate. If Close() waits (correct), the test releases the gate
+// from a side goroutine and Close proceeds. If Close() does not wait (the bug),
+// Close returns immediately while the worker is still blocked, and the
+// "worker finished before Close returned" flag is false.
+func TestExecutor_Close_WaitsForWorkerGoroutine(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	queryEntered := make(chan struct{})
+	gate := make(chan struct{}) // closed by the test to unblock the worker's query
+	queryReturned := make(chan struct{})
+	kusto := &fakeKustoClient{queryFn: func(ctx context.Context, _ *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+		close(queryEntered)
+		// Block on the gate only. The worker's own ctx cancel from Close()
+		// does NOT unblock this query, so the worker goroutine stays in flight
+		// until the test explicitly releases the gate. This isolates the
+		// "does Close wait?" question from the "does ctx cancel stop the
+		// worker?" behavior.
+		<-gate
+		close(queryReturned)
+		return ctx.Err(), 0
+	}}
+
+	store := &fakeRuleStore{rules: []*rules.Rule{{
+		Namespace: "ns", Name: "rule",
+		Database: "db", Query: "Table | take 1",
+		Interval: time.Hour, Destination: "dest",
+	}}}
+
+	e := NewExecutor(ExecutorOpts{
+		Clock:       clk,
+		Region:      "eastus",
+		Concurrency: 2,
+		RuleStore:   store,
+		KustoClient: kusto,
+		AlertCli:    &fakeAlerter{},
+	})
+	require.NoError(t, e.Open(context.Background()))
+
+	// Fire the worker's immediate first query so it blocks on the gate.
+	waitForWorkerTimer(t, clk)
+	clk.Step(0)
+	select {
+	case <-queryEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not start query")
+	}
+
+	// Call Close. With the fix, Close blocks until the worker drains. The
+	// worker's query is blocked on the gate, so we must release it from a side
+	// goroutine for Close to return. With the bug, Close returns immediately
+	// without waiting, so the worker is still blocked on the gate.
+	closeGate := make(chan struct{})
+	go func() {
+		// Wait until the test signals, then release the gate.
+		<-closeGate
+		close(gate)
+	}()
+
+	// Run Close in a goroutine; if it waits, it will block until the gate is
+	// released. If it doesn't wait (the bug), it returns immediately.
+	closeReturned := make(chan error, 1)
+	go func() { closeReturned <- e.Close() }()
+
+	// Give Close a moment. If it returned already, the bug is present.
+	select {
+	case err := <-closeReturned:
+		// Close returned without waiting — that is the bug.
+		// Release the gate so we don't leak the worker goroutine.
+		close(closeGate)
+		require.NoError(t, err)
+		t.Fatal("Close() returned before the worker goroutine drained (wg is a no-op)")
+	case <-time.After(150 * time.Millisecond):
+		// Close is still blocked — it is waiting for the worker. Now release
+		// the gate so the worker can finish and Close can return.
+		close(closeGate)
+		select {
+		case err := <-closeReturned:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close did not return after the worker drained")
+		}
+	}
+}
+
+func TestExecutor_Close_WaitsForPeriodicSync(t *testing.T) {
+	store := &countingRuleStore{rules: []*rules.Rule{{
+		Namespace: "ns", Name: "rule",
+		Database: "db", Query: "Table | take 1",
+		Interval: time.Hour, Destination: "dest",
+	}}}
+
+	e := NewExecutor(ExecutorOpts{
+		Region:      "eastus",
+		Concurrency: 2,
+		RuleStore:   store,
+		KustoClient: &fakeKustoClient{},
+		AlertCli:    &fakeAlerter{},
+	})
+	ticks := make(chan time.Time)
+	e.syncTick = ticks
+	require.NoError(t, e.Open(context.Background()))
+	baseline := store.Count()
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	store.mu.Lock()
+	store.entered = entered
+	store.gate = gate
+	store.mu.Unlock()
+
+	ticks <- time.Now()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(gate)
+		t.Fatal("periodic sync never entered Rules")
+	}
+	returned := make(chan error, 1)
+	go func() { returned <- e.Close() }()
+	select {
+	case err := <-returned:
+		close(gate)
+		t.Fatalf("Close returned before periodic sync finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gate)
+	require.NoError(t, <-returned)
+	require.Equal(t, baseline+1, store.Count())
+}
+
+type countingRuleStore struct {
+	mu      sync.Mutex
+	count   int
+	rules   []*rules.Rule
+	entered chan struct{}
+	gate    chan struct{}
+}
+
+func (c *countingRuleStore) Rules() []*rules.Rule {
+	c.mu.Lock()
+	c.count++
+	entered, gate := c.entered, c.gate
+	c.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		<-gate
+	}
+	return c.rules
+}
+
+func (c *countingRuleStore) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
 }
 
 func TestExecutor_syncWorkers_NoChange(t *testing.T) {

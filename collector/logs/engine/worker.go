@@ -53,9 +53,20 @@ func (w *worker) RunWaitingForStorage(stop context.Context) {
 			types.DisposeLogBatch(msg)
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), w.BatchTimeout)
+		parent := context.Background()
+		// A source may flush its last batch after stop is canceled. Let
+		// that batch finish within BatchTimeout rather than starting with
+		// an already-canceled context.
+		if stop != nil && stop.Err() == nil {
+			parent = stop
+		}
+		ctx, cancel := context.WithTimeout(parent, w.BatchTimeout)
 		if stop != nil {
-			ctx = types.WithStorageWait(ctx, stop)
+			waitCtx := stop
+			if stop.Err() != nil {
+				waitCtx = ctx
+			}
+			ctx = types.WithStorageWait(ctx, waitCtx)
 		}
 		_, err := w.ProcessBatch(ctx, msg)
 		cancel()

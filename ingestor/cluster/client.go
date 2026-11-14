@@ -295,6 +295,16 @@ func NewClient(opts ClientOpts) (*Client, error) {
 	}, nil
 }
 
+// Close releases any idle keep-alive connections the client holds to peers.
+// The http.Client was built from a freshly cloned http.Transport, so
+// CloseIdleConnections closes that transport's idle connections (and the TLS
+// contexts and sync.Pool buffers they own) instead of letting them sit around
+// until the transport's IdleConnTimeout fires.
+func (c *Client) Close() error {
+	c.httpClient.CloseIdleConnections()
+	return nil
+}
+
 // Write writes the given paths to the given endpoint.  If multiple paths are given, they are
 // merged into the first file at the destination.  This ensures we transfer the full batch
 // atomimcally.

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -31,7 +32,30 @@ type LogToFluentExporter struct {
 	destination        string
 	encoderPool        *sync.Pool
 
+	connMu sync.Mutex
+	dialer net.Dialer
+
+	// conn is the persistent connection to the destination, guarded by connMu.
+	// It is re-established on demand and reset to nil if a write fails.
 	conn net.Conn
+	// The background reader observes EOF without delaying every Send. This is
+	// best-effort detection; delivery confirmation requires protocol acks.
+	connection *fluentConnection
+}
+
+type fluentConnection struct {
+	conn   net.Conn
+	closed atomic.Bool
+}
+
+func (c *fluentConnection) watch() {
+	var buf [256]byte
+	for {
+		if _, err := c.conn.Read(buf[:]); err != nil {
+			c.closed.Store(true)
+			return
+		}
+	}
 }
 
 func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter, error) {
@@ -51,9 +75,12 @@ func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter,
 		return nil, fmt.Errorf("TagAttribute must be set")
 	}
 
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+
 	return &LogToFluentExporter{
 		destinationNetwork: destinationNetwork,
 		destination:        destination,
+		dialer:             dialer,
 		encoderPool: &sync.Pool{
 			New: func() any {
 				return newFluentEncoder(opts.TagAttribute)
@@ -67,7 +94,16 @@ func (e *LogToFluentExporter) Open(ctx context.Context) error {
 }
 
 func (e *LogToFluentExporter) Close() error {
-	return nil
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+
+	var err error
+	if e.conn != nil {
+		err = e.conn.Close()
+		e.conn = nil
+		e.connection = nil
+	}
+	return err
 }
 
 func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) error {
@@ -83,34 +119,44 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 		return nil // No logs to send
 	}
 
-	conn, err := e.dial(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+
+	if e.conn != nil && e.connection.closed.Load() {
+		_ = e.conn.Close()
+		e.conn = nil
+		e.connection = nil
 	}
-	defer conn.Close()
+	if e.conn == nil {
+		conn, err := e.dialer.DialContext(ctx, e.destinationNetwork, e.destination)
+		if err != nil {
+			return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
+		}
+		e.conn = conn
+		e.connection = &fluentConnection{conn: conn}
+		go e.connection.watch()
+	}
 
 	// Set write deadline
 	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetWriteDeadline(deadline)
+		e.conn.SetWriteDeadline(deadline)
 	} else {
-		conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		e.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	}
 
 	// Write the data
-	_, err = conn.Write(data)
+	_, err = e.conn.Write(data)
 	if err != nil {
+		// The connection is no longer usable; close it so the next Send reconnects.
+		e.conn.Close()
+		e.conn = nil
+		e.connection = nil
 		metrics.CollectorExporterFailed.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
 		return fmt.Errorf("failed to write to %s: %w", e.destination, err)
 	}
+
 	metrics.CollectorExporterSent.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
 	return nil
-}
-
-func (e *LogToFluentExporter) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	d.Timeout = 10 * time.Second // Adjust timeout as needed
-
-	return d.DialContext(ctx, e.destinationNetwork, e.destination)
 }
 
 func (e *LogToFluentExporter) Name() string {

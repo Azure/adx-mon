@@ -2,10 +2,12 @@ package cluster
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -339,4 +341,49 @@ func TestReplicator_SingleWorkerProcessesBothQueues(t *testing.T) {
 
 	require.Eventually(t, func() bool { return queued.IsRemoved() && realtime.IsRemoved() }, 5*time.Second, 10*time.Millisecond)
 	require.NoError(t, rep.Close())
+}
+
+// TestReplicator_Close_ ReleasesIdleConnections verifies that
+// replicator.Close() releases the idle keep-alive connections the transfer
+// client holds to peers. Without the fix, the connection established by a
+// transfer persists on the server side until the transport's 90s
+// IdleConnTimeout fires.
+func TestReplicator_Close_ReleasesIdleConnections(t *testing.T) {
+	var openConns atomic.Int64
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	ln := &trackingListener{Listener: raw, open: &openConns}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	server.Listener = ln
+	server.Start()
+	defer server.Close()
+
+	rep, err := NewReplicator(ReplicatorOpts{
+		Partitioner:            &fakePartitioner{owner: "node2", addr: server.URL},
+		Health:                 &fakeHealthChecker{healthy: true},
+		SegmentRemover:         &fakeSegmentRemover{},
+		Hostname:               "node1",
+		DisableGzip:            true,
+		MaxTransferConcurrency: 1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, rep.Open(t.Context()))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "DB_T_1.wal")
+	require.NoError(t, os.WriteFile(path, []byte("test"), 0o644))
+	batch := &Batch{Segments: []wal.SegmentInfo{{Path: path}}, batcher: &fakeBatcher{}}
+	rep.TransferQueue() <- batch
+	require.Eventually(t, batch.IsRemoved, 5*time.Second, 10*time.Millisecond)
+
+	// One keep-alive connection should be open to the peer.
+	require.Eventually(t, func() bool { return openConns.Load() == 1 }, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, rep.Close())
+
+	// Close must release the idle keep-alive connection.
+	require.Eventually(t, func() bool { return openConns.Load() == 0 }, 2*time.Second, 10*time.Millisecond,
+		"idle connection was not released by replicator.Close; it will leak until the transport's IdleConnTimeout fires")
 }

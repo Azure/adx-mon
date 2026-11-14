@@ -1,6 +1,10 @@
 package export
 
 import (
+	"context"
+	"fmt"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -8,6 +12,113 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tinylib/msgp/msgp"
 )
+
+// startFluentTestServer starts a TCP server on an ephemeral port that counts
+// the number of distinct accepted connections. Accepted connections are drained
+// in the background. If closeAfterFirstWrite is true, the connection is closed
+// after the first read (simulating a peer that drops the connection); the
+// server keeps accepting new connections so reconnection works.
+func startFluentTestServer(t *testing.T, closeAfterFirstWrite bool) (addr string, connections *int32) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+
+	connCount := int32(0)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			atomic.AddInt32(&connCount, 1)
+			go func() {
+				buf := make([]byte, 4096)
+				for {
+					_, err := conn.Read(buf)
+					if err != nil {
+						return
+					}
+					if closeAfterFirstWrite {
+						// Peer closed the connection after the first write.
+						_ = conn.Close()
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+	return ln.Addr().String(), &connCount
+}
+
+func newTestFluentBatch() *types.LogBatch {
+	batch := &types.LogBatch{}
+	batch.AddLiterals([]*types.LogLiteral{
+		{
+			Timestamp: timeOne,
+			Attributes: map[string]any{
+				"destTag": "tag1",
+			},
+			Body: map[string]any{
+				"key1": "value1",
+			},
+		},
+	})
+	freezeLogsInBatch(batch)
+	return batch
+}
+
+// TestLogToFluentExporterPersistentConnection verifies that the exporter
+// maintains a single persistent connection across multiple Send calls instead
+// of dialing a fresh connection for every batch.
+func TestLogToFluentExporterPersistentConnection(t *testing.T) {
+	addr, connections := startFluentTestServer(t, false)
+
+	exporter, err := NewLogToFluentExporter(LogToFluentExporterOpts{
+		Destination:  fmt.Sprintf("tcp://%s", addr),
+		TagAttribute: "destTag",
+	})
+	require.NoError(t, err)
+
+	const numBatches = 5
+	for i := 0; i < numBatches; i++ {
+		require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
+	}
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(connections) == 1 }, time.Second, time.Millisecond,
+		"expected a single persistent connection reused across %d sends", numBatches)
+
+	require.NoError(t, exporter.Close())
+}
+
+// TestLogToFluentExporterReconnect verifies that after the peer closes the
+// connection, the next Send dials a fresh connection and succeeds.
+func TestLogToFluentExporterReconnect(t *testing.T) {
+	addr, connections := startFluentTestServer(t, true)
+
+	exporter, err := NewLogToFluentExporter(LogToFluentExporterOpts{
+		Destination:  fmt.Sprintf("tcp://%s", addr),
+		TagAttribute: "destTag",
+	})
+	require.NoError(t, err)
+
+	// The server closes its side after receiving the first batch. Wait for
+	// the background reader to observe EOF, then Send must reconnect.
+	require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
+	require.Eventually(t, func() bool {
+		exporter.connMu.Lock()
+		defer exporter.connMu.Unlock()
+		return exporter.connection != nil && exporter.connection.closed.Load()
+	}, time.Second, time.Millisecond, "expected the peer EOF to be observed")
+	require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(connections) == 2 }, time.Second, time.Millisecond,
+		"expected the exporter to reconnect after peer EOF")
+
+	require.NoError(t, exporter.Close())
+}
 
 func TestNewLogToFluentExporter(t *testing.T) {
 	tests := []struct {

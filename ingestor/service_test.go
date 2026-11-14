@@ -10,6 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	kgzip "github.com/klauspost/compress/gzip"
 	"github.com/stretchr/testify/require"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
 )
@@ -227,21 +231,124 @@ func TestService_HandleTransfer_GzipEncodedBody(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gzipWriter.Close())
 
-	body := bytes.NewReader(compressedData.Bytes())
-	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
-	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		body := bytes.NewReader(compressedData.Bytes())
+		req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+		require.NoError(t, err)
+		req.Header.Set("Content-Encoding", "gzip")
+
+		q := req.URL.Query()
+		q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
+		req.URL.RawQuery = q.Encode()
+		resp := httptest.NewRecorder()
+		s.HandleTransfer(resp, req)
+		require.Equal(t, http.StatusAccepted, resp.Code)
+	}
+
+}
+
+func BenchmarkService_HandleTransferGzip(b *testing.B) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{importFn: func(_ string, body io.ReadCloser) (int, error) {
+			n, err := io.Copy(io.Discard, body)
+			return int(n), err
+		}},
+		databases: map[string]struct{}{"testdb": {}},
+	}
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	_, _ = zw.Write(bytes.Repeat([]byte("transfer data "), 1024))
+	if err := zw.Close(); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		req := httptest.NewRequest("POST", "/transfer?filename=testdb_testtable_testschema_1234567890.wal", bytes.NewReader(compressed.Bytes()))
+		req.Header.Set("Content-Encoding", "gzip")
+		resp := httptest.NewRecorder()
+		s.HandleTransfer(resp, req)
+		if resp.Code != http.StatusAccepted {
+			b.Fatalf("transfer failed: %d", resp.Code)
+		}
+	}
+}
+
+type blockingGzipBody struct {
+	r       *bytes.Reader
+	blocked chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingGzipBody) Read(p []byte) (int, error) {
+	if b.r.Len() != 0 {
+		return b.r.Read(p)
+	}
+	b.once.Do(func() { close(b.blocked) })
+	<-b.release
+	return 0, io.EOF
+}
+
+func (b *blockingGzipBody) Close() error { return nil }
+
+func TestServiceHandleTransferKeepsDecoderUntilDrainCompletes(t *testing.T) {
+	_, byteReader := any(transferGzipSentinel{bytes.NewReader(emptyTransferGzip)}).(io.ByteReader)
+	require.False(t, byteReader, "sentinel must reset gzip.Reader's buffered request reader")
+	oldProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(oldProcs)
+	oldGC := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(oldGC)
+	oldPool := transferGzipReaders
+	transferGzipReaders = &sync.Pool{New: func() any { return new(kgzip.Reader) }}
+	defer func() { transferGzipReaders = oldPool }()
+
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	_, _ = zw.Write([]byte("test data"))
+	require.NoError(t, zw.Close())
+	blocked := &blockingGzipBody{r: bytes.NewReader(compressed.Bytes()), blocked: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
+	defer release()
+	used := make(chan *kgzip.Reader, 1)
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{importFn: func(_ string, body io.ReadCloser) (int, error) {
+			used <- body.(*kgzip.Reader)
+			return 0, nil
+		}},
+		databases: map[string]struct{}{"testdb": {}},
+	}
+	req := httptest.NewRequest("POST", "/transfer?filename=testdb_testtable_testschema_1234567890.wal", blocked)
 	req.Header.Set("Content-Encoding", "gzip")
-
-	q := req.URL.Query()
-	q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
-	req.URL.RawQuery = q.Encode()
-
-	resp := httptest.NewRecorder()
-
-	s.HandleTransfer(resp, req)
-
-	require.Equal(t, http.StatusAccepted, resp.Code)
-
+	done := make(chan struct{})
+	go func() { s.HandleTransfer(httptest.NewRecorder(), req); close(done) }()
+	var active *kgzip.Reader
+	select {
+	case active = <-used:
+	case <-blocked.blocked:
+		t.Fatal("gzip reader waited for EOF before import")
+	case <-done:
+		t.Fatal("transfer finished before import")
+	case <-time.After(time.Second):
+		t.Fatal("transfer did not start")
+	}
+	select {
+	case <-blocked.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("transfer cleanup did not reach drain")
+	}
+	other := transferGzipReaders.Get().(*kgzip.Reader)
+	require.NotSame(t, active, other, "decoder must not be available while request cleanup uses it")
+	transferGzipReaders.Put(other)
+	release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("transfer did not finish cleanup")
+	}
 }
 
 func TestService_HandleTransfer_InvalidGzipEncoding(t *testing.T) {

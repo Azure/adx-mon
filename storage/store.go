@@ -792,6 +792,15 @@ func (s *LocalStore) Size() int64 {
 	return s.repository.Size() + s.inflightWriteBytes.Load() + s.Index().TotalSize()
 }
 
+// AdmissionUsage provides a single exact snapshot for health checks that need
+// both capacity dimensions. The second result is false without admission.
+func (s *LocalStore) AdmissionUsage() (wal.Usage, bool) {
+	if s.opts.Admission == nil {
+		return wal.Usage{}, false
+	}
+	return s.opts.Admission.Usage(), true
+}
+
 func (s *LocalStore) SegmentCount() int64 {
 	if s.opts.Admission != nil {
 		return s.opts.Admission.Usage().Segments

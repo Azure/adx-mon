@@ -19,7 +19,12 @@ type slowTableConnection struct {
 func (c *slowTableConnection) PrepareInsert(ctx context.Context, _, table string, _ []Column) (batchWriter, error) {
 	c.started <- table
 	if table == "A" {
-		<-ctx.Done()
+		// A wedged PrepareInsert is released by the per-batch upload timeout
+		// (or, at test shutdown, by the service context), never by worker exit.
+		select {
+		case <-ctx.Done():
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
 	return nil, context.DeadlineExceeded
 }
@@ -29,6 +34,9 @@ func TestClickHouseWorkersIsolateSlowTable(t *testing.T) {
 	original := newConnectionManager
 	newConnectionManager = func(Config) (connectionManager, error) { return conn, nil }
 	defer func() { newConnectionManager = original }()
+	origTimeout := batchUploadTimeout
+	t.Cleanup(func() { batchUploadTimeout = origTimeout })
+	batchUploadTimeout = 200 * time.Millisecond
 	up, err := NewUploader(Config{Database: "DB", DSN: "clickhouse://localhost"}, nil)
 	require.NoError(t, err)
 	u := up.(*uploader)

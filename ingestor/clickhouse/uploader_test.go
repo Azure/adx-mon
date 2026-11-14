@@ -224,6 +224,19 @@ type fakeConnection struct {
 func (f *fakeConnection) Ping(context.Context) error { return f.pingErr }
 func (f *fakeConnection) Close() error               { return nil }
 
+// Select is a no-op on the base fake; the schema-cache reconcile's
+// list-tables query falls through to this.  Tests that exercise reconcile
+// override it (see reconcilingConnection in uploader_reconcile_test.go).
+func (f *fakeConnection) Select(_ context.Context, dest any, _ string, args ...any) error {
+	if dest == nil {
+		return nil
+	}
+	if names, ok := dest.(*[]catalogTableName); ok && names != nil {
+		*names = nil
+	}
+	return nil
+}
+
 func (f *fakeConnection) Exec(_ context.Context, query string, args ...any) error {
 	if f.execErr != nil {
 		return f.execErr

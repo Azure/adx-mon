@@ -44,7 +44,7 @@ type Syncer struct {
 	// inflight serializes concurrent schema work for the same entity without
 	// blocking other tables behind a database-wide lock.
 	inflightMu sync.Mutex
-	inflight   map[string]*sync.Mutex
+	inflight   map[string]*mappingEntry
 
 	tables map[string]struct{}
 
@@ -223,9 +223,10 @@ func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.S
 		return nil
 	}
 
-	entry := s.mappingLock("table:" + table)
+	key := "table:" + table
+	entry := s.mappingLock(key)
 	entry.Lock()
-	defer entry.Unlock()
+	defer s.releaseMappingLock(key, entry)
 
 	s.mu.RLock()
 	_, exists = s.tables[table]
@@ -293,15 +294,21 @@ type streamingPolicyState struct {
 	retryAt time.Time
 }
 
+type mappingEntry struct {
+	sync.Mutex
+	users int // Includes holders and callers waiting to acquire the mutex.
+}
+
 // EnsureStreamingPolicy enables the streaming ingestion policy on table if it has not been enabled by this syncer.
 // Failures are cached for streamingPolicyRetryInterval so a missing permission does not issue a management command
 // for every batch.  A failure does not necessarily prevent streaming ingestion since the policy may be enabled at the
 // database level.
 func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error {
 	// Serialize only callers for this table so a stalled command does not block other tables.
-	entry := s.mappingLock("streaming:" + table)
+	key := "streaming:" + table
+	entry := s.mappingLock(key)
 	entry.Lock()
-	defer entry.Unlock()
+	defer s.releaseMappingLock(key, entry)
 
 	s.streamingMu.Lock()
 	state := s.streamingPolicies[table]
@@ -369,7 +376,7 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 	// Serialize only callers racing on this same mapping.
 	entry := s.mappingLock(name)
 	entry.Lock()
-	defer entry.Unlock()
+	defer s.releaseMappingLock(name, entry)
 
 	s.mu.RLock()
 	_, exists = s.mappings[name]
@@ -406,19 +413,44 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 	return name, nil
 }
 
-// mappingLock returns the lock guarding a single mapping name.
-func (s *Syncer) mappingLock(name string) *sync.Mutex {
+// reclaimInflight drops per-entity locks that are no longer held.  Without it
+// the map grows monotonically: every distinct table or mapping name that ever
+// flows through permanently allocates a mutex.  Safe to call at any time, e.g.
+// on each reconcileTables tick.
+func (s *Syncer) reclaimInflight() {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+
+	for name, m := range s.inflight {
+		if m.users == 0 {
+			delete(s.inflight, name)
+		}
+	}
+}
+
+// mappingLock registers a user before returning, so reclamation cannot split
+// waiters and holders across two mutexes for the same name.
+func (s *Syncer) mappingLock(name string) *mappingEntry {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
 	if s.inflight == nil {
-		s.inflight = make(map[string]*sync.Mutex)
+		s.inflight = make(map[string]*mappingEntry)
 	}
 	entry, ok := s.inflight[name]
 	if !ok {
-		entry = &sync.Mutex{}
+		entry = &mappingEntry{}
 		s.inflight[name] = entry
 	}
+	entry.users++
 	return entry
+}
+
+func (s *Syncer) releaseMappingLock(name string, entry *mappingEntry) {
+	// Unlock while still registered, then drop the reference under inflightMu.
+	entry.Unlock()
+	s.inflightMu.Lock()
+	entry.users--
+	s.inflightMu.Unlock()
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
@@ -514,6 +546,10 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 			return
 		case <-t.C:
 
+			// The per-entity lock map is reclaimed under its own lock; s.mu is
+			// not held here, so no deadlock with the prunes below.
+			s.reclaimInflight()
+
 			logger.Infof("Reconcile tables and ingestion mappings for database %s", s.database)
 			if err := func() error {
 				tables, err := s.loadTables(ctx)
@@ -522,6 +558,11 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 				}
 
 				if len(tables) == 0 {
+					// An empty successful listing means every cached policy is stale.
+					// A failed listing returns above and must not clear the cache.
+					s.streamingMu.Lock()
+					clear(s.streamingPolicies)
+					s.streamingMu.Unlock()
 					logger.Warnf("No tables found in database %s. Skipping ingestion mapping cleanup.", s.database)
 					return nil
 				}
@@ -557,6 +598,19 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 						delete(s.mappings, k)
 					}
 				}
+
+				// streamingPolicies is keyed by bare table name, so it prunes
+				// against tableExists directly.  It is guarded by streamingMu,
+				// not s.mu, so it is pruned under its own lock after s.mu is
+				// released by the deferred unlock.
+				s.streamingMu.Lock()
+				for tbl := range s.streamingPolicies {
+					if _, ok := tableExists[tbl]; !ok {
+						logger.Debugf("Removing cached streaming policy for table %s from %s", tbl, s.database)
+						delete(s.streamingPolicies, tbl)
+					}
+				}
+				s.streamingMu.Unlock()
 
 				return nil
 			}(); err != nil {
