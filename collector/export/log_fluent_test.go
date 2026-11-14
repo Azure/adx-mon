@@ -104,16 +104,18 @@ func TestLogToFluentExporterReconnect(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// A write failure resets the connection; the next Send reconnects.
+	// The server closes its side after receiving the first batch. Wait for
+	// the background reader to observe EOF, then Send must reconnect.
 	require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
-	exporter.connMu.Lock()
-	require.NoError(t, exporter.conn.Close()) // Deterministic failed write.
-	exporter.connMu.Unlock()
-	require.Error(t, exporter.Send(context.Background(), newTestFluentBatch()))
+	require.Eventually(t, func() bool {
+		exporter.connMu.Lock()
+		defer exporter.connMu.Unlock()
+		return exporter.connection != nil && exporter.connection.closed.Load()
+	}, time.Second, time.Millisecond, "expected the peer EOF to be observed")
 	require.NoError(t, exporter.Send(context.Background(), newTestFluentBatch()))
 
 	require.Eventually(t, func() bool { return atomic.LoadInt32(connections) == 2 }, time.Second, time.Millisecond,
-		"expected the exporter to reconnect after a failed write")
+		"expected the exporter to reconnect after peer EOF")
 
 	require.NoError(t, exporter.Close())
 }
