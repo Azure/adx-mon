@@ -877,8 +877,6 @@ func TestExecutor_Close_WaitsForWorkerGoroutine(t *testing.T) {
 }
 
 func TestExecutor_Close_WaitsForPeriodicSync(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-
 	store := &countingRuleStore{rules: []*rules.Rule{{
 		Namespace: "ns", Name: "rule",
 		Database: "db", Query: "Table | take 1",
@@ -886,41 +884,60 @@ func TestExecutor_Close_WaitsForPeriodicSync(t *testing.T) {
 	}}}
 
 	e := NewExecutor(ExecutorOpts{
-		Clock:       clk,
 		Region:      "eastus",
 		Concurrency: 2,
 		RuleStore:   store,
 		KustoClient: &fakeKustoClient{},
 		AlertCli:    &fakeAlerter{},
 	})
+	ticks := make(chan time.Time)
+	e.syncTick = ticks
 	require.NoError(t, e.Open(context.Background()))
+	baseline := store.Count()
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	store.mu.Lock()
+	store.entered = entered
+	store.gate = gate
+	store.mu.Unlock()
 
-	// One tick triggers one more syncWorkers call from periodicSync.
-	clk.Step(10 * time.Second)
-	require.Eventually(t, func() bool {
-		return store.Count() == 2
-	}, time.Second, 10*time.Millisecond, "expected 2 sync calls after one tick")
-
-	// Close must wait for periodicSync to exit.
-	require.NoError(t, e.Close())
-
-	// After Close returns, no further ticks may reach syncWorkers. Before the
-	// fix, Close() returns immediately (wg no-op) while periodicSync is still
-	// running, so advancing the clock triggers another sync call.
-	clk.Step(30 * time.Second)
-	require.Equal(t, 2, store.Count(), "periodicSync must not sync after Close returns")
+	ticks <- time.Now()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(gate)
+		t.Fatal("periodic sync never entered Rules")
+	}
+	returned := make(chan error, 1)
+	go func() { returned <- e.Close() }()
+	select {
+	case err := <-returned:
+		close(gate)
+		t.Fatalf("Close returned before periodic sync finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gate)
+	require.NoError(t, <-returned)
+	require.Equal(t, baseline+1, store.Count())
 }
 
 type countingRuleStore struct {
-	mu    sync.Mutex
-	count int
-	rules []*rules.Rule
+	mu      sync.Mutex
+	count   int
+	rules   []*rules.Rule
+	entered chan struct{}
+	gate    chan struct{}
 }
 
 func (c *countingRuleStore) Rules() []*rules.Rule {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.count++
+	entered, gate := c.entered, c.gate
+	c.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		<-gate
+	}
 	return c.rules
 }
 

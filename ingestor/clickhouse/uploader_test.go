@@ -231,7 +231,7 @@ func (f *fakeConnection) Select(_ context.Context, dest any, _ string, args ...a
 	if dest == nil {
 		return nil
 	}
-	if names, ok := dest.(*[]string); ok && names != nil {
+	if names, ok := dest.(*[]catalogTableName); ok && names != nil {
 		*names = nil
 	}
 	return nil

@@ -44,7 +44,7 @@ type Syncer struct {
 	// inflight serializes concurrent schema work for the same entity without
 	// blocking other tables behind a database-wide lock.
 	inflightMu sync.Mutex
-	inflight   map[string]*sync.Mutex
+	inflight   map[string]*mappingEntry
 
 	tables map[string]struct{}
 
@@ -223,9 +223,10 @@ func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.S
 		return nil
 	}
 
-	entry := s.mappingLock("table:" + table)
+	key := "table:" + table
+	entry := s.mappingLock(key)
 	entry.Lock()
-	defer entry.Unlock()
+	defer s.releaseMappingLock(key, entry)
 
 	s.mu.RLock()
 	_, exists = s.tables[table]
@@ -293,15 +294,21 @@ type streamingPolicyState struct {
 	retryAt time.Time
 }
 
+type mappingEntry struct {
+	sync.Mutex
+	users int // Includes holders and callers waiting to acquire the mutex.
+}
+
 // EnsureStreamingPolicy enables the streaming ingestion policy on table if it has not been enabled by this syncer.
 // Failures are cached for streamingPolicyRetryInterval so a missing permission does not issue a management command
 // for every batch.  A failure does not necessarily prevent streaming ingestion since the policy may be enabled at the
 // database level.
 func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error {
 	// Serialize only callers for this table so a stalled command does not block other tables.
-	entry := s.mappingLock("streaming:" + table)
+	key := "streaming:" + table
+	entry := s.mappingLock(key)
 	entry.Lock()
-	defer entry.Unlock()
+	defer s.releaseMappingLock(key, entry)
 
 	s.streamingMu.Lock()
 	state := s.streamingPolicies[table]
@@ -369,7 +376,7 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 	// Serialize only callers racing on this same mapping.
 	entry := s.mappingLock(name)
 	entry.Lock()
-	defer entry.Unlock()
+	defer s.releaseMappingLock(name, entry)
 
 	s.mu.RLock()
 	_, exists = s.mappings[name]
@@ -414,35 +421,36 @@ func (s *Syncer) reclaimInflight() {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
 
-	// TryLock on a free mutex proves nobody is using it: the next caller for
-	// that name gets a fresh mutex, and two concurrent callers can never both
-	// be blocked on the deleted one — if one holds it, TryLock fails and the
-	// entry is kept.  Holding inflightMu for the whole loop is what makes that
-	// reasoning airtight: mappingLock for the same name returns the same
-	// instance only through this map, so it cannot interleave here.  A
-	// successful TryLock leaves the mutex locked, so unlock it before the
-	// delete.
 	for name, m := range s.inflight {
-		if m.TryLock() {
-			m.Unlock()
+		if m.users == 0 {
 			delete(s.inflight, name)
 		}
 	}
 }
 
-// mappingLock returns the lock guarding a single mapping name.
-func (s *Syncer) mappingLock(name string) *sync.Mutex {
+// mappingLock registers a user before returning, so reclamation cannot split
+// waiters and holders across two mutexes for the same name.
+func (s *Syncer) mappingLock(name string) *mappingEntry {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
 	if s.inflight == nil {
-		s.inflight = make(map[string]*sync.Mutex)
+		s.inflight = make(map[string]*mappingEntry)
 	}
 	entry, ok := s.inflight[name]
 	if !ok {
-		entry = &sync.Mutex{}
+		entry = &mappingEntry{}
 		s.inflight[name] = entry
 	}
+	entry.users++
 	return entry
+}
+
+func (s *Syncer) releaseMappingLock(name string, entry *mappingEntry) {
+	// Unlock while still registered, then drop the reference under inflightMu.
+	entry.Unlock()
+	s.inflightMu.Lock()
+	entry.users--
+	s.inflightMu.Unlock()
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
@@ -550,6 +558,11 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 				}
 
 				if len(tables) == 0 {
+					// An empty successful listing means every cached policy is stale.
+					// A failed listing returns above and must not clear the cache.
+					s.streamingMu.Lock()
+					clear(s.streamingPolicies)
+					s.streamingMu.Unlock()
 					logger.Warnf("No tables found in database %s. Skipping ingestion mapping cleanup.", s.database)
 					return nil
 				}

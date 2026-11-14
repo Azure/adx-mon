@@ -79,6 +79,12 @@ func TestWorker_BatchContextCancelledOnShutdown(t *testing.T) {
 	wg.Go(func() {
 		w.RunWaitingForStorage(stop)
 	})
+	t.Cleanup(func() {
+		cancelStop()
+		close(sink.done)
+		close(input)
+		wg.Wait()
+	})
 
 	batch := types.LogBatchPool.Get()
 	log := types.LogPool.Get()
@@ -104,4 +110,21 @@ func TestWorker_BatchContextCancelledOnShutdown(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return sink.NumClosed() > 0 }, 5*time.Second, 10*time.Millisecond,
 		"sink was not cancelled on shutdown: the per-batch context did not derive from the stop context")
+}
+
+func TestWorker_DrainsFinalBatchAfterStop(t *testing.T) {
+	input := make(chan *types.LogBatch, 1)
+	sink := &ctxBlockingSink{name: "drain", done: make(chan struct{}), entered: make(chan struct{})}
+	close(sink.done)
+	w := &worker{SourceName: "drain", Input: input, Sinks: []types.Sink{sink}, BatchTimeout: time.Second}
+	stop, cancel := context.WithCancel(context.Background())
+	cancel()
+	batch := types.LogBatchPool.Get()
+	log := types.LogPool.Get()
+	log.SetBodyValue("test", "last batch")
+	batch.Logs = append(batch.Logs, log)
+	input <- batch
+	close(input)
+	w.RunWaitingForStorage(stop)
+	require.Zero(t, sink.NumClosed(), "drained batch must not start with a canceled context")
 }

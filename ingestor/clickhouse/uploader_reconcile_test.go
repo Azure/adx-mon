@@ -28,11 +28,13 @@ func (c *reconcilingConnection) Select(ctx context.Context, dest any, query stri
 	c.mu.Unlock()
 
 	if strings.Contains(query, "system.tables") {
-		names, ok := dest.(*[]string)
+		names, ok := dest.(*[]catalogTableName)
 		if !ok {
 			return context.DeadlineExceeded
 		}
-		*names = append([]string(nil), c.existingTables...)
+		for _, name := range c.existingTables {
+			*names = append(*names, catalogTableName{Name: name})
+		}
 		return nil
 	}
 	return c.fakeConnection.Select(ctx, dest, query, args...)
@@ -109,4 +111,26 @@ func TestUploaderReconcileQueriesSystemTables(t *testing.T) {
 	_, stillCached := impl.schemas["gone"]
 	impl.schemaMu.Unlock()
 	require.False(t, stillCached, "schema must be evicted when the table is no longer present")
+}
+
+func TestUploaderReconcileKeepsDefaultSchemasAndEvictsSyncerCache(t *testing.T) {
+	conn := &reconcilingConnection{existingTables: []string{"metrics_samples", "otel_logs"}}
+	withFakeConnectionManager(t, conn)
+	u, err := NewUploader(Config{Database: "metricsdb", DSN: "clickhouse://localhost"}, nil)
+	require.NoError(t, err)
+	impl := u.(*uploader)
+	impl.syncer.mu.Lock()
+	impl.syncer.ensured[schemaCacheKey("dropped", "v1")] = struct{}{}
+	impl.syncer.mu.Unlock()
+	impl.schemaMu.Lock()
+	impl.schemas["dropped@v1"] = Schema{Table: "dropped", Columns: []Column{{Name: "X", Type: "String"}}}
+	impl.schemaMu.Unlock()
+
+	impl.reconcileSchemas(context.Background())
+	require.Contains(t, impl.Schemas(), "metrics")
+	require.Contains(t, impl.Schemas(), "logs")
+	require.NotContains(t, impl.Schemas(), "dropped@v1")
+	impl.syncer.mu.Lock()
+	defer impl.syncer.mu.Unlock()
+	require.NotContains(t, impl.syncer.ensured, schemaCacheKey("dropped", "v1"))
 }

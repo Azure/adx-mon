@@ -15,10 +15,13 @@ func TestInflightReclaimKeepsHeldLocks(t *testing.T) {
 
 	kept := s.mappingLock("held")
 	kept.Lock()
-	defer kept.Unlock()
+	defer s.releaseMappingLock("held", kept)
 
 	for i := range 5 {
-		s.mappingLock(fmt.Sprintf("free-%d", i))
+		name := fmt.Sprintf("free-%d", i)
+		entry := s.mappingLock(name)
+		entry.Lock()
+		s.releaseMappingLock(name, entry)
 	}
 
 	_, ok := s.inflight["held"]
@@ -40,7 +43,10 @@ func TestInflightReclaimBoundsGrowth(t *testing.T) {
 
 	const n = 1000
 	for i := range n {
-		s.mappingLock(fmt.Sprintf("table:entity-%04d", i))
+		name := fmt.Sprintf("table:entity-%04d", i)
+		entry := s.mappingLock(name)
+		entry.Lock()
+		s.releaseMappingLock(name, entry)
 	}
 
 	s.reclaimInflight()
@@ -51,9 +57,30 @@ func TestInflightReclaimBoundsGrowth(t *testing.T) {
 	// Repeated cycles of new names must not accumulate locks.
 	for round := range 3 {
 		for i := range n {
-			s.mappingLock(fmt.Sprintf("round-%d-entity-%04d", round, i))
+			name := fmt.Sprintf("round-%d-entity-%04d", round, i)
+			entry := s.mappingLock(name)
+			entry.Lock()
+			s.releaseMappingLock(name, entry)
 		}
 		s.reclaimInflight()
 		require.Empty(t, s.inflight, "idle per-entity locks must not accumulate across reclaim cycles")
 	}
+}
+
+func TestInflightReclaimKeepsWaiters(t *testing.T) {
+	s := NewSyncer(&fakeKustoMgmt{}, "db", schema.SchemaMapping{}, PromMetrics)
+	first := s.mappingLock("same")
+	first.Lock()
+	second := s.mappingLock("same") // Registered but not yet locked.
+	s.reclaimInflight()
+	require.Same(t, first, s.mappingLock("same"), "a waiter must not be separated from later callers")
+	// Balance the third reference and release both original users.
+	s.releaseMappingLock("same", first)
+	second.Lock()
+	s.releaseMappingLock("same", second)
+	third := s.inflight["same"]
+	third.Lock()
+	s.releaseMappingLock("same", third)
+	s.reclaimInflight()
+	require.Empty(t, s.inflight)
 }

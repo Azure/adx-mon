@@ -1,6 +1,7 @@
 package gzip
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"testing"
@@ -52,7 +53,8 @@ func TestCompressReaderCloseStopsGoroutine(t *testing.T) {
 
 	for time.Now().Before(deadline) {
 		<-tick.C
-		if runtime.NumGoroutine() <= baseline {
+		_, fileErr := f.Stat()
+		if runtime.NumGoroutine() <= baseline && errors.Is(fileErr, os.ErrClosed) {
 			stableFor++
 			if stableFor >= stablePolls {
 				return
@@ -61,5 +63,5 @@ func TestCompressReaderCloseStopsGoroutine(t *testing.T) {
 			stableFor = 0
 		}
 	}
-	t.Fatalf("compression goroutine did not exit after Close: goroutine count never returned to baseline %d within deadline", baseline)
+	t.Fatalf("compression goroutine/file not released after Close: baseline goroutines=%d", baseline)
 }

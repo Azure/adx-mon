@@ -3,7 +3,6 @@ package export
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -103,10 +102,7 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 	e.connMu.Lock()
 	defer e.connMu.Unlock()
 
-	if e.conn == nil || e.peerClosed() {
-		if e.conn != nil {
-			e.conn.Close()
-		}
+	if e.conn == nil {
 		conn, err := e.dialer.DialContext(ctx, e.destinationNetwork, e.destination)
 		if err != nil {
 			return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
@@ -133,40 +129,6 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 
 	metrics.CollectorExporterSent.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
 	return nil
-}
-
-// peerClosed reports whether the persistent connection has been closed by the
-// peer. It performs a non-blocking liveness read with a short deadline, so it
-// returns quickly whether the connection is still healthy (no data arrives →
-// deadline exceeded) or the peer has closed it (EOF → reconnect). It returns
-// true when there is no connection or when the read observes a peer-initiated
-// close or a connection error.
-func (e *LogToFluentExporter) peerClosed() bool {
-	if e.conn == nil {
-		return true
-	}
-	buf := make([]byte, 16)
-	e.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-	n, err := e.conn.Read(buf)
-	if err == nil && n > 0 {
-		// The peer sent data; the connection is still open. Discard it so a
-		// later send does not block on it.
-		return false
-	}
-	if err != nil {
-		// An I/O timeout means no data arrived within the window, which is
-		// the normal case for an idle connection: it is still open.
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return false
-		}
-		// Any other read error (including io.EOF, connection reset, or the
-		// connection being closed) means the peer closed the connection;
-		// treat it as closed so the next send reconnects.
-		return true
-	}
-	// err == nil and n == 0: the peer closed the connection (EOF).
-	return true
 }
 
 func (e *LogToFluentExporter) Name() string {

@@ -302,8 +302,8 @@ func (r *eventBatcher) pruneDead(live map[string]struct{}) {
 			delete(r.backlog, p)
 		}
 	}
-	for p := range r.outstanding {
-		if _, ok := live[p]; !ok {
+	for p, count := range r.outstanding {
+		if _, ok := live[p]; !ok && count <= 0 {
 			delete(r.outstanding, p)
 		}
 	}

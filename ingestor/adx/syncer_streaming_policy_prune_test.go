@@ -63,3 +63,19 @@ func TestReconcilePrunesStreamingPoliciesForDroppedTables(t *testing.T) {
 	s.streamingMu.Unlock()
 	require.Equal(t, 0, post, "streamingPolicies must hold no entries for dropped tables after reconcile")
 }
+
+func TestReconcilePrunesStreamingPoliciesWhenAllTablesDropped(t *testing.T) {
+	defer func(d time.Duration) { reconcileInterval = d }(reconcileInterval)
+	reconcileInterval = 10 * time.Millisecond
+	s := NewSyncer(&showTablesMgmt{}, "DB", schema.DefaultMetricsMapping, PromMetrics)
+	s.setStreamingPolicy("gone", streamingPolicyState{enabled: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	s.wg.Add(1)
+	go s.reconcileTables(ctx)
+	defer func() { cancel(); s.wg.Wait() }()
+	require.Eventually(t, func() bool {
+		s.streamingMu.Lock()
+		defer s.streamingMu.Unlock()
+		return len(s.streamingPolicies) == 0
+	}, 3*time.Second, time.Millisecond)
+}

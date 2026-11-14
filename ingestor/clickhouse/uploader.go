@@ -225,15 +225,19 @@ func (u *uploader) reconcileSchemas(ctx context.Context) {
 
 // listTables returns the set of table names present in the uploader's database.
 // It queries ClickHouse's system.tables catalog for the configured database.
+type catalogTableName struct {
+	Name string `ch:"name"`
+}
+
 func (u *uploader) listTables(ctx context.Context) (map[string]struct{}, error) {
 	query := "SELECT name FROM system.tables WHERE database = " + quoteLiteral(u.cfg.Database)
-	var names []string
+	var names []catalogTableName
 	if err := u.conn.Select(ctx, &names, query); err != nil {
 		return nil, err
 	}
 	set := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		set[name] = struct{}{}
+	for _, row := range names {
+		set[row.Name] = struct{}{}
 	}
 	return set, nil
 }
@@ -246,8 +250,8 @@ func (u *uploader) evictSchemasForDroppedTables(existingTables map[string]struct
 	u.schemaMu.Lock()
 	defer u.schemaMu.Unlock()
 
-	for key := range u.schemas {
-		table, _, _ := strings.Cut(key, "@")
+	for key, schema := range u.schemas {
+		table := schema.Table
 		if _, ok := existingTables[table]; !ok {
 			if u.log != nil {
 				u.log.Debug("evicting cached schema for dropped table", slog.String("table", table))
@@ -255,6 +259,16 @@ func (u *uploader) evictSchemasForDroppedTables(existingTables map[string]struct
 			delete(u.schemas, key)
 		}
 	}
+	// EnsureTable and reconciliation both run under schemaMu, so no in-flight
+	// ensure can repopulate either cache with a dropped table after eviction.
+	u.syncer.mu.Lock()
+	for key := range u.syncer.ensured {
+		table, _, _ := strings.Cut(key, "@")
+		if _, ok := existingTables[table]; !ok {
+			delete(u.syncer.ensured, key)
+		}
+	}
+	u.syncer.mu.Unlock()
 }
 
 func (u *uploader) worker(_ int) {
@@ -277,9 +291,9 @@ func (u *uploader) worker(_ int) {
 			// cancels the worker's exit path nor a sibling batch, and shutdown
 			// (Close) does not cancel an in-flight batch's bounded context.
 			uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), batchUploadTimeout)
-			defer cancel()
-
-			if err := u.processBatch(uploadCtx, batch); err != nil {
+			err := u.processBatch(uploadCtx, batch)
+			cancel()
+			if err != nil {
 				if u.log != nil {
 					u.log.Error("failed to upload batch", slog.String("prefix", batch.Prefix), slog.String("error", err.Error()))
 				}
@@ -574,12 +588,11 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 func (u *uploader) ensureSchema(ctx context.Context, table, schemaID string, mapping schema.SchemaMapping) (Schema, error) {
 	key := schemaCacheKey(table, schemaID)
 
-	u.schemaMu.RLock()
+	u.schemaMu.Lock()
+	defer u.schemaMu.Unlock()
 	if existing, ok := u.schemas[key]; ok {
-		u.schemaMu.RUnlock()
 		return existing, nil
 	}
-	u.schemaMu.RUnlock()
 
 	cols := convertToColumns(mapping)
 	schemaCopy := Schema{Table: table, Columns: make([]Column, len(cols))}
@@ -587,13 +600,6 @@ func (u *uploader) ensureSchema(ctx context.Context, table, schemaID string, map
 
 	if err := u.syncer.EnsureTable(ctx, table, schemaID, schemaCopy.Columns); err != nil {
 		return Schema{}, err
-	}
-
-	u.schemaMu.Lock()
-	defer u.schemaMu.Unlock()
-
-	if existing, ok := u.schemas[key]; ok {
-		return existing, nil
 	}
 
 	u.schemas[key] = schemaCopy
