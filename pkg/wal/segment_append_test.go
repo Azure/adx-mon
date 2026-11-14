@@ -3,6 +3,7 @@ package wal
 import (
 	"context"
 	"encoding/binary"
+	"io"
 	"math/rand"
 	"os"
 	"sync"
@@ -77,6 +78,47 @@ func TestSegmentAppendRejectsInvalidHeader(t *testing.T) {
 	_, err := s.Append(context.Background(), []byte("not a segment"))
 	require.Error(t, err)
 	require.EqualValues(t, 8, s.Size())
+}
+
+func TestSegmentAppendRejectsShortHeadersLikeIterator(t *testing.T) {
+	s := newAppendSegment(t)
+	for n := 0; n < len(segmentMagic); n++ {
+		_, err := s.Append(context.Background(), segmentMagic[:n])
+		want := io.ErrUnexpectedEOF
+		if n == 0 {
+			want = io.EOF
+		}
+		require.ErrorIs(t, err, want)
+	}
+}
+
+func BenchmarkSegmentAppend(b *testing.B) {
+	src, err := NewSegment(b.TempDir(), "DB_Src")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := src.Write(context.Background(), []byte("sample transfer")); err != nil {
+		b.Fatal(err)
+	}
+	if err := src.Close(); err != nil {
+		b.Fatal(err)
+	}
+	data, err := os.ReadFile(src.Path())
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst, err := NewSegment(b.TempDir(), "DB_Dst")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer dst.Close()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := dst.Append(context.Background(), data); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestSegmentAppendRejectsCorruptBlock(t *testing.T) {
