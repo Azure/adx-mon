@@ -227,21 +227,48 @@ func TestService_HandleTransfer_GzipEncodedBody(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gzipWriter.Close())
 
-	body := bytes.NewReader(compressedData.Bytes())
-	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
-	require.NoError(t, err)
-	req.Header.Set("Content-Encoding", "gzip")
+	for i := 0; i < 3; i++ {
+		body := bytes.NewReader(compressedData.Bytes())
+		req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+		require.NoError(t, err)
+		req.Header.Set("Content-Encoding", "gzip")
 
-	q := req.URL.Query()
-	q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
-	req.URL.RawQuery = q.Encode()
+		q := req.URL.Query()
+		q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
+		req.URL.RawQuery = q.Encode()
+		resp := httptest.NewRecorder()
+		s.HandleTransfer(resp, req)
+		require.Equal(t, http.StatusAccepted, resp.Code)
+	}
 
-	resp := httptest.NewRecorder()
+}
 
-	s.HandleTransfer(resp, req)
-
-	require.Equal(t, http.StatusAccepted, resp.Code)
-
+func BenchmarkService_HandleTransferGzip(b *testing.B) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{importFn: func(_ string, body io.ReadCloser) (int, error) {
+			n, err := io.Copy(io.Discard, body)
+			return int(n), err
+		}},
+		databases: map[string]struct{}{"testdb": {}},
+	}
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	_, _ = zw.Write(bytes.Repeat([]byte("transfer data "), 1024))
+	if err := zw.Close(); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		req := httptest.NewRequest("POST", "/transfer?filename=testdb_testtable_testschema_1234567890.wal", bytes.NewReader(compressed.Bytes()))
+		req.Header.Set("Content-Encoding", "gzip")
+		resp := httptest.NewRecorder()
+		s.HandleTransfer(resp, req)
+		if resp.Code != http.StatusAccepted {
+			b.Fatalf("transfer failed: %d", resp.Code)
+		}
+	}
 }
 
 func TestService_HandleTransfer_InvalidGzipEncoding(t *testing.T) {
