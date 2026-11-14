@@ -77,6 +77,8 @@ type Alerter struct {
 
 type KustoClient interface{ Endpoint() string }
 
+var httpShutdownGrace = 5 * time.Second
+
 type lintClientFactory func(opts *AlerterOpts) (engine.Client, error)
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
@@ -273,29 +275,33 @@ func (l *Alerter) httpMux() *http.ServeMux {
 
 func (l *Alerter) Close() error {
 	l.closeFn()
+	var errs []error
 
 	// Shut down the HTTP server so the listener stops accepting connections and
 	// the bound port is released before the other components are torn down.
 	if l.httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownGrace)
 		if err := l.httpServer.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("failed to shut down http server: %w", err)
+			errs = append(errs, fmt.Errorf("failed to shut down http server: %w", err))
+			if closeErr := l.httpServer.Close(); closeErr != nil {
+				errs = append(errs, fmt.Errorf("force-close http server: %w", closeErr))
+			}
 		}
+		cancel()
 	}
 
 	if err := l.executor.Close(); err != nil {
-		return fmt.Errorf("failed to close executor: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close executor: %w", err))
 	}
 	if err := l.metrics.Close(); err != nil {
-		return fmt.Errorf("failed to close metrics service: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close metrics service: %w", err))
 	}
 
 	if err := l.ruleStore.Close(); err != nil {
-		return fmt.Errorf("failed to close rule store: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close rule store: %w", err))
 	}
 
 	// Wait for the listener and health-check ticker goroutines to finish.
 	l.goroutines.Wait()
-	return nil
+	return errors.Join(errs...)
 }
