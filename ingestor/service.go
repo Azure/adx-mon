@@ -1,6 +1,7 @@
 package ingestor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/adx"
@@ -35,6 +37,12 @@ import (
 // This is a subset of the invalid characters for Kusto entities and segment files naming patterns.  This should
 // match tranform.Normalize.
 var invalidEntityCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
+
+var transferGzipReaders = sync.Pool{New: func() any { return new(gzip.Reader) }}
+
+// A valid empty gzip stream lets Reset release references to the previous
+// request while retaining the decoder's buffers for reuse.
+var emptyTransferGzip = []byte{0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff, 1, 0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0}
 
 type Interface interface {
 	Open(ctx context.Context) error
@@ -647,14 +655,25 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	// If the request is gzipped, create a gzip reader to decompress the body.
 	if r.Header.Get("Content-Encoding") == "gzip" {
-		gzipReader, err := gzip.NewReader(body)
+		gzipReader := transferGzipReaders.Get().(*gzip.Reader)
+		err := gzipReader.Reset(body)
 		if err != nil {
+			// Reset can fail after partially initializing the decompressor. Do
+			// not pool a reader whose state may be incomplete.
 			logger.Errorf("Failed to import: create gzip reader: %s from=%s requestId=%s", err.Error(), originalIP, requestId)
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 			http.Error(w, "Invalid gzip encoding", http.StatusBadRequest)
 			return
 		}
-		defer gzipReader.Close()
+		defer func() {
+			_ = gzipReader.Close()
+			// Reset clears references to the request body and header fields while
+			// retaining the decompressor for the next transfer.
+			if err := gzipReader.Reset(bytes.NewReader(emptyTransferGzip)); err != nil {
+				return
+			}
+			transferGzipReaders.Put(gzipReader)
+		}()
 		body = gzipReader
 	}
 
@@ -842,6 +861,17 @@ func (s *Service) validateFileName(filename string) string {
 type queueSizerAdapter struct {
 	store   *storage.LocalStore
 	batcher cluster.Batcher
+}
+
+// QueueUsage reads admission accounting once for both health thresholds.
+func (q *queueSizerAdapter) QueueUsage() (segments, bytes int64) {
+	if q.store != nil {
+		u, ok := q.store.AdmissionUsage()
+		if ok {
+			return u.Segments, u.Bytes
+		}
+	}
+	return q.SegmentsTotal(), q.SegmentsSize()
 }
 
 func (q *queueSizerAdapter) TransferQueueSize() int {

@@ -102,3 +102,21 @@ func BenchmarkAdmissionStatusDuringWrites(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkAdmissionUsage(b *testing.B) {
+	for _, count := range []int{1, 64, 256} {
+		b.Run(fmt.Sprintf("tables=%d", count), func(b *testing.B) {
+			a := benchAdmission(count)
+			for i := range count {
+				a.Restore(fmt.Sprintf("/w/%d.wal", i), Destination{Database: "DB", Table: fmt.Sprintf("T%d", i)}, 1024)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if a.Usage().Segments != int64(count) {
+					b.Fatal("incorrect usage")
+				}
+			}
+		})
+	}
+}

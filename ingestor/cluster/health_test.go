@@ -66,6 +66,23 @@ func TestHealth_IsHealthy(t *testing.T) {
 
 }
 
+type snapshotQueueSizer struct {
+	fakeQueueSizer
+	reads int
+}
+
+func (s *snapshotQueueSizer) QueueUsage() (int64, int64) {
+	s.reads++
+	return s.segmentsTotal, s.segmentsSize
+}
+
+func TestHealth_UsesSingleUsageSnapshot(t *testing.T) {
+	q := &snapshotQueueSizer{fakeQueueSizer: fakeQueueSizer{segmentsTotal: 10, segmentsSize: 1024}}
+	h := cluster.NewHealth(cluster.HealthOpts{QueueSizer: q, MaxSegmentCount: 10, MaxDiskUsage: 2048})
+	require.False(t, h.IsHealthy())
+	require.Equal(t, 1, q.reads)
+}
+
 type fakeQueueSizer struct {
 	uploadQueueSize   int
 	transferQueueSize int

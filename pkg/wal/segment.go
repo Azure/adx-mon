@@ -370,8 +370,14 @@ var appendLockWait = 100 * time.Millisecond
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
 func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 	// Check the segment header.
-	if _, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf))); err != nil {
-		return 0, err
+	if len(buf) < len(segmentMagic) {
+		if len(buf) == 0 {
+			return 0, io.EOF
+		}
+		return 0, io.ErrUnexpectedEOF
+	}
+	if !bytes.Equal(buf[:6], segmentMagic[:6]) {
+		return 0, ErrInvalidWALSegment
 	}
 
 	// Verify the blocks before appending them.  Bytes after the last whole block, which Verify ignores, are dropped

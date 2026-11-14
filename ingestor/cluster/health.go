@@ -102,8 +102,13 @@ func (h *Health) IsHealthy() bool {
 }
 
 func (h *Health) UnhealthyReason() string {
-	segmentsTotal := h.QueueSizer.SegmentsTotal()
-	segmentsSize := h.QueueSizer.SegmentsSize()
+	var segmentsTotal, segmentsSize int64
+	if q, ok := h.QueueSizer.(interface{ QueueUsage() (int64, int64) }); ok {
+		segmentsTotal, segmentsSize = q.QueueUsage()
+	} else {
+		segmentsTotal = h.QueueSizer.SegmentsTotal()
+		segmentsSize = h.QueueSizer.SegmentsSize()
+	}
 
 	if h.opts.MaxSegmentCount > 0 && segmentsTotal >= h.opts.MaxSegmentCount {
 		return ReasonMaxSegmentsExceeded

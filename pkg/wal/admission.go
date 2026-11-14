@@ -500,14 +500,10 @@ func (a *Admission) Usage() Usage {
 		return Usage{}
 	}
 	a.mu.RLock()
-	tables := make([]*TableBudget, 0, len(a.tables))
-	for _, t := range a.tables {
-		tables = append(tables, t)
-	}
-	a.mu.RUnlock()
+	defer a.mu.RUnlock()
 
 	var total Usage
-	for _, t := range tables {
+	for _, t := range a.tables {
 		t.mu.Lock()
 		total.Bytes += t.usage.Bytes
 		total.Segments += t.usage.Segments
