@@ -298,6 +298,31 @@ func TestParseAlertResult_RuleDestinationTakesPrecedence(t *testing.T) {
 	got, err := ParseAlertResult(qc, row)
 	require.NoError(t, err)
 	require.Equal(t, "rule destination", got.Destination)
+	require.Nil(t, got.Destinations)
+}
+
+func TestParseAlertResult_ExplicitDestinationsTakesPrecedenceOverRecipient(t *testing.T) {
+	qc := &QueryContext{
+		Rule: &rules.Rule{
+			Namespace:               "monitoring",
+			Name:                    "multi",
+			Destinations:            []string{"pagerduty://ops", "icm://oncall"},
+			HasExplicitDestinations: true,
+		},
+	}
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "Title", aztypes.String),
+			testColumn(1, "Severity", aztypes.Long),
+			testColumn(2, "Recipient", aztypes.String),
+		},
+		azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(2), azvalue.NewString("legacy-recipient")},
+	)
+
+	got, err := ParseAlertResult(qc, row)
+	require.NoError(t, err)
+	require.Equal(t, "pagerduty://ops", got.Destination)
+	require.Equal(t, []string{"pagerduty://ops", "icm://oncall"}, got.Destinations)
 }
 
 func TestParseAlertResult_InvalidQueryContext(t *testing.T) {

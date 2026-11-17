@@ -94,14 +94,17 @@ func NewWorker(cfg *WorkerConfig) *worker {
 }
 
 func (e *worker) Run(ctx context.Context) {
-	e.wg.Add(1)
-
 	e.mu.Lock()
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.mu.Unlock()
 
-	// Best-effort: update criteria condition reflecting cached match evaluation
-	e.updateAlertRuleCriteriaCondition(ctx)
+	// Unmatched criteria workers must not execute queries or write AlertRule.Status,
+	// preventing co-located alerters with disjoint tag sets from clobbering status.
+	if e.matchErr != nil || !e.matchAllowed {
+		return
+	}
+
+	e.wg.Add(1)
 
 	go func() {
 		defer e.wg.Done()

@@ -334,14 +334,27 @@ func TestNewService_AlertAddrsValidationAndFakeLoopback(t *testing.T) {
 
 	t.Run("multiple endpoints preserve commas and queries and redact /metrics", func(t *testing.T) {
 		var hitsA, hitsB atomic.Int32
-		var uriA, uriB atomic.Value
+		var destHitsA, destHitsB atomic.Int32
+		var uriA, uriB, destURIA, destURIB atomic.Value
 		srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				destURIA.Store(r.URL.RequestURI())
+				destHitsA.Add(1)
+				http.NotFound(w, r)
+				return
+			}
 			uriA.Store(r.URL.RequestURI())
 			hitsA.Add(1)
 			w.WriteHeader(http.StatusCreated)
 		}))
 		defer srvA.Close()
 		srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				destURIB.Store(r.URL.RequestURI())
+				destHitsB.Add(1)
+				http.NotFound(w, r)
+				return
+			}
 			uriB.Store(r.URL.RequestURI())
 			hitsB.Add(1)
 			w.WriteHeader(http.StatusCreated)
@@ -368,6 +381,10 @@ func TestNewService_AlertAddrsValidationAndFakeLoopback(t *testing.T) {
 		// Duplicate trailing-slash base URL was deduplicated in order: srvA received 1 POST, not 2.
 		require.Equal(t, int32(1), hitsA.Load())
 		require.Equal(t, int32(1), hitsB.Load())
+		require.GreaterOrEqual(t, destHitsA.Load(), int32(1))
+		require.GreaterOrEqual(t, destHitsB.Load(), int32(1))
+		require.Equal(t, "/team,prod/destinations?sig=SECRET_SIG_A", destURIA.Load())
+		require.Equal(t, "/v1/alerts/destinations?tok=SECRET_TOK_B", destURIB.Load())
 		require.Equal(t, "/team,prod/alerts?sig=SECRET_SIG_A", uriA.Load())
 		require.Equal(t, "/v1/alerts/alerts?tok=SECRET_TOK_B", uriB.Load())
 

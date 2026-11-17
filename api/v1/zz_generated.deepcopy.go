@@ -290,6 +290,11 @@ func (in *AlertRuleSpec) DeepCopyInto(out *AlertRuleSpec) {
 	*out = *in
 	out.Interval = in.Interval
 	out.AutoMitigateAfter = in.AutoMitigateAfter
+	if in.Destinations != nil {
+		in, out := &in.Destinations, &out.Destinations
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Criteria != nil {
 		in, out := &in.Criteria, &out.Criteria
 		*out = make(map[string][]string, len(*in))

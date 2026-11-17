@@ -188,6 +188,10 @@ func TestExecutor_FanoutCombinedKustoOverflowAndHTTP429StillEmitsExactOneSummary
 	releaseBlocker := make(chan struct{})
 
 	srvHealthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		var a alert.Alert
 		_ = json.Unmarshal(b, &a)
@@ -207,6 +211,10 @@ func TestExecutor_FanoutCombinedKustoOverflowAndHTTP429StillEmitsExactOneSummary
 	defer srvHealthy.Close()
 
 	srv429 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		var a alert.Alert
 		_ = json.Unmarshal(b, &a)

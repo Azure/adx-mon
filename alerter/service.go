@@ -132,10 +132,17 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 	workers = max(1, workers)
 
-	alertCli, err := alert.NewFanoutClient(
-		addrs,
+	fanoutOpts := []alert.FanoutOption{
 		alert.WithTimeout(alert.DefaultRequestTimeout),
 		alert.WithConcurrency(workers),
+	}
+	if useFakeHandler {
+		fanoutOpts = append(fanoutOpts, alert.WithStaticCatchAll())
+	}
+
+	alertCli, err := alert.NewFanoutClient(
+		addrs,
+		fanoutOpts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert client: %w", err)

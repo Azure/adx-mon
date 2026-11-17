@@ -400,3 +400,86 @@ func TestFromPath(t *testing.T) {
 		})
 	}
 }
+
+func TestFromStream_DestinationsAndStrictSpecKeys(t *testing.T) {
+	t.Run("valid destinations preserves order and sets HasExplicitDestinations", func(t *testing.T) {
+		doc := `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: multi-dest
+  namespace: monitoring
+spec:
+  database: Metrics
+  interval: 5m
+  query: Cpu | take 1
+  destinations:
+    - "pagerduty://team-b"
+    - "icm://team-a"
+`
+		store := &fileStore{}
+		require.NoError(t, store.fromStream(strings.NewReader(doc), "eastus"))
+		require.Len(t, store.rules, 1)
+		require.True(t, store.rules[0].HasExplicitDestinations)
+		require.Equal(t, []string{"pagerduty://team-b", "icm://team-a"}, store.rules[0].Destinations)
+		require.Equal(t, "", store.rules[0].Destination)
+	})
+
+	t.Run("rejects destination and destinations conflict", func(t *testing.T) {
+		doc := `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: conflict-rule
+  namespace: monitoring
+spec:
+  database: Metrics
+  interval: 5m
+  query: Cpu | take 1
+  destination: "icm://legacy"
+  destinations:
+    - "pagerduty://team-b"
+`
+		store := &fileStore{}
+		err := store.fromStream(strings.NewReader(doc), "eastus")
+		require.ErrorContains(t, err, "destination and destinations are mutually exclusive")
+	})
+
+	t.Run("rejects unknown spec key", func(t *testing.T) {
+		doc := `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: typo-rule
+  namespace: monitoring
+spec:
+  database: Metrics
+  interval: 5m
+  query: Cpu | take 1
+  destinaitons:
+    - "pagerduty://team-b"
+`
+		store := &fileStore{}
+		err := store.fromStream(strings.NewReader(doc), "eastus")
+		require.ErrorContains(t, err, `unknown field "destinaitons" in AlertRule.spec`)
+	})
+
+	t.Run("multibyte UTF-8 destination respects 512 code-point maxLength", func(t *testing.T) {
+		valid512Runes := "apiVersion: adx-mon.azure.com/v1\nkind: AlertRule\nmetadata:\n  name: utf8-valid\n  namespace: monitoring\nspec:\n  database: Metrics\n  interval: 5m\n  query: Cpu | take 1\n  destinations:\n    - \"" + strings.Repeat("é", 512) + "\"\n"
+		store := &fileStore{}
+		require.NoError(t, store.fromStream(strings.NewReader(valid512Runes), "eastus"))
+		require.Len(t, store.rules, 1)
+
+		invalid513Runes := "apiVersion: adx-mon.azure.com/v1\nkind: AlertRule\nmetadata:\n  name: utf8-invalid\n  namespace: monitoring\nspec:\n  database: Metrics\n  interval: 5m\n  query: Cpu | take 1\n  destinations:\n    - \"" + strings.Repeat("é", 513) + "\"\n"
+		require.ErrorContains(t, (&fileStore{}).fromStream(strings.NewReader(invalid513Runes), "eastus"), "exceeds maximum length 512")
+	})
+
+	t.Run("rejects duplicate, empty, or overly long destinations", func(t *testing.T) {
+		for _, specTail := range []string{
+			"  destinations:\n    - \"icm://a\"\n    - \"icm://a\"\n",
+			"  destinations:\n    - \"\"\n",
+			"  destinations:\n    - \"" + strings.Repeat("x", 513) + "\"\n",
+		} {
+			doc := "apiVersion: adx-mon.azure.com/v1\nkind: AlertRule\nmetadata:\n  name: bad-dest\n  namespace: monitoring\nspec:\n  database: Metrics\n  interval: 5m\n  query: Cpu | take 1\n" + specTail
+			store := &fileStore{}
+			require.Error(t, store.fromStream(strings.NewReader(doc), "eastus"))
+		}
+	})
+}

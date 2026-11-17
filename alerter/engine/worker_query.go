@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
@@ -240,15 +241,20 @@ func (e *worker) buildEvalMeta(qc *QueryContext) alert.EvalMeta {
 	queryText := qc.Query
 	kustoEndpoint := e.kustoClient.Endpoint(e.rule.Database)
 	database := e.rule.Database
+	uid := e.rule.UID
+	gen := e.rule.Generation
 	ns := e.rule.Namespace
 	name := e.rule.Name
-	dest := e.rule.Destination
+	dest, explicitDests := e.rule.ResolvedMetaDestinations()
 	region := e.region
 	return alert.EvalMeta{
-		Namespace:   ns,
-		Name:        name,
-		Destination: dest,
-		Region:      region,
+		RuleUID:      uid,
+		Generation:   gen,
+		Namespace:    ns,
+		Name:         name,
+		Destination:  dest,
+		Destinations: slices.Clone(explicitDests),
+		Region:       region,
 		BuildSummaryAlert: func(suppressed []alert.SuppressedAlert, totalSuppressed int, incomplete bool) alert.Alert {
 			summary := alert.FormatThrottledSummary(suppressed, totalSuppressed, incomplete)
 			if linked, linkErr := KustoQueryLinks(summary, queryText, kustoEndpoint, database); linkErr != nil {
@@ -259,6 +265,7 @@ func (e *worker) buildEvalMeta(qc *QueryContext) alert.EvalMeta {
 			source := fmt.Sprintf("notification-failure/%s/%s", ns, name)
 			return alert.Alert{
 				Destination:   dest,
+				Destinations:  slices.Clone(explicitDests),
 				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", ns, name, region),
 				Summary:       summary,
 				Severity:      3,

@@ -38,6 +38,16 @@ type EvaluationAlertCli interface {
 	SealEvaluation(evalID uint64, forceThrottled bool, extraSuppressed []alert.SuppressedAlert, extraSuppressedTotal int, incomplete bool)
 }
 
+type AlertStatusReporter interface {
+	EvaluateDestinationMatch(candidates []string) alert.DestinationMatchReport
+	EvaluateNotificationDelivery(meta alert.RuleMeta) alert.DeliveryHealthReport
+	SanitizeMessage(msg string) string
+}
+
+type LiveRuleHealthReconciler interface {
+	ReconcileLiveRules(live []alert.RuleMeta)
+}
+
 type evalIDContextKey struct{}
 
 func withEvalID(ctx context.Context, evalID uint64) context.Context {
@@ -185,6 +195,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 
 	a := alert.Alert{
 		Destination:   res.Destination,
+		Destinations:  res.Destinations,
 		Title:         res.Title,
 		Summary:       summary,
 		Description:   res.Description,
@@ -201,11 +212,18 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		return err
 	}
 
+	ruleCtx := alert.WithRuleMeta(ctx, alert.RuleMeta{
+		UID:        qc.Rule.UID,
+		Namespace:  qc.Rule.Namespace,
+		Name:       qc.Rule.Name,
+		Generation: qc.Rule.Generation,
+	})
+
 	if evalCli, ok := e.alertCli.(EvaluationAlertCli); ok {
 		if evalID, hasEval := evalIDFromContext(ctx); hasEval {
-			err = evalCli.EnqueueEvaluation(ctx, evalID, a)
+			err = evalCli.EnqueueEvaluation(ruleCtx, evalID, a)
 		} else {
-			err = evalCli.Create(ctx, addr, a)
+			err = evalCli.Create(ruleCtx, addr, a)
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return contextErr
@@ -301,15 +319,22 @@ func ParseAlertResult(qc *QueryContext, row azquery.Row) (AlertResult, error) {
 		correlationID = fmt.Sprintf("%s://%s", source, correlationID)
 	}
 
-	destination := qc.Rule.Destination
-	if destination == "" {
-		// The recipient query results field is deprecated.
-		logger.Warnf("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
-		destination = notification.Recipient
+	var destination string
+	var destinations []string
+	if qc.Rule.ExplicitDestinations() {
+		destination, destinations = qc.Rule.ResolvedMetaDestinations()
+	} else {
+		destination = qc.Rule.Destination
+		if destination == "" {
+			// The recipient query results field is deprecated.
+			logger.Warnf("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
+			destination = notification.Recipient
+		}
 	}
 
 	return AlertResult{
 		Destination:   destination,
+		Destinations:  destinations,
 		Title:         notification.Title,
 		Summary:       notification.Summary,
 		Description:   notification.Description,
@@ -401,9 +426,12 @@ func (e *Executor) RunOnce(ctx context.Context) {
 // are added, or existing rules are updated, a new worker will be started.  If any rules are deleted,
 // the worker will be stopped. This function is called periodically by the executor.
 func (e *Executor) syncWorkers(ctx context.Context) {
+	rulesSnapshot := e.ruleStore.Rules()
+	e.reconcileLiveRules(rulesSnapshot)
+
 	// Track the query Ids that are still definied as CRs, so we can determine which ones were deleted.
-	liveQueries := make(map[string]struct{})
-	for _, r := range e.ruleStore.Rules() {
+	liveQueries := make(map[string]struct{}, len(rulesSnapshot))
+	for _, r := range rulesSnapshot {
 		id := e.workerKey(r)
 		liveQueries[id] = struct{}{}
 
@@ -419,7 +447,7 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 		}
 
 		// Rule has not changed, leave the existing working running
-		if w.rule.Version == r.Version {
+		if w.rule.Version == r.Version && w.rule.UID == r.UID {
 			e.mu.Unlock()
 			continue
 		}
@@ -450,6 +478,26 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 		logger.Infof("Shutting down worker for %s", id)
 		w.Close()
 	}
+}
+
+func (e *Executor) reconcileLiveRules(rulesSnapshot []*rules.Rule) {
+	reconciler, ok := e.alertCli.(LiveRuleHealthReconciler)
+	if !ok {
+		return
+	}
+	live := make([]alert.RuleMeta, 0, len(rulesSnapshot))
+	for _, r := range rulesSnapshot {
+		if r == nil {
+			continue
+		}
+		live = append(live, alert.RuleMeta{
+			UID:        r.UID,
+			Namespace:  r.Namespace,
+			Name:       r.Name,
+			Generation: r.Generation,
+		})
+	}
+	reconciler.ReconcileLiveRules(live)
 }
 
 // periodicSync will periodically sync the workers with the current set of rules.

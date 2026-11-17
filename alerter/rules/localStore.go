@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
@@ -79,6 +80,10 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 			continue
 		}
 
+		if err := validateStrictAlertRuleSpecKeys(genericStructure); err != nil {
+			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)
+		}
+
 		// create new spec here
 		rule := alertrulev1.AlertRule{}
 
@@ -105,6 +110,39 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 
 func (s *fileStore) Rules() []*Rule {
 	return s.rules
+}
+
+var allowedAlertRuleSpecKeys = map[string]struct{}{
+	"database":           {},
+	"interval":           {},
+	"query":              {},
+	"autoMitigateAfter":  {},
+	"destination":        {},
+	"destinations":       {},
+	"criteria":           {},
+	"criteriaExpression": {},
+}
+
+func validateStrictAlertRuleSpecKeys(genericStructure map[string]any) error {
+	rawSpec, exists := genericStructure["spec"]
+	if !exists || rawSpec == nil {
+		return nil
+	}
+	specMap, ok := rawSpec.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid AlertRule.spec: expected object, got %T", rawSpec)
+	}
+	var unknown []string
+	for k := range specMap {
+		if _, allowed := allowedAlertRuleSpecKeys[k]; !allowed {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		slices.Sort(unknown)
+		return fmt.Errorf("unknown field %q in AlertRule.spec", unknown[0])
+	}
+	return nil
 }
 
 // validateMetadata validates the metadata of a Kubernetes object

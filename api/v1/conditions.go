@@ -19,6 +19,12 @@ const (
 	// ConditionBackfill reflects the current phase of a user-requested historical backfill.
 	// Status=True when completed, Unknown when running/pending, False when failed.
 	ConditionBackfill = "Backfill"
+	// ConditionDestinationMatched reflects whether an AlertRule's configured destinations match at least one discovered notification endpoint.
+	// Status=True when >=1 endpoint matches, Unknown while endpoint capability discovery is pending/unresolved, False when zero endpoints match.
+	ConditionDestinationMatched = "DestinationMatched"
+	// ConditionNotificationDelivery reflects latched asynchronous HTTP notification delivery health across configured endpoints.
+	// Status=True when no delivery failures are latched for the rule generation, False when >=1 endpoint failed delivery.
+	ConditionNotificationDelivery = "NotificationDelivery"
 )
 
 // Standardized reasons for shared conditions (subset reused from verifier conditions file to avoid duplication).
@@ -27,6 +33,13 @@ const (
 	ReasonCriteriaNotMatched      = "CriteriaNotMatched"
 	ReasonCriteriaExpressionError = "CriteriaExpressionError"
 	ReasonCriteriaMatched         = "CriteriaMatched"
+
+	ReasonDestinationMatched       = "DestinationMatched"
+	ReasonNoMatchingEndpoint       = "NoMatchingEndpoint"
+	ReasonEndpointDiscoveryPending = "EndpointDiscoveryPending"
+
+	ReasonDeliveryHealthy = "DeliveryHealthy"
+	ReasonDeliveryFailed  = "DeliveryFailed"
 )
 
 // ConditionedObject defines interface for objects that can have conditions

@@ -11,6 +11,7 @@ import (
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -114,8 +115,10 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		if ctx.Err() != nil {
 			return
 		}
-		err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
-			Destination:   e.rule.Destination,
+		metaDest, metaDests := e.rule.ResolvedMetaDestinations()
+		err := e.alertCli.Create(alert.WithRuleMeta(ctx, e.ruleMeta()), e.alertAddr, alert.Alert{
+			Destination:   metaDest,
+			Destinations:  metaDests,
 			Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
 			Summary:       summary,
 			Severity:      3,
@@ -173,8 +176,10 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		}
 
 		endpointBaseName, _ := strings.CutPrefix(e.kustoClient.Endpoint(e.rule.Database), "https://")
+		metaDest, metaDests := e.rule.ResolvedMetaDestinations()
 		failureAlert := alert.Alert{
-			Destination:   e.rule.Destination,
+			Destination:   metaDest,
+			Destinations:  metaDests,
 			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
 			Summary:       summary,
 			Severity:      3,
@@ -184,7 +189,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		if ctx.Err() != nil {
 			return
 		}
-		err = e.alertCli.Create(notificationCtx, e.alertAddr, failureAlert)
+		err = e.alertCli.Create(alert.WithRuleMeta(notificationCtx, e.ruleMeta()), e.alertAddr, failureAlert)
 
 		if ctx.Err() != nil {
 			return
@@ -235,91 +240,133 @@ func (e *worker) notificationContext(ctx context.Context) (context.Context, cont
 	return context.WithTimeout(ctx, queryErrorNotificationTimeout)
 }
 
-// updateAlertRuleStatus updates the AlertRule status with the execution information
+func (e *worker) ruleMeta() alert.RuleMeta {
+	return alert.RuleMeta{
+		UID:        e.rule.UID,
+		Namespace:  e.rule.Namespace,
+		Name:       e.rule.Name,
+		Generation: e.rule.Generation,
+	}
+}
+
+func (e *worker) sanitizeStatusMessage(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	if reporter, ok := e.alertCli.(AlertStatusReporter); ok {
+		return reporter.SanitizeMessage(msg)
+	}
+	if e.alertAddr != "" {
+		msg = alert.SanitizeText(msg, e.alertAddr)
+	}
+	return alert.CapStatusMessage(msg, alert.MaxStatusMessageLength)
+}
+
+// updateAlertRuleStatus is the single writer for AlertRule.Status, persisting evaluation metrics
+// alongside Criteria, DestinationMatched, and NotificationDelivery conditions with 512-byte
+// sanitized messages containing zero raw webhook URLs.
 func (e *worker) updateAlertRuleStatus(ctx context.Context, evaluation *alertRuleEvaluation, status, message string) {
-	// Skip status update if we don't have a Kubernetes client
-	if e.ctrlCli == nil || ctx.Err() != nil {
+	// Skip status update if we don't have a Kubernetes client or if this worker did not match criteria.
+	if e.ctrlCli == nil || ctx.Err() != nil || e.matchErr != nil || !e.matchAllowed {
 		return
 	}
 
-	// Create a context for the status update using the passed-in context as parent
 	updateCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// Get the current AlertRule
-	alertRule := &alertrulev1.AlertRule{}
-	err := e.ctrlCli.Get(updateCtx, types.NamespacedName{
-		Namespace: e.rule.Namespace,
-		Name:      e.rule.Name,
-	}, alertRule)
-	if err != nil {
-		logger.Errorf("Failed to get AlertRule %s/%s for status update: %v", e.rule.Namespace, e.rule.Name, err)
-		return
-	}
-
-	// Update the status fields using existing fields
+	sanitizedMessage := e.sanitizeStatusMessage(message)
 	executionTimeMeta := metav1.NewTime(evaluation.executionTime)
-	alertRule.Status.LastQueryTime = executionTimeMeta
-	if evaluation.alertsGenerated > 0 {
-		alertRule.Status.LastAlertTime = executionTimeMeta
-	}
-	alertRule.Status.LastEvaluationDurationMilliseconds = evaluation.elapsed().Milliseconds()
-	alertRule.Status.LastRowsReturned = int64(evaluation.rows)
-	alertRule.Status.LastAlertsGenerated = int64(evaluation.alertsGenerated)
-	alertRule.Status.Status = status
-	alertRule.Status.Message = message
+	var lastAlertTime metav1.Time
 
-	// Update the AlertRule status
-	err = e.ctrlCli.Status().Update(updateCtx, alertRule)
+	var err error
+	for range 3 {
+		alertRule := &alertrulev1.AlertRule{}
+		if err = e.ctrlCli.Get(updateCtx, types.NamespacedName{
+			Namespace: e.rule.Namespace,
+			Name:      e.rule.Name,
+		}, alertRule); err != nil {
+			break
+		}
+
+		if e.rule.UID != "" && alertRule.GetUID() != "" && string(alertRule.GetUID()) != e.rule.UID {
+			logger.Infof("Skipping status update for AlertRule %s/%s: UID changed from %s to %s",
+				e.rule.Namespace, e.rule.Name, e.rule.UID, alertRule.GetUID())
+			return
+		}
+		if (e.rule.Generation != 0 || alertRule.GetGeneration() != 0) && alertRule.GetGeneration() != e.rule.Generation {
+			logger.Infof("Skipping status update for AlertRule %s/%s: generation changed from %d to %d",
+				e.rule.Namespace, e.rule.Name, e.rule.Generation, alertRule.GetGeneration())
+			return
+		}
+
+		alertRule.Status.LastQueryTime = executionTimeMeta
+		if evaluation.alertsGenerated > 0 {
+			alertRule.Status.LastAlertTime = executionTimeMeta
+		}
+		alertRule.Status.LastEvaluationDurationMilliseconds = evaluation.elapsed().Milliseconds()
+		alertRule.Status.LastRowsReturned = int64(evaluation.rows)
+		alertRule.Status.LastAlertsGenerated = int64(evaluation.alertsGenerated)
+		alertRule.Status.Status = status
+		alertRule.Status.Message = sanitizedMessage
+
+		observedGen := alertRule.GetGeneration()
+		nowMeta := metav1.NewTime(e.clock.Now())
+
+		meta.SetStatusCondition(&alertRule.Status.Conditions, metav1.Condition{
+			Type:               alertrulev1.ConditionCriteria,
+			Status:             metav1.ConditionTrue,
+			Reason:             alertrulev1.ReasonCriteriaMatched,
+			Message:            "criteria/expression matched",
+			ObservedGeneration: observedGen,
+			LastTransitionTime: nowMeta,
+		})
+
+		if reporter, ok := e.alertCli.(AlertStatusReporter); ok {
+			destReport := reporter.EvaluateDestinationMatch(e.rule.CandidateDestinations())
+			meta.SetStatusCondition(&alertRule.Status.Conditions, metav1.Condition{
+				Type:               alertrulev1.ConditionDestinationMatched,
+				Status:             destReport.Status,
+				Reason:             destReport.Reason,
+				Message:            e.sanitizeStatusMessage(destReport.Message),
+				ObservedGeneration: observedGen,
+				LastTransitionTime: nowMeta,
+			})
+
+			ruleUID := string(alertRule.GetUID())
+			if ruleUID == "" {
+				ruleUID = e.rule.UID
+			}
+			ruleGen := observedGen
+			if ruleGen == 0 && e.rule.Generation != 0 {
+				ruleGen = e.rule.Generation
+			}
+			delivReport := reporter.EvaluateNotificationDelivery(alert.RuleMeta{
+				UID:        ruleUID,
+				Namespace:  e.rule.Namespace,
+				Name:       e.rule.Name,
+				Generation: ruleGen,
+			})
+			meta.SetStatusCondition(&alertRule.Status.Conditions, metav1.Condition{
+				Type:               alertrulev1.ConditionNotificationDelivery,
+				Status:             delivReport.Status,
+				Reason:             delivReport.Reason,
+				Message:            e.sanitizeStatusMessage(delivReport.Message),
+				ObservedGeneration: observedGen,
+				LastTransitionTime: nowMeta,
+			})
+		}
+
+		lastAlertTime = alertRule.Status.LastAlertTime
+		err = e.ctrlCli.Status().Update(updateCtx, alertRule)
+		if !apierrors.IsConflict(err) {
+			break
+		}
+	}
 	if err != nil {
 		logger.Errorf("Failed to update AlertRule %s/%s status: %v", e.rule.Namespace, e.rule.Name, err)
 		return
 	}
 
 	logger.Debugf("Updated AlertRule %s/%s status: LastQueryTime=%v, LastAlertTime=%v, Status=%s",
-		e.rule.Namespace, e.rule.Name, evaluation.executionTime, alertRule.Status.LastAlertTime, status)
-}
-
-// updateAlertRuleCriteriaCondition writes the ConditionCriteria condition based on cached match evaluation.
-// It is safe/no-op when ctrlCli is not configured.
-func (e *worker) updateAlertRuleCriteriaCondition(ctx context.Context) {
-	if e.ctrlCli == nil {
-		return
-	}
-
-	updateCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	alertRule := &alertrulev1.AlertRule{}
-	if err := e.ctrlCli.Get(updateCtx, types.NamespacedName{Namespace: e.rule.Namespace, Name: e.rule.Name}, alertRule); err != nil {
-		logger.Errorf("Failed to get AlertRule %s/%s for criteria condition update: %v", e.rule.Namespace, e.rule.Name, err)
-		return
-	}
-
-	// Build condition based on evaluation result
-	condStatus := metav1.ConditionFalse
-	reason := alertrulev1.ReasonCriteriaNotMatched
-	message := "criteria map did not match or expression evaluated to false"
-	if e.matchErr != nil {
-		reason = alertrulev1.ReasonCriteriaExpressionError
-		message = fmt.Sprintf("criteria expression error: %v", e.matchErr)
-	} else if e.matchAllowed {
-		condStatus = metav1.ConditionTrue
-		reason = alertrulev1.ReasonCriteriaMatched
-		message = "criteria/expression matched"
-	}
-
-	cond := metav1.Condition{
-		Type:               alertrulev1.ConditionCriteria,
-		Status:             condStatus,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: alertRule.GetGeneration(),
-		LastTransitionTime: metav1.NewTime(e.clock.Now()),
-	}
-	if meta.SetStatusCondition(&alertRule.Status.Conditions, cond) {
-		if err := e.ctrlCli.Status().Update(updateCtx, alertRule); err != nil {
-			logger.Errorf("Failed to update AlertRule %s/%s criteria condition: %v", e.rule.Namespace, e.rule.Name, err)
-		}
-	}
+		e.rule.Namespace, e.rule.Name, evaluation.executionTime, lastAlertTime, status)
 }
