@@ -10,6 +10,7 @@ import (
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"k8s.io/utils/clock"
 
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,6 +19,7 @@ import (
 type StoreOpts struct {
 	Region  string
 	CtrlCli client.Client
+	Clock   clock.WithTicker
 }
 
 type Store struct {
@@ -26,6 +28,7 @@ type Store struct {
 
 	ctrlCli client.Client
 	opts    StoreOpts
+	clock   clock.WithTicker
 
 	wg sync.WaitGroup
 
@@ -34,9 +37,14 @@ type Store struct {
 }
 
 func NewStore(opts StoreOpts) *Store {
+	c := opts.Clock
+	if c == nil {
+		c = clock.RealClock{}
+	}
 	return &Store{
 		ctrlCli: opts.CtrlCli,
 		opts:    opts,
+		clock:   c,
 	}
 }
 
@@ -129,26 +137,21 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 	return rules, nil
 }
 
-// reloadInterval is the period between rule reloads. It is a var so tests can
-// override it.
-var reloadInterval = time.Minute
+const reloadInterval = time.Minute
 
 func (s *Store) reloadPeriodically() {
 	defer s.wg.Done()
 
-	// Use a single reusable ticker instead of time.After inside the loop.
-	// time.After allocates a new timer on every iteration; if reloadRules runs
-	// longer than the interval, the previous iteration's timer is still pending
-	// and lingers in the runtime's timer heap until it fires, accumulating over
-	// slow reloads. A ticker reuses one timer.
-	ticker := time.NewTicker(reloadInterval)
+	// Reuse one timer and preserve cadence when a reload takes longer than the
+	// interval, rather than starting a fresh delay after each reload finishes.
+	ticker := s.clock.NewTicker(reloadInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			logger.Infof("Reloading rules...")
 
 			rules, err := s.reloadRules()

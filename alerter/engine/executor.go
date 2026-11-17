@@ -38,7 +38,7 @@ type Executor struct {
 	ruleStore   ruleStore
 	region      string
 	ctrlCli     client.Client
-	clock       clock.Clock
+	clock       clock.WithTicker
 
 	// tags are access by the worker concurrently outside a mutex.  This is safe because
 	// the map is never modified after creation.
@@ -56,8 +56,6 @@ type Executor struct {
 	// it creates. It exists solely so tests can observe the context RunOnce
 	// derives and verify it is canceled when RunOnce returns.
 	runOnceCtx func(context.Context)
-	// syncTick is used by tests to drive the periodic loop deterministically.
-	syncTick <-chan time.Time
 }
 
 type ExecutorOpts struct {
@@ -69,7 +67,7 @@ type ExecutorOpts struct {
 	Tags        map[string]string
 	Concurrency int
 	CtrlCli     client.Client
-	Clock       clock.Clock
+	Clock       clock.WithTicker
 }
 
 // reservedNotificationColumns is the lowercase set of query result columns that
@@ -433,15 +431,11 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 // periodicSync will periodically sync the workers with the current set of rules.
 func (e *Executor) periodicSync(ctx context.Context) {
 	defer e.wg.Done()
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := e.clock.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	ticks := ticker.C
-	if e.syncTick != nil {
-		ticks = e.syncTick
-	}
 	for {
 		select {
-		case <-ticks:
+		case <-ticker.C():
 			e.syncWorkers(ctx)
 		case <-ctx.Done():
 			return
