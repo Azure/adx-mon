@@ -31,6 +31,24 @@ type AlertCli interface {
 	Create(ctx context.Context, endpoint string, alert alert.Alert) error
 }
 
+type EvaluationAlertCli interface {
+	AlertCli
+	BeginEvaluation(meta alert.EvalMeta) uint64
+	EnqueueEvaluation(ctx context.Context, evalID uint64, a alert.Alert) error
+	SealEvaluation(evalID uint64, forceThrottled bool, extraSuppressed []alert.SuppressedAlert, extraSuppressedTotal int, incomplete bool)
+}
+
+type evalIDContextKey struct{}
+
+func withEvalID(ctx context.Context, evalID uint64) context.Context {
+	return context.WithValue(ctx, evalIDContextKey{}, evalID)
+}
+
+func evalIDFromContext(ctx context.Context) (uint64, bool) {
+	id, ok := ctx.Value(evalIDContextKey{}).(uint64)
+	return id, ok && id != 0
+}
+
 type Executor struct {
 	alertCli    AlertCli
 	alertAddr   string
@@ -102,6 +120,7 @@ func (e *Executor) Open(ctx context.Context) error {
 	logger.Infof("Begin executing %d queries", len(e.ruleStore.Rules()))
 
 	e.syncWorkers(ctx)
+	e.wg.Add(1)
 	go e.periodicSync(ctx)
 	return nil
 }
@@ -125,9 +144,26 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 	})
 }
 
+// Close cancels the executor context, then waits for every goroutine the
+// executor owns to drain: the tracked workers and the periodicSync loop.
 func (e *Executor) Close() error {
-	e.closeFn()
+	if e.closeFn != nil {
+		e.closeFn()
+	}
+
 	e.wg.Wait()
+
+	e.mu.RLock()
+	workers := make([]*worker, 0, len(e.workers))
+	for _, w := range e.workers {
+		workers = append(workers, w)
+	}
+	e.mu.RUnlock()
+
+	for _, w := range workers {
+		w.Close()
+	}
+
 	return nil
 }
 
@@ -159,11 +195,28 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	}
 
 	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
-	logger.Debugf("Sending alert %s %v", addr, a)
+	logger.Debugf("Sending alert %s %v", alert.RedactURL(addr), a)
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	if evalCli, ok := e.alertCli.(EvaluationAlertCli); ok {
+		if evalID, hasEval := evalIDFromContext(ctx); hasEval {
+			err = evalCli.EnqueueEvaluation(ctx, evalID, a)
+		} else {
+			err = evalCli.Create(ctx, addr, a)
+		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		if err != nil {
+			logger.Errorf("Failed to create Notification: %s\n", err)
+			metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
+		}
+		return nil
+	}
+
 	err = e.alertCli.Create(ctx, addr, a)
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr
@@ -335,7 +388,9 @@ func asInt64(value azvalue.Kusto) (int64, error) {
 }
 
 func (e *Executor) RunOnce(ctx context.Context) {
-	ctx, e.closeFn = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	e.closeFn = cancel
+	defer cancel()
 	for _, r := range e.ruleStore.Rules() {
 		worker := e.newWorker(r)
 		worker.ExecuteQuery(ctx)
@@ -351,41 +406,57 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 	for _, r := range e.ruleStore.Rules() {
 		id := e.workerKey(r)
 		liveQueries[id] = struct{}{}
+
+		e.mu.Lock()
 		w, ok := e.workers[id]
 		if !ok {
-			logger.Infof("Starting new worker for %s", id)
 			worker := e.newWorker(r)
-			worker.Run(ctx)
 			e.workers[id] = worker
+			e.mu.Unlock()
+			logger.Infof("Starting new worker for %s", id)
+			worker.Run(ctx)
 			continue
 		}
 
 		// Rule has not changed, leave the existing working running
 		if w.rule.Version == r.Version {
+			e.mu.Unlock()
 			continue
 		}
 
 		logger.Infof("Rule %s has changed, restarting worker", id)
-		w.Close()
 		delete(e.workers, id)
+		e.mu.Unlock()
+
+		w.Close()
 		w = e.newWorker(r)
+		e.mu.Lock()
 		e.workers[id] = w
+		e.mu.Unlock()
 		w.Run(ctx)
 	}
 
 	// Shutdown any workers that no longer exist
+	e.mu.Lock()
+	removed := make(map[string]*worker)
 	for id := range e.workers {
 		if _, ok := liveQueries[id]; !ok {
-			logger.Infof("Shutting down worker for %s", id)
-			e.workers[id].Close()
+			removed[id] = e.workers[id]
 			delete(e.workers, id)
 		}
+	}
+	e.mu.Unlock()
+	for id, w := range removed {
+		logger.Infof("Shutting down worker for %s", id)
+		w.Close()
 	}
 }
 
 // periodicSync will periodically sync the workers with the current set of rules.
 func (e *Executor) periodicSync(ctx context.Context) {
+	defer e.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:

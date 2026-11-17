@@ -2,10 +2,12 @@ package alerter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +28,7 @@ type AlerterOpts struct {
 	KustoEndpoints map[string]string
 	Region         string
 	AlertAddr      string
+	AlertAddrs     []string
 	Cloud          string
 	Port           int
 	Concurrency    int
@@ -55,7 +58,7 @@ type ruleStore interface {
 
 type Alerter struct {
 	clients  map[string]KustoClient
-	alertCli *alert.Client
+	alertCli *alert.FanoutClient
 	opts     *AlerterOpts
 
 	wg        sync.WaitGroup
@@ -112,13 +115,28 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		ruleStore.Register(fakeRule)
 	}
 
-	if opts.AlertAddr == "" {
+	addrs, useFakeHandler, err := resolveAlertAddrs(opts)
+	if err != nil {
+		return nil, err
+	}
+	if useFakeHandler {
 		logger.Warnf("No alert address provided, using fake alert handler")
 		l.alertHandler = fakeAlertHandler()
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
+		addrs = []string{opts.AlertAddr}
 	}
 
-	alertCli, err := alert.NewClient(time.Minute)
+	workers := opts.Concurrency
+	if workers == 0 {
+		workers = alert.DefaultWorkersPerEndpoint
+	}
+	workers = max(1, workers)
+
+	alertCli, err := alert.NewFanoutClient(
+		addrs,
+		alert.WithTimeout(alert.DefaultRequestTimeout),
+		alert.WithConcurrency(workers),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert client: %w", err)
 	}
@@ -211,8 +229,12 @@ func (l *Alerter) Open(ctx context.Context) error {
 	if err := l.metrics.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open metrics service: %w", err)
 	}
+	if err := l.alertCli.Open(context.Background()); err != nil {
+		return fmt.Errorf("failed to open alert client: %w", err)
+	}
 
-	if err := l.executor.Open(ctx); err != nil {
+	if err := l.executor.Open(l.ctx); err != nil {
+		_ = l.alertCli.Close()
 		return fmt.Errorf("failed to open executor: %w", err)
 	}
 
@@ -257,16 +279,48 @@ func (l *Alerter) httpMux() *http.ServeMux {
 }
 
 func (l *Alerter) Close() error {
-	l.closeFn()
+	if l.closeFn != nil {
+		l.closeFn()
+	}
+	var errs []error
 	if err := l.executor.Close(); err != nil {
-		return fmt.Errorf("failed to close executor: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close executor: %w", err))
+	}
+	if err := l.alertCli.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to close alert client: %w", err))
 	}
 	if err := l.metrics.Close(); err != nil {
-		return fmt.Errorf("failed to close metrics service: %w", err)
+		errs = append(errs, fmt.Errorf("failed to close metrics service: %w", err))
+	}
+	if err := l.ruleStore.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to close rule store: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+func resolveAlertAddrs(opts *AlerterOpts) ([]string, bool, error) {
+	if len(opts.AlertAddrs) == 0 && opts.AlertAddr == "" {
+		return nil, true, nil
 	}
 
-	if err := l.ruleStore.Close(); err != nil {
-		return fmt.Errorf("failed to close rule store: %w", err)
+	raw := make([]string, 0, len(opts.AlertAddrs)+1)
+	raw = append(raw, opts.AlertAddrs...)
+	if opts.AlertAddr != "" {
+		raw = append(raw, opts.AlertAddr)
 	}
-	return nil
+
+	seen := make(map[string]struct{}, len(raw))
+	deduped := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		ep, err := alert.ParseBaseEndpoint(entry)
+		if err != nil {
+			return nil, false, fmt.Errorf("invalid alerter-address: %w", err)
+		}
+		if _, exists := seen[ep.URL]; exists {
+			continue
+		}
+		seen[ep.URL] = struct{}{}
+		deduped = append(deduped, strings.TrimSpace(entry))
+	}
+	return deduped, false, nil
 }

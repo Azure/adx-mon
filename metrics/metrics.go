@@ -240,6 +240,34 @@ var (
 		Help:      "Gauge indicating if a notification is healthy or not",
 	}, []string{"namespace", "name"})
 
+	NotificationsSentTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "notifications_sent_total",
+		Help:      "Counter of alert notification HTTP delivery attempts by redacted endpoint identifier and outcome.",
+	}, []string{"endpoint", "outcome"})
+
+	NotificationsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "notifications_dropped_total",
+		Help:      "Counter of alert notifications dropped per redacted endpoint identifier by reason.",
+	}, []string{"endpoint", "reason"})
+
+	RuleNotificationFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "rule_notification_failures_total",
+		Help:      "Counter of alert notification failures and drops per AlertRule, redacted endpoint identifier, and reason.",
+	}, []string{"namespace", "name", "endpoint", "reason"})
+
+	EndpointQueueDepth = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "endpoint_queue_depth",
+		Help:      "Current number of queued alert notifications waiting for delivery per redacted endpoint identifier.",
+	}, []string{"endpoint"})
+
 	AlertRuleEvaluationDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",
