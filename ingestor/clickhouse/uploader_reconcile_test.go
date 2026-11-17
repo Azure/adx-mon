@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/Azure/adx-mon/schema"
 	"github.com/stretchr/testify/require"
@@ -38,44 +38,48 @@ func (c *blockingSchemaConnection) Exec(ctx context.Context, query string, args 
 }
 
 func TestSchemaCreationDoesNotBlockOtherTables(t *testing.T) {
-	conn := &blockingSchemaConnection{entered: make(chan struct{}), release: make(chan struct{})}
-	withFakeConnectionManager(t, conn)
-	up, err := NewUploader(Config{Database: "metricsdb", DSN: "clickhouse://localhost"}, nil)
-	require.NoError(t, err)
-	u := up.(*uploader)
-	u.syncer.mu.Lock()
-	u.syncer.metadataReady = true
-	u.syncer.mu.Unlock()
-	finished := make(chan error, 1)
-	go func() {
-		_, err := u.ensureSchema(context.Background(), "Slow", "v1", schema.DefaultMetricsMapping)
-		finished <- err
-	}()
-	select {
-	case <-conn.entered:
-	case <-time.After(time.Second):
-		t.Fatal("slow schema operation did not start")
-	}
-	defer func() {
-		select {
-		case <-conn.release:
-		default:
-			close(conn.release)
-		}
-	}()
-	fast := make(chan error, 1)
-	go func() {
-		_, err := u.ensureSchema(context.Background(), "Fast", "v1", schema.DefaultMetricsMapping)
-		fast <- err
-	}()
-	select {
-	case err := <-fast:
+	synctest.Test(t, func(t *testing.T) {
+		conn := &blockingSchemaConnection{entered: make(chan struct{}), release: make(chan struct{})}
+		withFakeConnectionManager(t, conn)
+		up, err := NewUploader(Config{Database: "metricsdb", DSN: "clickhouse://localhost"}, nil)
 		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("unrelated schema creation blocked behind Slow")
-	}
-	close(conn.release)
-	require.NoError(t, <-finished)
+		u := up.(*uploader)
+		u.syncer.mu.Lock()
+		u.syncer.metadataReady = true
+		u.syncer.mu.Unlock()
+		finished := make(chan error, 1)
+		go func() {
+			_, err := u.ensureSchema(context.Background(), "Slow", "v1", schema.DefaultMetricsMapping)
+			finished <- err
+		}()
+		defer func() {
+			select {
+			case <-conn.release:
+			default:
+				close(conn.release)
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-conn.entered:
+		default:
+			t.Fatal("slow schema operation did not start")
+		}
+		fast := make(chan error, 1)
+		go func() {
+			_, err := u.ensureSchema(context.Background(), "Fast", "v1", schema.DefaultMetricsMapping)
+			fast <- err
+		}()
+		synctest.Wait()
+		select {
+		case err := <-fast:
+			require.NoError(t, err)
+		default:
+			t.Fatal("unrelated schema creation blocked behind Slow")
+		}
+		close(conn.release)
+		require.NoError(t, <-finished)
+	})
 }
 
 // Select intercepts the schema-cache reconcile's list-tables query and returns
@@ -157,14 +161,11 @@ func TestUploaderReconcileQueriesSystemTables(t *testing.T) {
 	impl.reconcileSchemas(context.Background())
 
 	// The reconcile must have issued a list-tables query.
-	require.Eventually(t, func() bool {
-		for _, q := range conn.execQueries() {
-			if strings.Contains(q, "system.tables") {
-				return true
-			}
-		}
-		return false
-	}, time.Second, time.Millisecond, "reconcile did not query system.tables")
+	found := false
+	for _, q := range conn.execQueries() {
+		found = found || strings.Contains(q, "system.tables")
+	}
+	require.True(t, found, "reconcile did not query system.tables")
 
 	// With no tables reported, the lone cached schema is evicted.
 	impl.schemaMu.Lock()

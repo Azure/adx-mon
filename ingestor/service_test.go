@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -294,61 +295,62 @@ func (b *blockingGzipBody) Read(p []byte) (int, error) {
 func (b *blockingGzipBody) Close() error { return nil }
 
 func TestServiceHandleTransferKeepsDecoderUntilDrainCompletes(t *testing.T) {
-	_, byteReader := any(transferGzipSentinel{bytes.NewReader(emptyTransferGzip)}).(io.ByteReader)
-	require.False(t, byteReader, "sentinel must reset gzip.Reader's buffered request reader")
-	oldProcs := runtime.GOMAXPROCS(1)
-	defer runtime.GOMAXPROCS(oldProcs)
-	oldGC := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(oldGC)
-	oldPool := transferGzipReaders
-	transferGzipReaders = &sync.Pool{New: func() any { return new(kgzip.Reader) }}
-	defer func() { transferGzipReaders = oldPool }()
+	synctest.Test(t, func(t *testing.T) {
+		_, byteReader := any(transferGzipSentinel{bytes.NewReader(emptyTransferGzip)}).(io.ByteReader)
+		require.False(t, byteReader, "sentinel must reset gzip.Reader's buffered request reader")
+		oldProcs := runtime.GOMAXPROCS(1)
+		defer runtime.GOMAXPROCS(oldProcs)
+		oldGC := debug.SetGCPercent(-1)
+		defer debug.SetGCPercent(oldGC)
+		oldPool := transferGzipReaders
+		transferGzipReaders = &sync.Pool{New: func() any { return new(kgzip.Reader) }}
+		defer func() { transferGzipReaders = oldPool }()
 
-	var compressed bytes.Buffer
-	zw := gzip.NewWriter(&compressed)
-	_, _ = zw.Write([]byte("test data"))
-	require.NoError(t, zw.Close())
-	blocked := &blockingGzipBody{r: bytes.NewReader(compressed.Bytes()), blocked: make(chan struct{}), release: make(chan struct{})}
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
-	defer release()
-	used := make(chan *kgzip.Reader, 1)
-	s := &Service{
-		health: &fakeHealthChecker{healthy: true},
-		store: &fakeStore{importFn: func(_ string, body io.ReadCloser) (int, error) {
-			used <- body.(*kgzip.Reader)
-			return 0, nil
-		}},
-		databases: map[string]struct{}{"testdb": {}},
-	}
-	req := httptest.NewRequest("POST", "/transfer?filename=testdb_testtable_testschema_1234567890.wal", blocked)
-	req.Header.Set("Content-Encoding", "gzip")
-	done := make(chan struct{})
-	go func() { s.HandleTransfer(httptest.NewRecorder(), req); close(done) }()
-	var active *kgzip.Reader
-	select {
-	case active = <-used:
-	case <-blocked.blocked:
-		t.Fatal("gzip reader waited for EOF before import")
-	case <-done:
-		t.Fatal("transfer finished before import")
-	case <-time.After(time.Second):
-		t.Fatal("transfer did not start")
-	}
-	select {
-	case <-blocked.blocked:
-	case <-time.After(time.Second):
-		t.Fatal("transfer cleanup did not reach drain")
-	}
-	other := transferGzipReaders.Get().(*kgzip.Reader)
-	require.NotSame(t, active, other, "decoder must not be available while request cleanup uses it")
-	transferGzipReaders.Put(other)
-	release()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("transfer did not finish cleanup")
-	}
+		var compressed bytes.Buffer
+		zw := gzip.NewWriter(&compressed)
+		_, _ = zw.Write([]byte("test data"))
+		require.NoError(t, zw.Close())
+		blocked := &blockingGzipBody{r: bytes.NewReader(compressed.Bytes()), blocked: make(chan struct{}), release: make(chan struct{})}
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
+		defer release()
+		used := make(chan *kgzip.Reader, 1)
+		s := &Service{
+			health: &fakeHealthChecker{healthy: true},
+			store: &fakeStore{importFn: func(_ string, body io.ReadCloser) (int, error) {
+				used <- body.(*kgzip.Reader)
+				return 0, nil
+			}},
+			databases: map[string]struct{}{"testdb": {}},
+		}
+		req := httptest.NewRequest("POST", "/transfer?filename=testdb_testtable_testschema_1234567890.wal", blocked)
+		req.Header.Set("Content-Encoding", "gzip")
+		done := make(chan struct{})
+		go func() { s.HandleTransfer(httptest.NewRecorder(), req); close(done) }()
+		defer func() { release(); <-done }()
+		synctest.Wait()
+		var active *kgzip.Reader
+		select {
+		case active = <-used:
+		default:
+			t.Fatal("transfer did not reach import before becoming blocked")
+		}
+		select {
+		case <-blocked.blocked:
+		default:
+			t.Fatal("transfer cleanup did not reach drain")
+		}
+		other := transferGzipReaders.Get().(*kgzip.Reader)
+		require.NotSame(t, active, other, "decoder must not be available while request cleanup uses it")
+		transferGzipReaders.Put(other)
+		release()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("transfer did not finish cleanup")
+		}
+	})
 }
 
 func TestService_HandleTransfer_InvalidGzipEncoding(t *testing.T) {

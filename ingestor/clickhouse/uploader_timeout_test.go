@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -149,49 +150,37 @@ func hangBatch(t *testing.T, table string) *cluster.Batch {
 // after batchUploadTimeout, the worker retries it, and the probe is scheduled
 // promptly.
 func TestWorkerBoundedBatchTimeoutPrepareHangs(t *testing.T) {
-	const timeout = 100 * time.Millisecond
-
 	conn := &hangingPrepareConnection{}
-	u, cancel := newHangUploader(t, conn, timeout)
-	defer cancel()
-
-	first := hangBatch(t, "CpuUsage")
-	setBatcher(t, first, &stubBatcher{})
-	u.queue <- first
-
-	// The first batch must actually reach PrepareInsert before the probe is
-	// enqueued, so the probe is the real discriminator between a wedged worker
-	// and a recovered one.
-	require.Eventually(t, func() bool { return conn.prepareCalls() >= 1 }, time.Second, time.Millisecond)
-
-	probe := hangBatch(t, "MemoryUsage")
-	setBatcher(t, probe, &stubBatcher{})
-	u.queue <- probe
-
-	// A wedged worker never picks up the probe.  A recovered one does.
-	require.Eventually(t, func() bool { return probe.IsReleased() }, 2*timeout+500*time.Millisecond, time.Millisecond,
-		"probe batch never scheduled: worker wedged in PrepareInsert with no per-batch timeout")
+	testWorkerBoundedBatchTimeout(t, conn, conn.prepareCalls)
 }
 
 // TestWorkerBoundedBatchTimeoutAppendHangs proves the same for a batch stuck
 // inside writer.Append.
 func TestWorkerBoundedBatchTimeoutAppendHangs(t *testing.T) {
-	const timeout = 100 * time.Millisecond
-
 	conn := &hangingAppendConnection{}
-	u, cancel := newHangUploader(t, conn, timeout)
-	defer cancel()
+	testWorkerBoundedBatchTimeout(t, conn, conn.appendCalls)
+}
 
-	first := hangBatch(t, "CpuUsage")
+func testWorkerBoundedBatchTimeout(t *testing.T, conn connectionManager, calls func() int) {
+	t.Helper()
+	// WAL IDs must be generated before synctest switches to its virtual clock.
+	first, probe := hangBatch(t, "CpuUsage"), hangBatch(t, "MemoryUsage")
 	setBatcher(t, first, &stubBatcher{})
-	u.queue <- first
-
-	require.Eventually(t, func() bool { return conn.appendCalls() >= 1 }, time.Second, time.Millisecond)
-
-	probe := hangBatch(t, "MemoryUsage")
 	setBatcher(t, probe, &stubBatcher{})
-	u.queue <- probe
-
-	require.Eventually(t, func() bool { return probe.IsReleased() }, 2*timeout+500*time.Millisecond, time.Millisecond,
-		"probe batch never scheduled: worker wedged in Append with no per-batch timeout")
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 100 * time.Millisecond
+		u, cancel := newHangUploader(t, conn, timeout)
+		defer func() { cancel(); u.wg.Wait() }()
+		u.queue <- first
+		synctest.Wait()
+		require.Equal(t, 1, calls(), "first batch must reach the hanging operation")
+		u.queue <- probe
+		synctest.Wait()
+		require.False(t, probe.IsReleased(), "the sole worker is still processing the first batch")
+		time.Sleep(2 * timeout) // Virtual deadlines for the first batch and probe.
+		synctest.Wait()
+		require.Equal(t, 2, calls())
+		require.True(t, first.IsReleased())
+		require.True(t, probe.IsReleased(), "bounded upload deadlines must free the worker")
+	})
 }

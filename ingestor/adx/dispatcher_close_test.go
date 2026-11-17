@@ -5,8 +5,9 @@ package adx
 
 import (
 	"context"
+	"sync"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/stretchr/testify/require"
@@ -22,44 +23,40 @@ import (
 // goroutine mid-work with a gated uploader and asserts that Close() blocks
 // until the gate is released.
 func TestDispatcher_CloseWaitsForDispatchGoroutines(t *testing.T) {
-	u := &blockingUploadQueueUploader{
-		Uploader: NewFakeUploader("db"),
-		entered:  make(chan struct{}),
-		resume:   make(chan struct{}),
-	}
-	d := NewDispatcher([]Uploader{u})
-	require.NoError(t, d.Open(context.Background()))
+	synctest.Test(t, func(t *testing.T) {
+		u := &blockingUploadQueueUploader{
+			Uploader: NewFakeUploader("db"),
+			entered:  make(chan struct{}),
+			resume:   make(chan struct{}),
+		}
+		d := NewDispatcher([]Uploader{u})
+		require.NoError(t, d.Open(context.Background()))
+		release := sync.OnceFunc(func() { close(u.resume) })
+		defer func() { release(); _ = d.Close() }()
 
-	// Send a batch so the dispatch goroutine begins dispatching it. The
-	// uploader's UploadQueue() call blocks on the gate, pinning the goroutine
-	// inside dispatchBatch.
-	d.UploadQueue() <- &cluster.Batch{Database: "db", Prefix: "x"}
-	select {
-	case <-u.entered:
-	case <-time.After(time.Second):
-		t.Fatal("dispatch goroutine did not reach the uploader")
-	}
+		// Send a batch so the dispatch goroutine begins dispatching it. The
+		// uploader's UploadQueue() call blocks on the gate, pinning the goroutine
+		// inside dispatchBatch.
+		d.UploadQueue() <- &cluster.Batch{Database: "db", Prefix: "x"}
+		<-u.entered
 
-	// Post-fix, Close() blocks on the WaitGroup join until the dispatch
-	// goroutine is released. Pre-fix, Close() returns immediately without
-	// waiting for the goroutine, so done fires while the gate is still held.
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- d.Close() }()
+		// Post-fix, Close() blocks on the WaitGroup join until the dispatch
+		// goroutine is released. Pre-fix, Close() returns immediately without
+		// waiting for the goroutine, so done fires while the gate is still held.
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- d.Close() }()
 
-	select {
-	case err := <-closeDone:
-		t.Fatalf("Close returned before the dispatch goroutine stopped (leak window): %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
+		synctest.Wait()
+		select {
+		case err := <-closeDone:
+			t.Fatalf("Close returned before the dispatch goroutine stopped (leak window): %v", err)
+		default:
+		}
 
-	// Release the dispatch goroutine; Close should now return.
-	close(u.resume)
-	select {
-	case err := <-closeDone:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("Close did not return after the dispatch goroutine was released")
-	}
+		// Release the dispatch goroutine; Close should now return.
+		release()
+		require.NoError(t, <-closeDone)
+	})
 }
 
 // blockingUploadQueueUploader blocks inside UploadQueue() until the gate is
