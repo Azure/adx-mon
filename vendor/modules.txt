@@ -15,7 +15,7 @@ cel.dev/expr
 # dario.cat/mergo v1.0.2
 ## explicit; go 1.13
 dario.cat/mergo
-# github.com/Azure/azure-kusto-go/azkustodata v1.2.2
+# github.com/Azure/azure-kusto-go/azkustodata v1.2.3
 ## explicit; go 1.24.0
 github.com/Azure/azure-kusto-go/azkustodata
 github.com/Azure/azure-kusto-go/azkustodata/errors
@@ -541,6 +541,8 @@ github.com/prometheus/client_model/go
 # github.com/prometheus/common v0.74.0
 ## explicit; go 1.26.0
 github.com/prometheus/common/config
+github.com/prometheus/common/config/internal/secretvalue
+github.com/prometheus/common/config/secret
 github.com/prometheus/common/expfmt
 github.com/prometheus/common/model
 # github.com/prometheus/procfs v0.22.0
