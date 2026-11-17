@@ -8,15 +8,26 @@ import (
 )
 
 // AlerterSpec defines the desired state of Alerter
+// +kubebuilder:validation:XValidation:rule="(has(self.notificationEndpoint) && size(self.notificationEndpoint) > 0) != (has(self.notificationEndpoints) && size(self.notificationEndpoints) > 0) && (!has(self.notificationEndpoint) || !has(self.notificationEndpoints)) && (!has(self.notificationEndpoints) || self.notificationEndpoints.all(e, size(e) > 0))",message="exactly one of notificationEndpoint or notificationEndpoints must be specified"
 type AlerterSpec struct {
 	//+kubebuilder:validation:Optional
 	// Image is the container image to use for the alerter component. Optional; if omitted, a default image will be used.
 	Image string `json:"image,omitempty"`
 
-	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Optional
 	//+kubebuilder:validation:Format=uri
-	// NotificationEndpoint is the URI where alert notifications will be sent. This field is required.
-	NotificationEndpoint string `json:"notificationEndpoint"`
+	//+kubebuilder:validation:MinLength=1
+	// NotificationEndpoint is the URI where alert notifications will be sent.
+	// Exactly one of notificationEndpoint or notificationEndpoints must be specified.
+	NotificationEndpoint string `json:"notificationEndpoint,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:validation:MinItems=1
+	//+kubebuilder:validation:items:Format=uri
+	//+kubebuilder:validation:items:MinLength=1
+	// NotificationEndpoints is the list of URIs where alert notifications will be fanned out.
+	// Exactly one of notificationEndpoint or notificationEndpoints must be specified.
+	NotificationEndpoints []string `json:"notificationEndpoints,omitempty"`
 
 	//+kubebuilder:validation:Required
 	// ADXClusterSelector is a label selector used to select the ADXCluster CRDs this alerter should target. This field is required.

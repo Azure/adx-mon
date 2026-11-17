@@ -31,6 +31,24 @@ type AlertCli interface {
 	Create(ctx context.Context, endpoint string, alert alert.Alert) error
 }
 
+type EvaluationAlertCli interface {
+	AlertCli
+	BeginEvaluation(meta alert.EvalMeta) uint64
+	EnqueueEvaluation(ctx context.Context, evalID uint64, a alert.Alert) error
+	SealEvaluation(evalID uint64, forceThrottled bool, extraSuppressed []alert.SuppressedAlert, extraSuppressedTotal int, incomplete bool)
+}
+
+type evalIDContextKey struct{}
+
+func withEvalID(ctx context.Context, evalID uint64) context.Context {
+	return context.WithValue(ctx, evalIDContextKey{}, evalID)
+}
+
+func evalIDFromContext(ctx context.Context) (uint64, bool) {
+	id, ok := ctx.Value(evalIDContextKey{}).(uint64)
+	return id, ok && id != 0
+}
+
 type Executor struct {
 	alertCli    AlertCli
 	alertAddr   string
@@ -185,11 +203,28 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	}
 
 	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
-	logger.Debugf("Sending alert %s %v", addr, a)
+	logger.Debugf("Sending alert %s %v", alert.RedactURL(addr), a)
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	if evalCli, ok := e.alertCli.(EvaluationAlertCli); ok {
+		if evalID, hasEval := evalIDFromContext(ctx); hasEval {
+			err = evalCli.EnqueueEvaluation(ctx, evalID, a)
+		} else {
+			err = evalCli.Create(ctx, addr, a)
+		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		if err != nil {
+			logger.Errorf("Failed to create Notification: %s\n", err)
+			metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
+		}
+		return nil
+	}
+
 	err = e.alertCli.Create(ctx, addr, a)
 	if contextErr := ctx.Err(); contextErr != nil {
 		return contextErr

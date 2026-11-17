@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -21,7 +22,12 @@ func TestCloseCleansUpAfterHTTPShutdownTimeout(t *testing.T) {
 	httpShutdownGrace = 20 * time.Millisecond
 	defer func() { httpShutdownGrace = oldGrace }()
 
-	l, err := NewService(&AlerterOpts{Dev: true, Port: port, Concurrency: 1, KustoEndpoints: map[string]string{"fake": "http://fake.endpoint"}})
+	alertSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer alertSrv.Close()
+
+	l, err := NewService(&AlerterOpts{Dev: true, Port: port, AlertAddr: alertSrv.URL, Concurrency: 1, KustoEndpoints: map[string]string{"fake": "http://fake.endpoint"}})
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
