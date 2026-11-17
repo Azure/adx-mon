@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -59,57 +60,58 @@ func (s *ctxBlockingSink) NumClosed() int {
 // non-durable sink that honors only ctx.Done() would keep blocking forever after
 // stop is cancelled, and Close() could stall.
 func TestWorker_BatchContextCancelledOnShutdown(t *testing.T) {
-	input := make(chan *types.LogBatch)
-	sink := &ctxBlockingSink{
-		name:    "ctx-blocking-sink",
-		done:    make(chan struct{}),
-		entered: make(chan struct{}),
-	}
+	synctest.Test(t, func(t *testing.T) {
+		input := make(chan *types.LogBatch)
+		sink := &ctxBlockingSink{
+			name:    "ctx-blocking-sink",
+			done:    make(chan struct{}),
+			entered: make(chan struct{}),
+		}
 
-	w := &worker{
-		SourceName:   "test-source",
-		Input:        input,
-		Sinks:        []types.Sink{sink},
-		BatchTimeout: 30 * time.Second, // long enough that the batch ctx itself never times out
-	}
+		w := &worker{
+			SourceName:   "test-source",
+			Input:        input,
+			Sinks:        []types.Sink{sink},
+			BatchTimeout: 30 * time.Second, // long enough that the batch ctx itself never times out
+		}
 
-	stop, cancelStop := context.WithCancel(context.Background())
+		stop, cancelStop := context.WithCancel(context.Background())
 
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		w.RunWaitingForStorage(stop)
-	})
-	t.Cleanup(func() {
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			w.RunWaitingForStorage(stop)
+		})
+		t.Cleanup(func() {
+			cancelStop()
+			close(sink.done)
+			close(input)
+			wg.Wait()
+		})
+
+		batch := types.LogBatchPool.Get()
+		log := types.LogPool.Get()
+		log.SetBodyValue("test", "value")
+		batch.Logs = append(batch.Logs, log)
+
+		input <- batch
+
+		// Wait until the sink has entered Send and is blocked on the batch ctx.
+		<-sink.entered
+
+		// Shut down while the sink is in-flight. Before the fix, the batch ctx was
+		// context.Background()-derived and the storage-wait value (the only link to
+		// stop) is never consulted by this plain sink, so it stays blocked forever.
 		cancelStop()
-		close(sink.done)
-		close(input)
-		wg.Wait()
+
+		// Let every runnable goroutine settle without advancing the batch deadline.
+		synctest.Wait()
+		select {
+		case <-sink.done:
+			t.Fatal("sink completed normally instead of via ctx cancellation")
+		default:
+		}
+		require.Equal(t, 1, sink.NumClosed(), "sink must observe shutdown, not wait for its batch deadline")
 	})
-
-	batch := types.LogBatchPool.Get()
-	log := types.LogPool.Get()
-	log.SetBodyValue("test", "value")
-	batch.Logs = append(batch.Logs, log)
-
-	input <- batch
-
-	// Wait until the sink has entered Send and is blocked on the batch ctx.
-	<-sink.entered
-
-	// Shut down while the sink is in-flight. Before the fix, the batch ctx was
-	// context.Background()-derived and the storage-wait value (the only link to
-	// stop) is never consulted by this plain sink, so it stays blocked forever.
-	cancelStop()
-
-	// The sink must observe the cancellation and return promptly. Give a few
-	// seconds of slack; a correct implementation unblocks immediately.
-	select {
-	case <-sink.done:
-		t.Fatal("sink completed normally instead of via ctx cancellation")
-	default:
-	}
-	require.Eventually(t, func() bool { return sink.NumClosed() > 0 }, 5*time.Second, 10*time.Millisecond,
-		"sink was not cancelled on shutdown: the per-batch context did not derive from the stop context")
 }
 
 func TestWorker_DrainsFinalBatchAfterStop(t *testing.T) {
