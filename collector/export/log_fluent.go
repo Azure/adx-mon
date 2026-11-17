@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"slices"
 	"strings"
@@ -33,7 +34,9 @@ type LogToFluentExporter struct {
 	encoderPool        *sync.Pool
 
 	connMu sync.Mutex
-	dialer net.Dialer
+	dialer interface {
+		DialContext(context.Context, string, string) (net.Conn, error)
+	}
 
 	// conn is the persistent connection to the destination, guarded by connMu.
 	// It is re-established on demand and reset to nil if a write fails.
@@ -80,7 +83,7 @@ func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter,
 	return &LogToFluentExporter{
 		destinationNetwork: destinationNetwork,
 		destination:        destination,
-		dialer:             dialer,
+		dialer:             &dialer,
 		encoderPool: &sync.Pool{
 			New: func() any {
 				return newFluentEncoder(opts.TagAttribute)
@@ -127,36 +130,49 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 		e.conn = nil
 		e.connection = nil
 	}
-	if e.conn == nil {
-		conn, err := e.dialer.DialContext(ctx, e.destinationNetwork, e.destination)
-		if err != nil {
-			return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
+	// An idle peer (notably a restarted Unix socket) can disappear before the
+	// EOF watcher runs. Retry the same batch once if the stale connection wrote
+	// no bytes. Never replay a partial write: the peer may have received it.
+	retryStale := e.conn != nil
+	for {
+		if e.conn == nil {
+			conn, dialErr := e.dialer.DialContext(ctx, e.destinationNetwork, e.destination)
+			if dialErr != nil {
+				err = fmt.Errorf("failed to connect to %s: %w", e.destination, dialErr)
+				break
+			}
+			e.conn = conn
+			e.connection = &fluentConnection{conn: conn}
+			go e.connection.watch()
 		}
-		e.conn = conn
-		e.connection = &fluentConnection{conn: conn}
-		go e.connection.watch()
-	}
 
-	// Set write deadline
-	if deadline, ok := ctx.Deadline(); ok {
-		e.conn.SetWriteDeadline(deadline)
-	} else {
-		e.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-	}
+		if deadline, ok := ctx.Deadline(); ok {
+			e.conn.SetWriteDeadline(deadline)
+		} else {
+			e.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		}
 
-	// Write the data
-	_, err = e.conn.Write(data)
-	if err != nil {
-		// The connection is no longer usable; close it so the next Send reconnects.
-		e.conn.Close()
+		var n int
+		n, err = e.conn.Write(data)
+		if err == nil && n == len(data) {
+			metrics.CollectorExporterSent.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
+			return nil
+		}
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		_ = e.conn.Close()
 		e.conn = nil
 		e.connection = nil
-		metrics.CollectorExporterFailed.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
-		return fmt.Errorf("failed to write to %s: %w", e.destination, err)
+		if retryStale && n == 0 && ctx.Err() == nil {
+			retryStale = false
+			continue
+		}
+		err = fmt.Errorf("failed to write to %s: %w", e.destination, err)
+		break
 	}
-
-	metrics.CollectorExporterSent.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
-	return nil
+	metrics.CollectorExporterFailed.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
+	return err
 }
 
 func (e *LogToFluentExporter) Name() string {
