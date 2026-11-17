@@ -2,8 +2,12 @@ package export
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +16,117 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tinylib/msgp/msgp"
 )
+
+type fluentWriteConn struct {
+	net.Conn
+	err     error
+	partial bool
+	writes  int
+	payload []byte
+	done    chan struct{}
+	once    sync.Once
+}
+
+func (c *fluentWriteConn) Read([]byte) (int, error) { <-c.done; return 0, io.EOF }
+func (c *fluentWriteConn) Write(b []byte) (int, error) {
+	c.writes++
+	if c.err != nil {
+		if c.partial {
+			return 1, c.err
+		}
+		return 0, c.err
+	}
+	c.payload = append(c.payload, b...)
+	return len(b), nil
+}
+func (c *fluentWriteConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *fluentWriteConn) Close() error                     { c.once.Do(func() { close(c.done) }); return nil }
+
+type fluentRetryDialer struct {
+	conn  net.Conn
+	calls int
+}
+
+func (d *fluentRetryDialer) DialContext(context.Context, string, string) (net.Conn, error) {
+	d.calls++
+	return d.conn, nil
+}
+
+func TestFluentRetriesStaleConnection(t *testing.T) {
+	for _, kind := range []string{"zero write", "partial write", "retry fails", "canceled"} {
+		t.Run(kind, func(t *testing.T) {
+			stale := &fluentWriteConn{err: errors.New("stale socket"), done: make(chan struct{}), partial: kind == "partial write"}
+			fresh := &fluentWriteConn{done: make(chan struct{})}
+			defer fresh.Close()
+			if kind == "retry fails" {
+				fresh.err = errors.New("replacement failed")
+			}
+			dialer := &fluentRetryDialer{conn: fresh}
+			e, err := NewLogToFluentExporter(LogToFluentExporterOpts{Destination: "unix:///fluent.sock", TagAttribute: "destTag"})
+			require.NoError(t, err)
+			e.conn, e.connection = stale, &fluentConnection{conn: stale}
+			e.dialer = dialer
+			defer e.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if kind == "canceled" {
+				cancel()
+			}
+			err = e.Send(ctx, newTestFluentBatch())
+			if kind == "zero write" {
+				require.NoError(t, err, "retry the same batch, not just the next one")
+				expected, err := newFluentEncoder("destTag").encode(newTestFluentBatch())
+				require.NoError(t, err)
+				require.Equal(t, expected, fresh.payload)
+			} else {
+				require.Error(t, err)
+			}
+			if kind == "partial write" || kind == "canceled" {
+				require.Zero(t, dialer.calls, "do not replay possibly delivered bytes or canceled work")
+			} else {
+				require.Equal(t, 1, dialer.calls, "retry at most once")
+				require.Equal(t, 1, fresh.writes)
+			}
+			require.Equal(t, 1, stale.writes)
+		})
+	}
+}
+
+func TestFluentUnixRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fluent.sock")
+	e, err := NewLogToFluentExporter(LogToFluentExporterOpts{Destination: "unix://" + path, TagAttribute: "destTag"})
+	require.NoError(t, err)
+	defer e.Close()
+	batch := newTestFluentBatch()
+	expected, err := newFluentEncoder("destTag").encode(batch)
+	require.NoError(t, err)
+	for range 2 {
+		// Closing and recreating the listener models the peer process restarting
+		// at the same socket path. The first Send after each start must arrive.
+		ln, err := net.Listen("unix", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln.Close() })
+		received := make(chan []byte, 1)
+		result := make(chan error, 1)
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				result <- err
+				return
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			payload := make([]byte, len(expected))
+			_, err = io.ReadFull(conn, payload)
+			_ = conn.Close()
+			received <- payload
+			result <- err
+		}()
+		require.NoError(t, e.Send(t.Context(), batch))
+		require.NoError(t, <-result)
+		require.Equal(t, expected, <-received)
+		require.NoError(t, ln.Close())
+	}
+}
 
 // startFluentTestServer starts a TCP server on an ephemeral port that counts
 // the number of distinct accepted connections. Accepted connections are drained
