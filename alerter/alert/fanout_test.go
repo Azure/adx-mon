@@ -178,6 +178,10 @@ func TestClientAndFanout_Strict201AndErrorBodyCap(t *testing.T) {
 			t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
 				var hits atomic.Int32
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodPost {
+						http.NotFound(w, r)
+						return
+					}
 					hits.Add(1)
 					w.WriteHeader(code)
 					if code != http.StatusNoContent {
@@ -949,6 +953,10 @@ func TestFanoutClient_ZeroRawWebhookURLsInMetricsLogsAndErrors(t *testing.T) {
 func TestClientAndFanout_Truncated400BodyStillFailsPermanentlyWithoutRetry(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		hits.Add(1)
 		hj, ok := w.(http.Hijacker)
 		require.True(t, ok)
@@ -987,6 +995,10 @@ func TestFanoutClient_Stalled400BodyTimeoutStillFailsPermanentlyWithoutRetry(t *
 	stopHandler := make(chan struct{})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		hits.Add(1)
 		w.Header().Set("Content-Length", "1024")
 		w.WriteHeader(http.StatusBadRequest)
@@ -1130,6 +1142,10 @@ func TestFanoutClient_SameHostPerEndpointTransportIsolationUnder100Concurrency(t
 	var fastDelivered atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/slow/") {
 			if slowInFlight.Add(1) == workers {
 				close(allSlowOccupied)

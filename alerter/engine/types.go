@@ -37,6 +37,7 @@ func (err *ThrottledNotificationsError) merge(other *ThrottledNotificationsError
 // AlertResult is the delivery-neutral result of converting an alert query row.
 type AlertResult struct {
 	Destination   string
+	Destinations  []string
 	Title         string
 	Summary       string
 	Description   string

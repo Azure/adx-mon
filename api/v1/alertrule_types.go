@@ -18,6 +18,7 @@ package v1
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,7 +31,15 @@ import (
 // in sync with the validation rule on AlertRuleSpec.Interval.
 const MinAlertRuleInterval = 30 * time.Second
 
+// MaxAlertRuleDestinations is the maximum number of entries permitted in AlertRuleSpec.Destinations.
+const MaxAlertRuleDestinations = 32
+
+// MaxAlertRuleDestinationLength is the maximum Unicode code-point length permitted per AlertRuleSpec.Destinations item,
+// bounding Kubernetes CRD CEL uniqueness admission cost well below the static budget.
+const MaxAlertRuleDestinationLength = 512
+
 // AlertRuleSpec defines the desired state of AlertRule
+// +kubebuilder:validation:XValidation:rule="!(has(self.destination) && size(self.destination) > 0 && has(self.destinations) && size(self.destinations) > 0)",message="destination and destinations are mutually exclusive"
 type AlertRuleSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -42,7 +51,17 @@ type AlertRuleSpec struct {
 	Query    string          `json:"query,omitempty"`
 	// +kubebuilder:validation:XValidation:rule="self == '' || duration(self) >= duration('0s')",message="autoMitigateAfter must be a valid duration"
 	AutoMitigateAfter metav1.Duration `json:"autoMitigateAfter,omitempty"`
-	Destination       string          `json:"destination,omitempty"`
+	// Destination is the legacy singular notification target identifier. Deprecated in favor of Destinations;
+	// mutually exclusive with Destinations.
+	Destination string `json:"destination,omitempty"`
+	// Destinations is an ordered list of notification target identifiers used to route alerts across receivers.
+	// Mutually exclusive with deprecated Destination.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=512
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, x == y))",message="destinations must not contain duplicate entries"
+	Destinations []string `json:"destinations,omitempty"`
 
 	// Key/Value pairs used to determine when an alert can execute.  If empty, always execute.  Keys and values
 	// are deployment specific and configured on alerter instances.  For example, an alerter instance may be
@@ -71,60 +90,123 @@ type AlertRuleSpec struct {
 // Criteria field.  The older version was a map[string]string.  This function will convert the older version to the
 // new version.
 func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
-	rule := make(map[string]any)
+	var rule map[string]any
 	if err := json.Unmarshal(data, &rule); err != nil {
 		return err
 	}
-	a.Database = rule["database"].(string)
-	if rule["interval"] != nil {
-		dur := rule["interval"].(string)
+	if rule == nil {
+		*a = AlertRuleSpec{}
+		return nil
+	}
+
+	var out AlertRuleSpec
+
+	if raw, ok := rule["database"]; ok && raw != nil {
+		db, isStr := raw.(string)
+		if !isStr {
+			return fmt.Errorf("invalid type for AlertRuleSpec.database: expected string, got %T", raw)
+		}
+		out.Database = db
+	}
+
+	if raw, ok := rule["interval"]; ok && raw != nil {
+		dur, isStr := raw.(string)
+		if !isStr {
+			return fmt.Errorf("invalid type for AlertRuleSpec.interval: expected string, got %T", raw)
+		}
 		if dur != "" {
 			d, err := time.ParseDuration(dur)
 			if err != nil {
 				return err
 			}
-			a.Interval = metav1.Duration{Duration: d}
+			out.Interval = metav1.Duration{Duration: d}
 		}
 	}
 
-	a.Query = rule["query"].(string)
+	if raw, ok := rule["query"]; ok && raw != nil {
+		q, isStr := raw.(string)
+		if !isStr {
+			return fmt.Errorf("invalid type for AlertRuleSpec.query: expected string, got %T", raw)
+		}
+		out.Query = q
+	}
 
-	if rule["autoMitigateAfter"] != nil {
-		mit := rule["autoMitigateAfter"].(string)
+	if raw, ok := rule["autoMitigateAfter"]; ok && raw != nil {
+		mit, isStr := raw.(string)
+		if !isStr {
+			return fmt.Errorf("invalid type for AlertRuleSpec.autoMitigateAfter: expected string, got %T", raw)
+		}
 		if mit != "" {
 			d, err := time.ParseDuration(mit)
 			if err != nil {
 				return err
 			}
-			a.AutoMitigateAfter = metav1.Duration{Duration: d}
+			out.AutoMitigateAfter = metav1.Duration{Duration: d}
 		}
 	}
-	a.Destination = rule["destination"].(string)
+
+	if raw, ok := rule["destination"]; ok && raw != nil {
+		dest, isStr := raw.(string)
+		if !isStr {
+			return fmt.Errorf("invalid type for AlertRuleSpec.destination: expected string, got %T", raw)
+		}
+		out.Destination = dest
+	}
+
+	if raw, ok := rule["destinations"]; ok && raw != nil {
+		list, isList := raw.([]any)
+		if !isList {
+			return fmt.Errorf("invalid type for AlertRuleSpec.destinations: expected []string, got %T", raw)
+		}
+		out.Destinations = make([]string, 0, len(list))
+		for i, item := range list {
+			str, isStr := item.(string)
+			if !isStr {
+				return fmt.Errorf("invalid type for AlertRuleSpec.destinations[%d]: expected string, got %T", i, item)
+			}
+			out.Destinations = append(out.Destinations, str)
+		}
+	}
 
 	// The type for Criteria has changed to map[string][]string.  This handles backwards compatibility where
 	// some existing alerts may have a string value instead of a list of strings.
-	criteria := rule["criteria"]
-	if s, ok := criteria.(map[string]any); ok && s != nil {
-		a.Criteria = make(map[string][]string)
+	if rawCriteria, ok := rule["criteria"]; ok && rawCriteria != nil {
+		s, isMap := rawCriteria.(map[string]any)
+		if !isMap {
+			return fmt.Errorf("invalid type for AlertRuleSpec.criteria: expected object, got %T", rawCriteria)
+		}
+		out.Criteria = make(map[string][]string, len(s))
 		for k, raw := range s {
 			switch val := raw.(type) {
+			case nil:
+				out.Criteria[k] = nil
 			case string:
-				a.Criteria[k] = []string{val}
+				out.Criteria[k] = []string{val}
 			case []any:
-				for _, v := range val {
-					if str, ok := v.(string); ok {
-						a.Criteria[k] = append(a.Criteria[k], str)
+				vals := make([]string, 0, len(val))
+				for i, v := range val {
+					str, isStr := v.(string)
+					if !isStr {
+						return fmt.Errorf("invalid type for AlertRuleSpec.criteria[%q][%d]: expected string, got %T", k, i, v)
 					}
+					vals = append(vals, str)
 				}
+				out.Criteria[k] = vals
+			default:
+				return fmt.Errorf("invalid type for AlertRuleSpec.criteria[%q]: expected string or []string, got %T", k, raw)
 			}
 		}
 	}
 
-	// Optional criteriaExpression (string). If absent or wrong type, leave zero value.
-	if expr, ok := rule["criteriaExpression"].(string); ok {
-		a.CriteriaExpression = expr
+	if raw, ok := rule["criteriaExpression"]; ok && raw != nil {
+		expr, isStr := raw.(string)
+		if !isStr {
+			return fmt.Errorf("invalid type for AlertRuleSpec.criteriaExpression: expected string, got %T", raw)
+		}
+		out.CriteriaExpression = expr
 	}
 
+	*a = out
 	return nil
 }
 
@@ -142,9 +224,11 @@ type AlertRuleStatus struct {
 	LastRowsReturned                   int64 `json:"lastRowsReturned,omitempty"`
 	LastAlertsGenerated                int64 `json:"lastAlertsGenerated,omitempty"`
 	// Conditions provide standardized status signaling. Controllers may
-	// set shared conditions defined in conditions.go such as ConditionCriteria
-	// to reflect evaluation of Spec.Criteria / Spec.CriteriaExpression.
+	// set shared conditions defined in conditions.go such as ConditionCriteria,
+	// ConditionDestinationMatched, and ConditionNotificationDelivery.
 	// +optional
+	// +listType=map
+	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 

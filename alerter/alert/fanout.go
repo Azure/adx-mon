@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,11 +71,13 @@ var ErrClientClosed = errors.New("alert fanout client is closed")
 type Endpoint struct {
 	// URL is the full normalized "<base>/alerts[?query]" target used strictly for HTTP delivery.
 	URL string
+	// DestinationsURL is the full normalized "<base>/destinations[?query]" target used for capability discovery.
+	DestinationsURL string
 	// ID is the redacted identifier "<scheme>://<host>[:<port>]/#<sha256[:8]>" safe for logs, metrics, and errors.
 	ID string
 }
 
-// ParseBaseEndpoint validates a webhook base address and structurally joins "/alerts"
+// ParseBaseEndpoint validates a webhook base address and structurally joins "/alerts" and "/destinations"
 // while preserving query parameters and never stripping an existing "/alerts" path suffix.
 func ParseBaseEndpoint(raw string) (Endpoint, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -99,10 +102,16 @@ func ParseBaseEndpoint(raw string) (Endpoint, error) {
 		alertsURL.Path = "/" + alertsURL.Path
 	}
 
+	destURL := baseCopy.JoinPath("destinations")
+	if !strings.HasPrefix(destURL.Path, "/") {
+		destURL.Path = "/" + destURL.Path
+	}
+
 	normalized := alertsURL.String()
 	return Endpoint{
-		URL: normalized,
-		ID:  formatEndpointID(scheme, hostPort, normalized),
+		URL:             normalized,
+		DestinationsURL: destURL.String(),
+		ID:              formatEndpointID(scheme, hostPort, normalized),
 	}, nil
 }
 
@@ -190,9 +199,12 @@ type SuppressedAlert struct {
 
 // EvalMeta describes an AlertRule query evaluation for per-endpoint 429 suppression and summary emission.
 type EvalMeta struct {
+	RuleUID           string
+	Generation        int64
 	Namespace         string
 	Name              string
 	Destination       string
+	Destinations      []string
 	Region            string
 	BuildSummaryAlert func(suppressed []SuppressedAlert, totalSuppressed int, incomplete bool) Alert
 }
@@ -213,6 +225,11 @@ type fanoutConfig struct {
 	maxRetries         int
 	clock              clock.Clock
 	jitterFn           func(base time.Duration) time.Duration
+	staticCatchAll     bool
+	discoveryProber    DiscoveryProber
+	discoveryInterval  time.Duration
+	discoveryTimeout   time.Duration
+	discoveryJitterFn  func(base time.Duration) time.Duration
 }
 
 // WithTimeout configures the per-POST HTTP timeout.
@@ -321,22 +338,148 @@ type ruleKey struct {
 	name      string
 }
 
+type latchKey struct {
+	uid        string
+	namespace  string
+	name       string
+	generation int64
+}
+
+func makeLatchKey(meta RuleMeta) (latchKey, bool) {
+	if meta.UID != "" {
+		return latchKey{uid: meta.UID, generation: meta.Generation}, true
+	}
+	if meta.Namespace != "" && meta.Name != "" {
+		return latchKey{namespace: meta.Namespace, name: meta.Name, generation: meta.Generation}, true
+	}
+	return latchKey{}, false
+}
+
 type ruleHealthTracker struct {
-	mu        sync.Mutex
-	unhealthy map[ruleKey]map[string]struct{}
+	mu              sync.Mutex
+	unhealthy       map[ruleKey]map[string]struct{}
+	unhealthyUID    map[ruleKey]string
+	latchedFailures map[latchKey]map[string]string
+	liveReconciled  bool
+	liveUIDs        map[string]int64
+	liveNames       map[ruleKey]int64
 }
 
 func newRuleHealthTracker() *ruleHealthTracker {
 	return &ruleHealthTracker{
-		unhealthy: make(map[ruleKey]map[string]struct{}),
+		unhealthy:       make(map[ruleKey]map[string]struct{}),
+		unhealthyUID:    make(map[ruleKey]string),
+		latchedFailures: make(map[latchKey]map[string]string),
 	}
 }
 
-func (h *ruleHealthTracker) recordSuccess(rk ruleKey, endpointID string) {
-	if rk.namespace == "" || rk.name == "" {
+func (h *ruleHealthTracker) isRuleMetaLiveLocked(rk ruleKey, meta RuleMeta) bool {
+	if !h.liveReconciled {
+		return true
+	}
+	if meta.UID != "" {
+		liveGen, exists := h.liveUIDs[meta.UID]
+		return exists && meta.Generation >= liveGen
+	}
+	checkRK := rk
+	if meta.Namespace != "" && meta.Name != "" {
+		checkRK = ruleKey{namespace: meta.Namespace, name: meta.Name}
+	}
+	if checkRK.namespace == "" || checkRK.name == "" {
+		return false
+	}
+	liveGen, exists := h.liveNames[checkRK]
+	return exists && meta.Generation >= liveGen
+}
+
+func (h *ruleHealthTracker) reconcileLiveRules(live []RuleMeta) {
+	newUIDs := make(map[string]int64, len(live))
+	newNames := make(map[ruleKey]int64, len(live))
+	newNameUIDs := make(map[ruleKey]string, len(live))
+	for _, rm := range live {
+		if rm.UID != "" {
+			newUIDs[rm.UID] = rm.Generation
+		}
+		if rm.Namespace != "" && rm.Name != "" {
+			rk := ruleKey{namespace: rm.Namespace, name: rm.Name}
+			newNames[rk] = rm.Generation
+			newNameUIDs[rk] = rm.UID
+		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.liveReconciled = true
+	h.liveUIDs = newUIDs
+	h.liveNames = newNames
+
+	for k := range h.latchedFailures {
+		if k.uid != "" {
+			if liveGen, exists := newUIDs[k.uid]; !exists || k.generation < liveGen {
+				delete(h.latchedFailures, k)
+			}
+			continue
+		}
+		rk := ruleKey{namespace: k.namespace, name: k.name}
+		if liveGen, exists := newNames[rk]; !exists || k.generation < liveGen {
+			delete(h.latchedFailures, k)
+		}
+	}
+
+	for rk := range h.unhealthy {
+		liveUID, exists := newNameUIDs[rk]
+		if !exists {
+			delete(h.unhealthy, rk)
+			delete(h.unhealthyUID, rk)
+			metrics.NotificationUnhealthy.DeleteLabelValues(rk.namespace, rk.name)
+			continue
+		}
+		if prevUID := h.unhealthyUID[rk]; prevUID != "" && liveUID != "" && prevUID != liveUID {
+			delete(h.unhealthy, rk)
+			delete(h.unhealthyUID, rk)
+			metrics.NotificationUnhealthy.WithLabelValues(rk.namespace, rk.name).Set(0)
+		}
+	}
+}
+
+func (h *ruleHealthTracker) retainedCounts() (latchedRules int, unhealthyRules int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.latchedFailures), len(h.unhealthy)
+}
+
+func (h *ruleHealthTracker) pruneOlderGenerationsLocked(meta RuleMeta) {
+	for k := range h.latchedFailures {
+		if meta.UID != "" && k.uid == meta.UID && k.generation < meta.Generation {
+			delete(h.latchedFailures, k)
+		} else if meta.UID == "" && k.uid == "" && meta.Namespace != "" && k.namespace == meta.Namespace && k.name == meta.Name && k.generation < meta.Generation {
+			delete(h.latchedFailures, k)
+		}
+	}
+}
+
+func (h *ruleHealthTracker) recordSuccess(rk ruleKey, meta RuleMeta, endpointID string, clearLatch bool) {
+	h.mu.Lock()
+	if !h.isRuleMetaLiveLocked(rk, meta) {
+		h.mu.Unlock()
 		return
 	}
-	h.mu.Lock()
+	if clearLatch {
+		h.pruneOlderGenerationsLocked(meta)
+		if lk, ok := makeLatchKey(meta); ok {
+			if eps, exists := h.latchedFailures[lk]; exists {
+				delete(eps, endpointID)
+				if len(eps) == 0 {
+					delete(h.latchedFailures, lk)
+				}
+			}
+		}
+	}
+	if rk.namespace == "" || rk.name == "" {
+		h.mu.Unlock()
+		return
+	}
 	if eps, ok := h.unhealthy[rk]; ok {
 		delete(eps, endpointID)
 		if len(eps) > 0 {
@@ -344,43 +487,99 @@ func (h *ruleHealthTracker) recordSuccess(rk ruleKey, endpointID string) {
 			return
 		}
 		delete(h.unhealthy, rk)
+		delete(h.unhealthyUID, rk)
 	}
 	metrics.NotificationUnhealthy.WithLabelValues(rk.namespace, rk.name).Set(0)
 	h.mu.Unlock()
 }
 
-func (h *ruleHealthTracker) recordFailure(rk ruleKey, endpointID string) {
-	if rk.namespace == "" || rk.name == "" {
+func (h *ruleHealthTracker) recordFailure(rk ruleKey, meta RuleMeta, endpointID string, markGauge bool, latchReason string) {
+	h.mu.Lock()
+	if !h.isRuleMetaLiveLocked(rk, meta) {
+		h.mu.Unlock()
 		return
 	}
-	h.mu.Lock()
+	if latchReason != "" {
+		h.pruneOlderGenerationsLocked(meta)
+		if lk, ok := makeLatchKey(meta); ok {
+			eps, exists := h.latchedFailures[lk]
+			if !exists {
+				eps = make(map[string]string)
+				h.latchedFailures[lk] = eps
+			}
+			eps[endpointID] = latchReason
+		}
+	}
+	if !markGauge || rk.namespace == "" || rk.name == "" {
+		h.mu.Unlock()
+		return
+	}
 	eps, ok := h.unhealthy[rk]
 	if !ok {
 		eps = make(map[string]struct{})
 		h.unhealthy[rk] = eps
 	}
 	eps[endpointID] = struct{}{}
+	if meta.UID != "" {
+		h.unhealthyUID[rk] = meta.UID
+	}
 	metrics.NotificationUnhealthy.WithLabelValues(rk.namespace, rk.name).Set(1)
 	h.mu.Unlock()
 }
 
+func (h *ruleHealthTracker) snapshotLatchedFailures(meta RuleMeta, orderedEndpoints []string) []string {
+	lk, ok := makeLatchKey(meta)
+	if !ok {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.isRuleMetaLiveLocked(ruleKey{namespace: meta.Namespace, name: meta.Name}, meta) {
+		return nil
+	}
+	h.pruneOlderGenerationsLocked(meta)
+	eps := h.latchedFailures[lk]
+	if len(eps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(eps))
+	seen := make(map[string]struct{}, len(eps))
+	for _, epID := range orderedEndpoints {
+		if reason, exists := eps[epID]; exists {
+			out = append(out, fmt.Sprintf("%s: %s", epID, reason))
+			seen[epID] = struct{}{}
+		}
+	}
+	for epID, reason := range eps {
+		if _, done := seen[epID]; !done {
+			out = append(out, fmt.Sprintf("%s: %s", epID, reason))
+		}
+	}
+	return out
+}
+
 // FanoutClient fans out each Alert to N webhook endpoints with isolated per-endpoint
-// worker pools, bounded queues, exponential backoff retries, and per-(endpoint, evalID)
-// HTTP 429 suppression and summary barriers.
+// worker pools, bounded queues, exponential backoff retries, optional GET <base>/destinations
+// capability discovery, and per-(endpoint, evalID) HTTP 429 suppression and summary barriers.
 type FanoutClient struct {
 	queues       []*endpointQueue
 	drainTimeout time.Duration
 	clock        clock.Clock
+	health       *ruleHealthTracker
+	replacer     *strings.Replacer
 
 	nextEvalID atomic.Uint64
 
-	mu           sync.Mutex
-	opened       bool
-	closeStarted bool
-	closed       bool
-	workerCtx    context.Context
-	workerCancel context.CancelFunc
-	wg           sync.WaitGroup
+	mu              sync.Mutex
+	opened          bool
+	closeStarted    bool
+	closed          bool
+	workerCtx       context.Context
+	workerCancel    context.CancelFunc
+	discoveryCtx    context.Context
+	discoveryCancel context.CancelFunc
+	wg              sync.WaitGroup
+	discoveryWg     sync.WaitGroup
 }
 
 // NewFanoutClient creates a FanoutClient for the provided webhook base addresses.
@@ -406,14 +605,28 @@ func NewFanoutClient(baseAddrs []string, opts ...FanoutOption) (*FanoutClient, e
 		maxRetries:         DefaultMaxRetries,
 		clock:              clock.RealClock{},
 		jitterFn:           defaultJitter,
+		discoveryInterval:  DefaultDiscoveryInterval,
+		discoveryTimeout:   DefaultDiscoveryTimeout,
+		discoveryJitterFn:  defaultDiscoveryJitter,
 	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
+	// When a custom in-memory Sender is injected without an explicit DiscoveryProber,
+	// there is no underlying HTTP server to probe so endpoints default to static CatchAll.
+	if cfg.sender != nil && cfg.discoveryProber == nil {
+		cfg.staticCatchAll = true
+	}
+
 	health := newRuleHealthTracker()
 	queues := make([]*endpointQueue, len(endpoints))
+	allURLs := make([]string, 0, len(endpoints)*3+len(baseAddrs))
+	for _, raw := range baseAddrs {
+		allURLs = append(allURLs, strings.TrimSpace(raw))
+	}
 	for i, ep := range endpoints {
+		allURLs = append(allURLs, ep.URL, ep.DestinationsURL)
 		epSender := cfg.sender
 		var ownClient *Client
 		if epSender == nil {
@@ -424,14 +637,26 @@ func NewFanoutClient(baseAddrs []string, opts ...FanoutOption) (*FanoutClient, e
 			epSender = httpCli
 			ownClient = httpCli
 		}
-		queues[i] = newEndpointQueue(ep, rawMatchingEndpoint(baseAddrs, ep), epSender, ownClient, cfg, health)
+		epProber := cfg.discoveryProber
+		var ownProber *httpDiscoveryProber
+		if !cfg.staticCatchAll && epProber == nil {
+			ownProber = newHTTPDiscoveryProber(cfg.discoveryTimeout)
+			epProber = ownProber
+		}
+		queues[i] = newEndpointQueue(ep, rawMatchingEndpoint(baseAddrs, ep), epSender, ownClient, epProber, ownProber, cfg, health)
 		metrics.EndpointQueueDepth.WithLabelValues(ep.ID).Set(0)
+		if cfg.staticCatchAll {
+			metrics.EndpointDiscoveryHealthy.WithLabelValues(ep.ID).Set(1)
+		}
 	}
+	globalReplacer, _ := buildURLReplacer(allURLs...)
 
 	return &FanoutClient{
 		queues:       queues,
 		drainTimeout: cfg.drainTimeout,
 		clock:        cfg.clock,
+		health:       health,
+		replacer:     globalReplacer,
 	}, nil
 }
 
@@ -464,28 +689,71 @@ func (f *FanoutClient) Endpoints() []Endpoint {
 	return out
 }
 
-// Open starts the isolated per-endpoint worker pools on an independent lifecycle context
-// so parent shutdown signal cancellation does not abort in-flight deliveries before Close drains.
-func (f *FanoutClient) Open(_ context.Context) error {
+// Open probes GET <base>/destinations on each non-static endpoint and starts the isolated
+// per-endpoint worker pools and 1-minute jittered capability refresh loops.
+func (f *FanoutClient) Open(ctx context.Context) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.closed {
+	if f.closed || f.closeStarted {
+		f.mu.Unlock()
 		return ErrClientClosed
 	}
 	if f.opened {
+		f.mu.Unlock()
 		return nil
 	}
 
 	f.workerCtx, f.workerCancel = context.WithCancel(context.Background())
+	f.discoveryCtx, f.discoveryCancel = context.WithCancel(context.Background())
 	f.opened = true
+	discoveryCtx := f.discoveryCtx
+	workerCtx := f.workerCtx
+	f.mu.Unlock()
+
+	probeParentCtx := discoveryCtx
+	if ctx != nil {
+		var cancel context.CancelFunc
+		probeParentCtx, cancel = context.WithCancel(discoveryCtx)
+		stopAfter := context.AfterFunc(ctx, cancel)
+		defer func() {
+			stopAfter()
+			cancel()
+		}()
+	}
+
+	var initProbeWg sync.WaitGroup
+	for _, q := range f.queues {
+		if q.staticCatchAll {
+			continue
+		}
+		initProbeWg.Add(1)
+		go func(eq *endpointQueue) {
+			defer initProbeWg.Done()
+			eq.probeOnce(probeParentCtx)
+			eq.completedProbes.Add(1)
+		}(q)
+	}
+	initProbeWg.Wait()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closeStarted || f.closed {
+		return ErrClientClosed
+	}
 
 	for _, q := range f.queues {
+		if !q.staticCatchAll {
+			f.discoveryWg.Add(1)
+			go func(eq *endpointQueue, dCtx context.Context) {
+				defer f.discoveryWg.Done()
+				eq.runDiscoveryLoop(dCtx)
+			}(q, discoveryCtx)
+		}
 		for range q.workers {
 			f.wg.Add(1)
 			go func(eq *endpointQueue, wCtx context.Context) {
 				defer f.wg.Done()
 				eq.runWorker(wCtx)
-			}(q, f.workerCtx)
+			}(q, workerCtx)
 		}
 	}
 	return nil
@@ -510,6 +778,7 @@ func (f *FanoutClient) Close() error {
 	f.closeStarted = true
 	opened := f.opened
 	workerCancel := f.workerCancel
+	discoveryCancel := f.discoveryCancel
 	f.mu.Unlock()
 
 	if !opened {
@@ -551,35 +820,21 @@ func (f *FanoutClient) Close() error {
 			workerCancel()
 		}
 		<-done
-		for _, q := range f.queues {
-			q.dropRemainingOnShutdown()
-		}
 	}
+	if discoveryCancel != nil {
+		discoveryCancel()
+	}
+	f.discoveryWg.Wait()
 	for _, q := range f.queues {
+		q.dropRemainingOnShutdown()
 		q.closeIdleConnections()
 	}
 	return nil
 }
 
-// Create enqueues a copy of alert into every configured endpoint's bounded queue.
+// Create enqueues a routed copy of alert into each matching configured endpoint's bounded queue.
 func (f *FanoutClient) Create(ctx context.Context, _ string, a Alert) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	closed := f.closed
-	f.mu.Unlock()
-	if closed {
-		return ErrClientClosed
-	}
-
-	sizeBytes := measureAlertBytes(a)
-	for _, q := range f.queues {
-		if err := q.enqueueEval(0, a, sizeBytes); err != nil {
-			return err
-		}
-	}
-	return nil
+	return f.fanoutAlert(ctx, 0, a)
 }
 
 // BeginEvaluation allocates an evaluation ID and registers its metadata on every endpoint queue.
@@ -591,9 +846,13 @@ func (f *FanoutClient) BeginEvaluation(meta EvalMeta) uint64 {
 	return evalID
 }
 
-// EnqueueEvaluation enqueues an evaluation row alert across all configured endpoints,
+// EnqueueEvaluation enqueues an evaluation row alert across matching configured endpoints,
 // suppressing it on any endpoint that has already received HTTP 429 for evalID.
 func (f *FanoutClient) EnqueueEvaluation(ctx context.Context, evalID uint64, a Alert) error {
+	return f.fanoutAlert(ctx, evalID, a)
+}
+
+func (f *FanoutClient) fanoutAlert(ctx context.Context, evalID uint64, a Alert) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -604,10 +863,36 @@ func (f *FanoutClient) EnqueueEvaluation(ctx context.Context, evalID uint64, a A
 		return ErrClientClosed
 	}
 
-	sizeBytes := measureAlertBytes(a)
+	candidates, explicit := alertCandidates(a)
+	ctxMeta, hasCtxMeta := RuleMetaFromContext(ctx)
+	rk := parseRuleFromSource(a.Source)
+	if hasCtxMeta && ctxMeta.Namespace != "" && ctxMeta.Name != "" {
+		rk = ruleKey{namespace: ctxMeta.Namespace, name: ctxMeta.Name}
+	}
+	if evalID != 0 && len(f.queues) > 0 {
+		if evalRK, evalMeta, ok := f.queues[0].lookupEvalMeta(evalID); ok {
+			rk = evalRK
+			if !hasCtxMeta {
+				ctxMeta = evalMeta
+			}
+		}
+	}
+	if ctxMeta.Namespace == "" && rk.namespace != "" {
+		ctxMeta.Namespace = rk.namespace
+		ctxMeta.Name = rk.name
+	}
+
+	isMeta := strings.HasPrefix(a.CorrelationID, "alert-failure/") || strings.HasPrefix(a.Source, "notification-failure/")
+	tracker := newRowRouteTracker(rk, !isMeta && rk.namespace != "" && rk.name != "")
+	defer tracker.releaseOne()
+
 	for _, q := range f.queues {
-		if err := q.enqueueEval(evalID, a, sizeBytes); err != nil {
+		outcome, err := q.enqueueEval(evalID, ctxMeta, a, candidates, explicit, tracker)
+		if err != nil {
 			return err
+		}
+		if outcome == enqueueMatched {
+			tracker.markMatched()
 		}
 	}
 	return nil
@@ -623,19 +908,34 @@ func (f *FanoutClient) SealEvaluation(evalID uint64, forceThrottled bool, extraS
 	}
 }
 
+type enqueueOutcome int
+
+const (
+	enqueueSkipped enqueueOutcome = iota
+	enqueueMatched
+	enqueueHeldUnknown
+)
+
 type queuedItem struct {
-	alert      Alert
-	rule       ruleKey
-	evalID     uint64
-	isSummary  bool
-	sizeBytes  int
-	enqueuedAt time.Time
-	deadline   time.Time
+	alert         Alert
+	rawCandidates []string
+	explicitDests bool
+	routed        bool
+	routeTracker  *rowRouteTracker
+	rule          ruleKey
+	ruleMeta      RuleMeta
+	evalID        uint64
+	isSummary     bool
+	sizeBytes     int
+	enqueuedAt    time.Time
+	deadline      time.Time
 }
 
 type epEvalState struct {
 	meta              EvalMeta
 	active            int
+	matchedAnyRow     bool
+	firstMatchedDest  string
 	endpointThrottled bool
 	summaryRequired   bool
 	sealed            bool
@@ -670,65 +970,113 @@ func (st *epEvalState) mergeExtra(extra []SuppressedAlert, extraTotal int) {
 }
 
 type endpointQueue struct {
-	endpoint       Endpoint
-	rawBases       []string
-	replacer       *strings.Replacer
-	sender         Sender
-	ownClient      *Client
-	workers        int
-	requestTimeout time.Duration
-	maxQueueItems  int
-	maxQueueBytes  int
-	maxItemAge     time.Duration
-	initialBackoff time.Duration
-	maxBackoff     time.Duration
-	maxRetries     int
-	clock          clock.Clock
-	jitterFn       func(base time.Duration) time.Duration
-	health         *ruleHealthTracker
+	endpoint            Endpoint
+	rawBases            []string
+	replacer            *strings.Replacer
+	sender              Sender
+	ownClient           *Client
+	prober              DiscoveryProber
+	ownProber           *httpDiscoveryProber
+	staticCatchAll      bool
+	discoveryInterval   time.Duration
+	discoveryTimeout    time.Duration
+	discoveryJitterFn   func(base time.Duration) time.Duration
+	onDemandMinInterval time.Duration
+	workers             int
+	requestTimeout      time.Duration
+	maxQueueItems       int
+	maxQueueBytes       int
+	maxItemAge          time.Duration
+	initialBackoff      time.Duration
+	maxBackoff          time.Duration
+	maxRetries          int
+	clock               clock.Clock
+	jitterFn            func(base time.Duration) time.Duration
+	health              *ruleHealthTracker
 
-	mu          sync.Mutex
-	queue       []queuedItem
-	head        int
-	queuedBytes int
-	closing     bool
-	evalStates  map[uint64]*epEvalState
+	mu               sync.Mutex
+	queue            []queuedItem
+	head             int
+	queuedBytes      int
+	closing          bool
+	evalStates       map[uint64]*epEvalState
+	discoveryMode    DiscoveryMode
+	discoveryMatcher *Matcher
+	discoveryHealthy bool
+	schemaBlocked    bool
+	nonImplStreak    int
+	lastProbeStart   time.Time
+	lastDiscoveryErr string
 
-	notifyCh  chan struct{}
-	closingCh chan struct{}
+	notifyCh        chan struct{}
+	onDemandProbeCh chan struct{}
+	closingCh       chan struct{}
+
+	completedProbes atomic.Uint64
+	onDemandArmed   atomic.Uint64
 }
 
-func newEndpointQueue(ep Endpoint, rawBases []string, sender Sender, ownClient *Client, cfg *fanoutConfig, health *ruleHealthTracker) *endpointQueue {
-	allURLs := make([]string, 0, len(rawBases)+1)
-	allURLs = append(allURLs, ep.URL)
+func newEndpointQueue(
+	ep Endpoint,
+	rawBases []string,
+	sender Sender,
+	ownClient *Client,
+	prober DiscoveryProber,
+	ownProber *httpDiscoveryProber,
+	cfg *fanoutConfig,
+	health *ruleHealthTracker,
+) *endpointQueue {
+	allURLs := make([]string, 0, len(rawBases)+2)
+	allURLs = append(allURLs, ep.URL, ep.DestinationsURL)
 	allURLs = append(allURLs, rawBases...)
 	replacer, _ := buildURLReplacer(allURLs...)
+
+	initialMode := DiscoveryUnknown
+	initialHealthy := false
+	if cfg.staticCatchAll {
+		initialMode = DiscoveryCatchAll
+		initialHealthy = true
+	}
+
 	return &endpointQueue{
-		endpoint:       ep,
-		rawBases:       rawBases,
-		replacer:       replacer,
-		sender:         sender,
-		ownClient:      ownClient,
-		workers:        cfg.workersPerEndpoint,
-		requestTimeout: cfg.requestTimeout,
-		maxQueueItems:  cfg.maxQueueItems,
-		maxQueueBytes:  cfg.maxQueueBytes,
-		maxItemAge:     cfg.maxItemAge,
-		initialBackoff: cfg.initialBackoff,
-		maxBackoff:     cfg.maxBackoff,
-		maxRetries:     cfg.maxRetries,
-		clock:          cfg.clock,
-		jitterFn:       cfg.jitterFn,
-		health:         health,
-		evalStates:     make(map[uint64]*epEvalState),
-		notifyCh:       make(chan struct{}, 1),
-		closingCh:      make(chan struct{}),
+		endpoint:            ep,
+		rawBases:            rawBases,
+		replacer:            replacer,
+		sender:              sender,
+		ownClient:           ownClient,
+		prober:              prober,
+		ownProber:           ownProber,
+		staticCatchAll:      cfg.staticCatchAll,
+		discoveryInterval:   cfg.discoveryInterval,
+		discoveryTimeout:    cfg.discoveryTimeout,
+		discoveryJitterFn:   cfg.discoveryJitterFn,
+		onDemandMinInterval: DefaultOnDemandProbeMinInterval,
+		workers:             cfg.workersPerEndpoint,
+		requestTimeout:      cfg.requestTimeout,
+		maxQueueItems:       cfg.maxQueueItems,
+		maxQueueBytes:       cfg.maxQueueBytes,
+		maxItemAge:          cfg.maxItemAge,
+		initialBackoff:      cfg.initialBackoff,
+		maxBackoff:          cfg.maxBackoff,
+		maxRetries:          cfg.maxRetries,
+		clock:               cfg.clock,
+		jitterFn:            cfg.jitterFn,
+		health:              health,
+		evalStates:          make(map[uint64]*epEvalState),
+		discoveryMode:       initialMode,
+		discoveryHealthy:    initialHealthy,
+		notifyCh:            make(chan struct{}, 1),
+		onDemandProbeCh:     make(chan struct{}, 1),
+		closingCh:           make(chan struct{}),
 	}
 }
 
 func (q *endpointQueue) closeIdleConnections() {
 	if q.ownClient != nil {
 		q.ownClient.CloseIdleConnections()
+	}
+	if q.ownProber != nil {
+		q.ownProber.CloseIdleConnections()
 	}
 }
 
@@ -740,30 +1088,99 @@ func (q *endpointQueue) updateDepthGaugeLocked() {
 	metrics.EndpointQueueDepth.WithLabelValues(q.endpoint.ID).Set(float64(q.queueLenLocked()))
 }
 
+func (q *endpointQueue) lookupEvalMeta(evalID uint64) (ruleKey, RuleMeta, bool) {
+	q.mu.Lock()
+	st, ok := q.evalStates[evalID]
+	if !ok {
+		q.mu.Unlock()
+		return ruleKey{}, RuleMeta{}, false
+	}
+	rk := ruleKey{namespace: st.meta.Namespace, name: st.meta.Name}
+	rm := RuleMeta{
+		UID:        st.meta.RuleUID,
+		Namespace:  st.meta.Namespace,
+		Name:       st.meta.Name,
+		Generation: st.meta.Generation,
+	}
+	q.mu.Unlock()
+	return rk, rm, true
+}
+
 func (q *endpointQueue) beginEvaluation(evalID uint64, meta EvalMeta) {
 	q.mu.Lock()
 	if !q.closing {
-		q.evalStates[evalID] = &epEvalState{meta: meta}
+		metaCopy := meta
+		if meta.Destinations != nil {
+			metaCopy.Destinations = slices.Clone(meta.Destinations)
+		}
+		q.evalStates[evalID] = &epEvalState{meta: metaCopy}
 	}
 	q.mu.Unlock()
 }
 
-func (q *endpointQueue) enqueueEval(evalID uint64, a Alert, sizeBytes int) error {
+func (q *endpointQueue) enqueueEval(
+	evalID uint64,
+	meta RuleMeta,
+	a Alert,
+	candidates []string,
+	explicit bool,
+	tracker *rowRouteTracker,
+) (enqueueOutcome, error) {
 	q.mu.Lock()
 	if q.closing {
 		q.mu.Unlock()
-		return ErrClientClosed
+		return enqueueSkipped, ErrClientClosed
+	}
+
+	var routedAlert Alert
+	var isRouted bool
+	var outcome enqueueOutcome
+
+	switch q.discoveryMode {
+	case DiscoveryCatchAll:
+		routedAlert = formatAlertForDestinations(a, candidates, explicit)
+		isRouted = true
+		outcome = enqueueMatched
+	case DiscoverySelective:
+		var matched []string
+		if q.discoveryMatcher != nil {
+			matched = q.discoveryMatcher.Filter(candidates)
+		}
+		if len(matched) == 0 {
+			q.mu.Unlock()
+			return enqueueSkipped, nil
+		}
+		routedAlert = formatAlertForDestinations(a, matched, explicit)
+		isRouted = true
+		outcome = enqueueMatched
+	default:
+		routedAlert = cloneAlert(a)
+		isRouted = false
+		outcome = enqueueHeldUnknown
 	}
 
 	var rk ruleKey
+	ruleMeta := meta
 	if evalID != 0 {
 		if st, ok := q.evalStates[evalID]; ok {
 			rk = ruleKey{namespace: st.meta.Namespace, name: st.meta.Name}
+			ruleMeta = RuleMeta{
+				UID:        st.meta.RuleUID,
+				Namespace:  st.meta.Namespace,
+				Name:       st.meta.Name,
+				Generation: st.meta.Generation,
+			}
+			if isRouted {
+				st.matchedAnyRow = true
+				if st.firstMatchedDest == "" {
+					st.firstMatchedDest = routedAlert.Destination
+				}
+			}
 			if st.endpointThrottled {
-				st.addSuppressed(a)
+				st.addSuppressed(routedAlert)
 				q.mu.Unlock()
-				q.recordDrop(rk, DropReasonThrottled, false)
-				return nil
+				q.recordDrop(rk, ruleMeta, DropReasonThrottled, false, "HTTP 429 Too Many Requests")
+				return enqueueMatched, nil
 			}
 			st.active++
 		}
@@ -771,26 +1188,45 @@ func (q *endpointQueue) enqueueEval(evalID uint64, a Alert, sizeBytes int) error
 	if rk.namespace == "" {
 		rk = parseRuleFromSource(a.Source)
 	}
+	if ruleMeta.Namespace == "" {
+		ruleMeta.Namespace = rk.namespace
+		ruleMeta.Name = rk.name
+	}
+
+	var itemTracker *rowRouteTracker
+	if outcome == enqueueHeldUnknown {
+		tracker.retainUnknown()
+		itemTracker = tracker
+	}
 
 	now := q.clock.Now()
 	item := queuedItem{
-		alert:      cloneAlert(a),
-		rule:       rk,
-		evalID:     evalID,
-		sizeBytes:  sizeBytes,
-		enqueuedAt: now,
-		deadline:   now.Add(q.maxItemAge),
+		alert:         routedAlert,
+		rawCandidates: slices.Clone(candidates),
+		explicitDests: explicit,
+		routed:        isRouted,
+		routeTracker:  itemTracker,
+		rule:          rk,
+		ruleMeta:      ruleMeta,
+		evalID:        evalID,
+		sizeBytes:     measureAlertBytes(routedAlert),
+		enqueuedAt:    now,
+		deadline:      now.Add(q.maxItemAge),
 	}
 	evicted, anyQueued := q.enqueueItemsLocked([]queuedItem{item})
+	needOnDemandProbe := q.discoveryMode == DiscoveryUnknown && anyQueued
 	q.mu.Unlock()
 
 	for _, ev := range evicted {
 		q.logAndCountOverflowDrop(ev)
 	}
+	if needOnDemandProbe {
+		q.triggerOnDemandProbe()
+	}
 	if anyQueued {
 		q.signalNotify()
 	}
-	return nil
+	return outcome, nil
 }
 
 // enqueueItemsLocked iteratively appends items (and any summary alerts unlocked if an evicted item
@@ -846,7 +1282,10 @@ func (q *endpointQueue) popHeadRawLocked() queuedItem {
 }
 
 func (q *endpointQueue) logAndCountOverflowDrop(dropped queuedItem) {
-	q.recordDrop(dropped.rule, DropReasonOverflow, true)
+	if dropped.routeTracker != nil {
+		dropped.routeTracker.cancelDrop()
+	}
+	q.recordDrop(dropped.rule, dropped.ruleMeta, DropReasonOverflow, true, "endpoint queue overflow")
 	if dropped.sizeBytes > q.maxQueueBytes {
 		logger.Warnf("Notification payload size (%d bytes) exceeds maxQueueBytes (%d) for %s; dropped oversized alert %q (source=%s)",
 			dropped.sizeBytes, q.maxQueueBytes, q.endpoint.ID, dropped.alert.Title, dropped.alert.Source)
@@ -928,10 +1367,50 @@ func (q *endpointQueue) prepareEvalSummaryLocked(evalID uint64, st *epEvalState)
 	st.summarySent = true
 
 	summaryAlert := buildEvalSummaryAlert(st.meta, st.suppressed, st.suppressedTotal, st.incomplete)
+	if summaryAlert.Destination == "" && len(summaryAlert.Destinations) == 0 && st.firstMatchedDest != "" {
+		summaryAlert.Destination = st.firstMatchedDest
+	}
+	cands, explicit := alertCandidates(summaryAlert)
+
+	var routed bool
+	switch q.discoveryMode {
+	case DiscoveryCatchAll:
+		summaryAlert = formatAlertForDestinations(summaryAlert, cands, explicit)
+		routed = true
+	case DiscoverySelective:
+		var matched []string
+		if q.discoveryMatcher != nil {
+			matched = q.discoveryMatcher.Filter(cands)
+		}
+		if len(matched) == 0 {
+			if st.matchedAnyRow && st.firstMatchedDest != "" && q.discoveryMatcher != nil && q.discoveryMatcher.Match(st.firstMatchedDest) {
+				summaryAlert = formatAlertForDestinations(summaryAlert, []string{st.firstMatchedDest}, false)
+				routed = true
+			} else {
+				return nil
+			}
+		} else {
+			summaryAlert = formatAlertForDestinations(summaryAlert, matched, explicit)
+			routed = true
+		}
+	default:
+		summaryAlert = cloneAlert(summaryAlert)
+		routed = false
+	}
+
 	now := q.clock.Now()
 	return &queuedItem{
-		alert:      cloneAlert(summaryAlert),
-		rule:       ruleKey{namespace: st.meta.Namespace, name: st.meta.Name},
+		alert:         summaryAlert,
+		rawCandidates: cands,
+		explicitDests: explicit,
+		routed:        routed,
+		rule:          ruleKey{namespace: st.meta.Namespace, name: st.meta.Name},
+		ruleMeta: RuleMeta{
+			UID:        st.meta.RuleUID,
+			Namespace:  st.meta.Namespace,
+			Name:       st.meta.Name,
+			Generation: st.meta.Generation,
+		},
 		evalID:     0,
 		isSummary:  true,
 		sizeBytes:  measureAlertBytes(summaryAlert),
@@ -945,8 +1424,13 @@ func buildEvalSummaryAlert(meta EvalMeta, suppressed []SuppressedAlert, totalSup
 		return meta.BuildSummaryAlert(suppressed, totalSuppressed, incomplete)
 	}
 	source := fmt.Sprintf("notification-failure/%s/%s", meta.Namespace, meta.Name)
+	var dests []string
+	if len(meta.Destinations) > 0 {
+		dests = slices.Clone(meta.Destinations)
+	}
 	return Alert{
 		Destination:   meta.Destination,
+		Destinations:  dests,
 		Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", meta.Namespace, meta.Name, meta.Region),
 		Summary:       FormatThrottledSummary(suppressed, totalSuppressed, incomplete),
 		Severity:      3,
@@ -1018,7 +1502,10 @@ func (q *endpointQueue) dropRemainingOnShutdown() {
 	q.mu.Unlock()
 
 	for _, item := range remaining {
-		q.recordDrop(item.rule, DropReasonShutdown, false)
+		if item.routeTracker != nil {
+			item.routeTracker.cancelDrop()
+		}
+		q.recordDrop(item.rule, item.ruleMeta, DropReasonShutdown, false, "")
 	}
 }
 
@@ -1040,9 +1527,11 @@ func (q *endpointQueue) runWorker(workerCtx context.Context) {
 }
 
 type popOutcome struct {
-	rule   ruleKey
-	reason string
-	health bool
+	rule     ruleKey
+	ruleMeta RuleMeta
+	reason   string
+	health   bool
+	latchMsg string
 }
 
 func (q *endpointQueue) nextItem(workerCtx context.Context) (queuedItem, bool) {
@@ -1053,54 +1542,155 @@ func (q *endpointQueue) nextItem(workerCtx context.Context) (queuedItem, bool) {
 
 		var skipped []popOutcome
 		var evicted []queuedItem
+		var unroutedTrackers []*rowRouteTracker
+		var matchedTrackers []*rowRouteTracker
 		var wakeMore bool
+		var needOnDemandProbe bool
+		var ttlTimer clock.Timer
 		var chosen queuedItem
 		var hasChosen bool
 		var shouldExit bool
 
 		q.mu.Lock()
 		now := q.clock.Now()
-		for q.queueLenLocked() > 0 {
-			cand := q.popHeadRawLocked()
-			if cand.evalID != 0 {
-				if st, ok := q.evalStates[cand.evalID]; ok && st.endpointThrottled {
-					st.addSuppressed(cand.alert)
-					ev, sq := q.decrementEvalActiveLocked(cand.evalID)
-					evicted = append(evicted, ev...)
-					if sq {
-						wakeMore = true
-					}
-					skipped = append(skipped, popOutcome{rule: cand.rule, reason: DropReasonThrottled, health: false})
-					continue
+		if q.discoveryMode == DiscoveryUnknown {
+			for q.queueLenLocked() > 0 && !now.Before(q.queue[q.head].deadline) {
+				cand := q.popHeadRawLocked()
+				if cand.routeTracker != nil {
+					cand.routeTracker.cancelDrop()
 				}
-			}
-			if !now.Before(cand.deadline) {
 				ev, sq := q.decrementEvalActiveLocked(cand.evalID)
 				evicted = append(evicted, ev...)
 				if sq {
 					wakeMore = true
 				}
-				skipped = append(skipped, popOutcome{rule: cand.rule, reason: DropReasonTTLExpired, health: true})
-				continue
+				skipped = append(skipped, popOutcome{
+					rule:     cand.rule,
+					ruleMeta: cand.ruleMeta,
+					reason:   DropReasonTTLExpired,
+					health:   true,
+					latchMsg: fmt.Sprintf("notification expired (%s TTL while awaiting endpoint capability discovery)", q.maxItemAge),
+				})
 			}
-			chosen = cand
-			hasChosen = true
-			break
-		}
-		q.updateDepthGaugeLocked()
-		if q.queueLenLocked() > 0 {
-			wakeMore = true
-		}
-		if !hasChosen && q.closing {
-			shouldExit = true
+			q.updateDepthGaugeLocked()
+			if q.closing {
+				shouldExit = true
+			} else if q.queueLenLocked() > 0 {
+				needOnDemandProbe = true
+				unknownTTLWait := max(time.Millisecond, q.queue[q.head].deadline.Sub(now))
+				ttlTimer = q.clock.NewTimer(unknownTTLWait)
+			}
+		} else {
+			for q.queueLenLocked() > 0 {
+				cand := q.popHeadRawLocked()
+				if !cand.routed || q.discoveryMode == DiscoverySelective {
+					cands := cand.rawCandidates
+					if len(cands) == 0 {
+						cands = []string{cand.alert.Destination}
+					}
+					if q.discoveryMode == DiscoveryCatchAll {
+						cand.alert = formatAlertForDestinations(cand.alert, cands, cand.explicitDests)
+						cand.routed = true
+						if cand.routeTracker != nil {
+							matchedTrackers = append(matchedTrackers, cand.routeTracker)
+							cand.routeTracker = nil
+						}
+					} else if q.discoveryMode == DiscoverySelective {
+						var matched []string
+						if q.discoveryMatcher != nil {
+							matched = q.discoveryMatcher.Filter(cands)
+						}
+						if len(matched) == 0 {
+							ev, sq := q.decrementEvalActiveLocked(cand.evalID)
+							evicted = append(evicted, ev...)
+							if sq {
+								wakeMore = true
+							}
+							if cand.routeTracker != nil {
+								unroutedTrackers = append(unroutedTrackers, cand.routeTracker)
+								cand.routeTracker = nil
+							}
+							continue
+						}
+						cand.alert = formatAlertForDestinations(cand.alert, matched, cand.explicitDests)
+						cand.routed = true
+						if cand.evalID != 0 {
+							if st, ok := q.evalStates[cand.evalID]; ok {
+								st.matchedAnyRow = true
+								if st.firstMatchedDest == "" {
+									st.firstMatchedDest = cand.alert.Destination
+								}
+							}
+						}
+						if cand.routeTracker != nil {
+							matchedTrackers = append(matchedTrackers, cand.routeTracker)
+							cand.routeTracker = nil
+						}
+					}
+				}
+
+				if cand.evalID != 0 {
+					if st, ok := q.evalStates[cand.evalID]; ok && st.endpointThrottled {
+						st.addSuppressed(cand.alert)
+						ev, sq := q.decrementEvalActiveLocked(cand.evalID)
+						evicted = append(evicted, ev...)
+						if sq {
+							wakeMore = true
+						}
+						skipped = append(skipped, popOutcome{
+							rule:     cand.rule,
+							ruleMeta: cand.ruleMeta,
+							reason:   DropReasonThrottled,
+							health:   false,
+							latchMsg: "HTTP 429 Too Many Requests",
+						})
+						continue
+					}
+				}
+				if !now.Before(cand.deadline) {
+					ev, sq := q.decrementEvalActiveLocked(cand.evalID)
+					evicted = append(evicted, ev...)
+					if sq {
+						wakeMore = true
+					}
+					skipped = append(skipped, popOutcome{
+						rule:     cand.rule,
+						ruleMeta: cand.ruleMeta,
+						reason:   DropReasonTTLExpired,
+						health:   true,
+						latchMsg: fmt.Sprintf("notification expired (%s TTL)", q.maxItemAge),
+					})
+					continue
+				}
+				chosen = cand
+				hasChosen = true
+				break
+			}
+			q.updateDepthGaugeLocked()
+			if q.queueLenLocked() > 0 {
+				wakeMore = true
+			}
+			if !hasChosen && q.closing {
+				shouldExit = true
+			}
 		}
 		q.mu.Unlock()
 
+		for _, tr := range matchedTrackers {
+			tr.markMatched()
+			tr.releaseOne()
+		}
+		for _, tr := range unroutedTrackers {
+			tr.releaseOne()
+		}
 		for _, s := range skipped {
-			q.recordDrop(s.rule, s.reason, s.health)
+			q.recordDrop(s.rule, s.ruleMeta, s.reason, s.health, s.latchMsg)
 		}
 		for _, ev := range evicted {
 			q.logAndCountOverflowDrop(ev)
+		}
+		if needOnDemandProbe {
+			q.triggerOnDemandProbe()
 		}
 		if wakeMore {
 			q.signalNotify()
@@ -1110,6 +1700,20 @@ func (q *endpointQueue) nextItem(workerCtx context.Context) (queuedItem, bool) {
 		}
 		if shouldExit {
 			return queuedItem{}, false
+		}
+
+		if ttlTimer != nil {
+			select {
+			case <-workerCtx.Done():
+				ttlTimer.Stop()
+				return queuedItem{}, false
+			case <-q.closingCh:
+				ttlTimer.Stop()
+			case <-q.notifyCh:
+				ttlTimer.Stop()
+			case <-ttlTimer.C():
+			}
+			continue
 		}
 
 		select {
@@ -1124,7 +1728,7 @@ func (q *endpointQueue) nextItem(workerCtx context.Context) (queuedItem, bool) {
 func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) {
 	for attempt := 0; ; attempt++ {
 		if workerCtx.Err() != nil {
-			q.finishItem(item, DropReasonShutdown, false)
+			q.finishItem(item, DropReasonShutdown, false, "")
 			return
 		}
 
@@ -1136,7 +1740,7 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 		if !q.clock.Now().Before(item.deadline) {
 			logger.Warnf("Dropping expired alert %q (source=%s) for %s after exceeding %s TTL",
 				item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge)
-			q.finishItem(item, DropReasonTTLExpired, true)
+			q.finishItem(item, DropReasonTTLExpired, true, fmt.Sprintf("notification expired (%s TTL)", q.maxItemAge))
 			return
 		}
 
@@ -1144,23 +1748,27 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 		if !attempted {
 			logger.Warnf("Dropping expired alert %q (source=%s) for %s after exceeding %s TTL",
 				item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge)
-			q.finishItem(item, DropReasonTTLExpired, true)
+			q.finishItem(item, DropReasonTTLExpired, true, fmt.Sprintf("notification expired (%s TTL)", q.maxItemAge))
 			return
 		}
 		if workerCtx.Err() != nil && !timedOut {
-			q.finishItem(item, DropReasonShutdown, false)
+			q.finishItem(item, DropReasonShutdown, false, "")
 			return
 		}
 		if ttlExpired {
 			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomePermanentError).Inc()
+			var latchReason string
 			if err != nil {
+				redactedErr := q.redactErr(err)
+				latchReason = fmt.Sprintf("notification expired (%s TTL): %s", q.maxItemAge, redactedErr)
 				logger.Warnf("Dropping alert %q (source=%s) for %s after TTL expired (%s): %s",
-					item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge, q.redactErr(err))
+					item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge, redactedErr)
 			} else {
+				latchReason = fmt.Sprintf("notification expired (%s TTL)", q.maxItemAge)
 				logger.Warnf("Dropping alert %q (source=%s) for %s after TTL expired (%s) during delivery",
 					item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge)
 			}
-			q.finishItem(item, DropReasonTTLExpired, true)
+			q.finishItem(item, DropReasonTTLExpired, true, latchReason)
 			return
 		}
 		if err != nil && errors.Is(err, ErrTooManyRequests) {
@@ -1171,7 +1779,7 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 			return
 		}
 		if err == nil {
-			q.health.recordSuccess(item.rule, q.endpoint.ID)
+			q.health.recordSuccess(item.rule, item.ruleMeta, q.endpoint.ID, !item.isSummary)
 			q.finishEvalRef(item.evalID)
 			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomeSuccess).Inc()
 			return
@@ -1182,7 +1790,7 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomePermanentError).Inc()
 			logger.Errorf("Permanent failure delivering alert %q (source=%s) to %s: %s",
 				item.alert.Title, item.alert.Source, q.endpoint.ID, redactedErr)
-			q.finishItem(item, DropReasonPermanentError, true)
+			q.finishItem(item, DropReasonPermanentError, true, redactedErr)
 			return
 		}
 
@@ -1190,7 +1798,7 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomePermanentError).Inc()
 			logger.Errorf("Exhausted %d retries delivering alert %q (source=%s) to %s: %s",
 				q.maxRetries, item.alert.Title, item.alert.Source, q.endpoint.ID, redactedErr)
-			q.finishItem(item, DropReasonRetriesExhausted, true)
+			q.finishItem(item, DropReasonRetriesExhausted, true, fmt.Sprintf("retries exhausted (%s)", redactedErr))
 			return
 		}
 
@@ -1199,21 +1807,21 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomePermanentError).Inc()
 			logger.Warnf("Dropping alert %q (source=%s) for %s after TTL expired (%s): %s",
 				item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge, redactedErr)
-			q.finishItem(item, DropReasonTTLExpired, true)
+			q.finishItem(item, DropReasonTTLExpired, true, fmt.Sprintf("notification expired (%s TTL): %s", q.maxItemAge, redactedErr))
 			return
 		}
 
-		metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomeRetry).Inc()
 		delay := q.jitteredBackoff(attempt)
 		sleepDur := min(delay, remainingTTL)
 		logger.Warnf("Transient error delivering alert %q (source=%s) to %s (attempt %d/%d), retrying in %s: %s",
 			item.alert.Title, item.alert.Source, q.endpoint.ID, attempt+1, q.maxRetries+1, sleepDur, redactedErr)
 
 		timer := q.clock.NewTimer(sleepDur)
+		metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomeRetry).Inc()
 		select {
 		case <-workerCtx.Done():
 			timer.Stop()
-			q.finishItem(item, DropReasonShutdown, false)
+			q.finishItem(item, DropReasonShutdown, false, "")
 			return
 		case <-timer.C():
 		}
@@ -1275,7 +1883,7 @@ func (q *endpointQueue) recordEvalSuppressedInFlight(item queuedItem) {
 	evicted, summaryQueued = q.decrementEvalActiveLocked(item.evalID)
 	q.mu.Unlock()
 
-	q.recordDrop(item.rule, DropReasonThrottled, false)
+	q.recordDrop(item.rule, item.ruleMeta, DropReasonThrottled, false, "HTTP 429 Too Many Requests")
 	for _, ev := range evicted {
 		q.logAndCountOverflowDrop(ev)
 	}
@@ -1286,7 +1894,7 @@ func (q *endpointQueue) recordEvalSuppressedInFlight(item queuedItem) {
 
 func (q *endpointQueue) handleHTTP429(item queuedItem) {
 	if item.evalID == 0 {
-		q.recordDrop(item.rule, DropReasonThrottled, false)
+		q.recordDrop(item.rule, item.ruleMeta, DropReasonThrottled, false, "HTTP 429 Too Many Requests")
 		return
 	}
 
@@ -1305,7 +1913,7 @@ func (q *endpointQueue) handleHTTP429(item queuedItem) {
 	q.mu.Unlock()
 
 	for range sweptCount + 1 {
-		q.recordDrop(item.rule, DropReasonThrottled, false)
+		q.recordDrop(item.rule, item.ruleMeta, DropReasonThrottled, false, "HTTP 429 Too Many Requests")
 	}
 	for _, ev := range evicted {
 		q.logAndCountOverflowDrop(ev)
@@ -1324,6 +1932,9 @@ func (q *endpointQueue) sweepQueuedEvalItemsLocked(evalID uint64, st *epEvalStat
 	for i := q.head; i < len(q.queue); i++ {
 		it := q.queue[i]
 		if it.evalID == evalID {
+			if it.routeTracker != nil {
+				it.routeTracker.cancelDrop()
+			}
 			st.addSuppressed(it.alert)
 			q.queuedBytes -= it.sizeBytes
 			if st.active > 0 {
@@ -1348,8 +1959,8 @@ func (q *endpointQueue) sweepQueuedEvalItemsLocked(evalID uint64, st *epEvalStat
 	return swept
 }
 
-func (q *endpointQueue) finishItem(item queuedItem, dropReason string, markUnhealthy bool) {
-	q.recordDrop(item.rule, dropReason, markUnhealthy)
+func (q *endpointQueue) finishItem(item queuedItem, dropReason string, markUnhealthy bool, latchReason string) {
+	q.recordDrop(item.rule, item.ruleMeta, dropReason, markUnhealthy, latchReason)
 	q.finishEvalRef(item.evalID)
 }
 
@@ -1369,9 +1980,9 @@ func (q *endpointQueue) finishEvalRef(evalID uint64) {
 	}
 }
 
-func (q *endpointQueue) recordDrop(rk ruleKey, reason string, markUnhealthy bool) {
-	if markUnhealthy {
-		q.health.recordFailure(rk, q.endpoint.ID)
+func (q *endpointQueue) recordDrop(rk ruleKey, meta RuleMeta, reason string, markUnhealthy bool, latchReason string) {
+	if markUnhealthy || latchReason != "" {
+		q.health.recordFailure(rk, meta, q.endpoint.ID, markUnhealthy, latchReason)
 	}
 	if rk.namespace != "" && rk.name != "" {
 		metrics.RuleNotificationFailuresTotal.WithLabelValues(rk.namespace, rk.name, q.endpoint.ID, reason).Inc()
@@ -1415,7 +2026,7 @@ func (q *endpointQueue) redactErr(err error) string {
 	}
 	var already *redactedError
 	if errors.As(err, &already) {
-		return err.Error()
+		return q.replacer.Replace(err.Error())
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
@@ -1448,6 +2059,9 @@ func measureAlertBytes(a Alert) int {
 		return max(1, len(b))
 	}
 	size := len(a.Destination) + len(a.Title) + len(a.Summary) + len(a.Description) + len(a.Source) + len(a.CorrelationID) + 32
+	for _, d := range a.Destinations {
+		size += len(d) + 4
+	}
 	for k, v := range a.CustomFields {
 		size += len(k) + len(v) + 4
 	}
@@ -1465,6 +2079,9 @@ func parseRuleFromSource(source string) ruleKey {
 
 func cloneAlert(a Alert) Alert {
 	cloned := a
+	if a.Destinations != nil {
+		cloned.Destinations = slices.Clone(a.Destinations)
+	}
 	if a.CustomFields != nil {
 		cloned.CustomFields = make(map[string]string, len(a.CustomFields))
 		for k, v := range a.CustomFields {

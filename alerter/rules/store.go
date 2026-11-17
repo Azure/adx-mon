@@ -2,10 +2,13 @@ package rules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/celutil"
@@ -85,20 +88,33 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	if err := validateInterval(r.Spec.Interval.Duration); err != nil {
 		return nil, fmt.Errorf("alert rule %s/%s: %w", r.Namespace, r.Name, err)
 	}
+	if err := validateDestinations(r.Spec.Destination, r.Spec.Destinations); err != nil {
+		return nil, fmt.Errorf("alert rule %s/%s: %w", r.Namespace, r.Name, err)
+	}
+
+	var dests []string
+	hasExplicit := len(r.Spec.Destinations) > 0
+	if hasExplicit {
+		dests = slices.Clone(r.Spec.Destinations)
+	}
 
 	rule := &Rule{
-		Version:            fmt.Sprintf("%d", r.Generation),
-		Database:           r.Spec.Database,
-		Namespace:          r.Namespace,
-		Name:               r.Name,
-		Interval:           r.Spec.Interval.Duration,
-		Query:              r.Spec.Query,
-		Destination:        r.Spec.Destination,
-		AutoMitigateAfter:  r.Spec.AutoMitigateAfter.Duration,
-		Criteria:           r.Spec.Criteria,
-		CriteriaExpression: r.Spec.CriteriaExpression,
-		IsMgmtQuery:        false,
-		LastQueryTime:      r.Status.LastQueryTime.Time,
+		UID:                     string(r.UID),
+		Generation:              r.Generation,
+		Version:                 fmt.Sprintf("%d", r.Generation),
+		Database:                r.Spec.Database,
+		Namespace:               r.Namespace,
+		Name:                    r.Name,
+		Interval:                r.Spec.Interval.Duration,
+		Query:                   r.Spec.Query,
+		Destination:             r.Spec.Destination,
+		Destinations:            dests,
+		HasExplicitDestinations: hasExplicit,
+		AutoMitigateAfter:       r.Spec.AutoMitigateAfter.Duration,
+		Criteria:                r.Spec.Criteria,
+		CriteriaExpression:      r.Spec.CriteriaExpression,
+		IsMgmtQuery:             false,
+		LastQueryTime:           r.Status.LastQueryTime.Time,
 	}
 
 	// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
@@ -112,6 +128,29 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 func validateInterval(interval time.Duration) error {
 	if interval < alertrulev1.MinAlertRuleInterval {
 		return fmt.Errorf("interval %s must be at least %s", interval, alertrulev1.MinAlertRuleInterval)
+	}
+	return nil
+}
+
+func validateDestinations(destination string, destinations []string) error {
+	if destination != "" && len(destinations) > 0 {
+		return errors.New("destination and destinations are mutually exclusive")
+	}
+	if len(destinations) > alertrulev1.MaxAlertRuleDestinations {
+		return fmt.Errorf("destinations cannot contain more than %d entries", alertrulev1.MaxAlertRuleDestinations)
+	}
+	seen := make(map[string]struct{}, len(destinations))
+	for _, d := range destinations {
+		if d == "" {
+			return errors.New("destinations entries must not be empty")
+		}
+		if utf8.RuneCountInString(d) > alertrulev1.MaxAlertRuleDestinationLength {
+			return fmt.Errorf("destinations entry exceeds maximum length %d", alertrulev1.MaxAlertRuleDestinationLength)
+		}
+		if _, dup := seen[d]; dup {
+			return fmt.Errorf("destinations contains duplicate entry %q", d)
+		}
+		seen[d] = struct{}{}
 	}
 	return nil
 }
@@ -177,14 +216,18 @@ func (s *Store) Register(rule *Rule) {
 // Rule is analogous to a kusto-to-metric configuration, containing
 // definitions and using the parlance found in the k2m UI.
 type Rule struct {
-	Version           string
-	Namespace         string
-	Name              string
-	Database          string
-	Interval          time.Duration
-	Query             string
-	AutoMitigateAfter time.Duration
-	Destination       string
+	UID                     string
+	Generation              int64
+	Version                 string
+	Namespace               string
+	Name                    string
+	Database                string
+	Interval                time.Duration
+	Query                   string
+	AutoMitigateAfter       time.Duration
+	Destination             string
+	Destinations            []string
+	HasExplicitDestinations bool
 
 	// Criteria is a map of key-value pairs that are used to determine where an alert can execute.
 	Criteria map[string][]string
@@ -197,6 +240,36 @@ type Rule struct {
 
 	// LastQueryTime from the AlertRule status, used for smart scheduling
 	LastQueryTime time.Time
+}
+
+// ExplicitDestinations reports whether AlertRule.spec.destinations was authored on this rule.
+func (r *Rule) ExplicitDestinations() bool {
+	return r != nil && (r.HasExplicitDestinations || len(r.Destinations) > 0)
+}
+
+// CandidateDestinations returns the rule-level ordered candidate destination slice used for capability matching.
+func (r *Rule) CandidateDestinations() []string {
+	if r == nil {
+		return []string{""}
+	}
+	if len(r.Destinations) > 0 {
+		return slices.Clone(r.Destinations)
+	}
+	if r.Destination != "" {
+		return []string{r.Destination}
+	}
+	return []string{""}
+}
+
+// ResolvedMetaDestinations returns the resolved Destination and optional explicit Destinations slice for meta-alerts.
+func (r *Rule) ResolvedMetaDestinations() (string, []string) {
+	if r == nil {
+		return "", nil
+	}
+	if len(r.Destinations) > 0 {
+		return r.Destinations[0], slices.Clone(r.Destinations)
+	}
+	return r.Destination, nil
 }
 
 // Matches evaluates whether this rule should execute based on simple Criteria AND the CEL CriteriaExpression.

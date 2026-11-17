@@ -268,6 +268,20 @@ var (
 		Help:      "Current number of queued alert notifications waiting for delivery per redacted endpoint identifier.",
 	}, []string{"endpoint"})
 
+	EndpointDiscoveryHealthy = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "endpoint_discovery_healthy",
+		Help:      "Gauge indicating whether destination capability discovery for a redacted endpoint identifier succeeded (1) or failed (0).",
+	}, []string{"endpoint"})
+
+	NotificationsUnroutedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "notifications_unrouted_total",
+		Help:      "Counter of alert notifications that matched zero configured notification endpoints per AlertRule.",
+	}, []string{"namespace", "name"})
+
 	AlertRuleEvaluationDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",

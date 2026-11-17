@@ -20,6 +20,9 @@ const (
 	// maxErrorBodyBytes caps the diagnostic body length retained on a non-201 StatusError.
 	maxErrorBodyBytes = 4 * 1024
 
+	// DefaultMaxDiscoveryBodyBytes caps the response body read from GET <base>/destinations (64 KiB).
+	DefaultMaxDiscoveryBodyBytes = 64 * 1024
+
 	// maxSecretLookaheadBytes bounds the extra lookahead read past maxErrorBodyBytes so
 	// credentials spanning the 4 KiB boundary are matched and redacted before truncation.
 	maxSecretLookaheadBytes = 16 * 1024
@@ -269,6 +272,12 @@ func sanitizeRawURL(text string, rawURLs ...string) string {
 	return replacer.Replace(text)
 }
 
+// SanitizeText replaces any raw webhook URLs, credentials, paths, or query tokens derived from rawURLs
+// with redacted endpoint identifiers or "<redacted>" placeholders.
+func SanitizeText(text string, rawURLs ...string) string {
+	return sanitizeRawURL(text, rawURLs...)
+}
+
 type replaceCandidate struct {
 	old      string
 	new      string
@@ -349,13 +358,13 @@ func buildURLReplacer(rawURLs ...string) (*strings.Replacer, int) {
 			}
 		}
 
-		if reqURI := u.RequestURI(); reqURI != "" && reqURI != "/" && reqURI != "/alerts" {
+		if reqURI := u.RequestURI(); reqURI != "" && reqURI != "/" && reqURI != "/alerts" && reqURI != "/destinations" {
 			recordSecret(reqURI, "/<redacted>")
 		}
-		if escPath := u.EscapedPath(); escPath != "" && escPath != "/" && escPath != "/alerts" {
+		if escPath := u.EscapedPath(); escPath != "" && escPath != "/" && escPath != "/alerts" && escPath != "/destinations" {
 			recordSecret(escPath, "/<redacted>")
 		}
-		if u.Path != "" && u.Path != "/" && u.Path != "/alerts" {
+		if u.Path != "" && u.Path != "/" && u.Path != "/alerts" && u.Path != "/destinations" {
 			recordSecret(u.Path, "/<redacted>")
 		}
 		if u.RawQuery != "" {
@@ -373,7 +382,7 @@ func buildURLReplacer(rawURLs ...string) (*strings.Replacer, int) {
 			}
 		}
 		for _, seg := range strings.Split(u.Path, "/") {
-			if seg != "" && seg != "alerts" && len(seg) >= minStandaloneSecretLen && !isHost(seg) {
+			if seg != "" && seg != "alerts" && seg != "destinations" && len(seg) >= minStandaloneSecretLen && !isHost(seg) {
 				recordSecret(seg, "<redacted>")
 			}
 		}
