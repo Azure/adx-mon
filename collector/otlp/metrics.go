@@ -524,7 +524,7 @@ func anyValueString(val *commonv1.AnyValue) string {
 		var b strings.Builder
 		enc := json.NewEncoder(&b)
 		enc.SetEscapeHTML(false)
-		if err := enc.Encode(anyValueJSON(val, 0)); err != nil {
+		if err := enc.Encode(anyValueJSON(val)); err != nil {
 			return ""
 		}
 		return strings.TrimSuffix(b.String(), "\n")
@@ -534,11 +534,10 @@ func anyValueString(val *commonv1.AnyValue) string {
 }
 
 // anyValueJSON keeps empty elements as null so distinct arrays and maps do not
-// collapse into the same label value.
-func anyValueJSON(val *commonv1.AnyValue, depth int) any {
-	if depth > defaultMaxDepth {
-		return "..."
-	}
+// collapse into the same label value. Nesting is already bounded by the
+// protobuf decoder's recursion limit, so the whole value is kept rather than
+// truncated, which would merge distinct label sets.
+func anyValueJSON(val *commonv1.AnyValue) any {
 	switch v := val.GetValue().(type) {
 	case *commonv1.AnyValue_StringValue:
 		return v.StringValue
@@ -552,19 +551,20 @@ func anyValueJSON(val *commonv1.AnyValue, depth int) any {
 		}
 		return v.DoubleValue
 	case *commonv1.AnyValue_BytesValue:
-		return v.BytesValue
+		// Encode explicitly: encoding/json turns a nil []byte into null.
+		return base64.StdEncoding.EncodeToString(v.BytesValue)
 	case *commonv1.AnyValue_ArrayValue:
 		values := v.ArrayValue.GetValues()
 		ret := make([]any, 0, len(values))
 		for _, e := range values {
-			ret = append(ret, anyValueJSON(e, depth+1))
+			ret = append(ret, anyValueJSON(e))
 		}
 		return ret
 	case *commonv1.AnyValue_KvlistValue:
 		values := v.KvlistValue.GetValues()
 		ret := make(map[string]any, len(values))
 		for _, kv := range values {
-			ret[kv.GetKey()] = anyValueJSON(kv.GetValue(), depth+1)
+			ret[kv.GetKey()] = anyValueJSON(kv.GetValue())
 		}
 		return ret
 	default:

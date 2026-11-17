@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
@@ -368,4 +369,31 @@ func TestNewSeriesUsesPlainAttributeValues(t *testing.T) {
 		"e":        "",
 		"n":        "",
 	}, got)
+}
+
+func TestNewSeriesNestedAttributeValues(t *testing.T) {
+	str := func(s string) *commonv1.AnyValue {
+		return &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: s}}
+	}
+	arr := func(vs ...*commonv1.AnyValue) *commonv1.AnyValue {
+		return &commonv1.AnyValue{Value: &commonv1.AnyValue_ArrayValue{ArrayValue: &commonv1.ArrayValue{Values: vs}}}
+	}
+	nest := func(v *commonv1.AnyValue, n int) *commonv1.AnyValue {
+		for i := 0; i < n; i++ {
+			v = arr(v)
+		}
+		return v
+	}
+	label := func(v *commonv1.AnyValue) string {
+		series := newSeries("m", []*commonv1.KeyValue{{Key: "v", Value: v}})
+		defer prompb.TimeSeriesPool.Put(series)
+		return string(series.Labels[1].Value)
+	}
+
+	emptyBytes := &commonv1.AnyValue{Value: &commonv1.AnyValue_BytesValue{}}
+	require.Equal(t, `["",null]`, label(arr(emptyBytes, &commonv1.AnyValue{})))
+
+	deepX, deepY := label(nest(str("x"), 25)), label(nest(str("y"), 25))
+	require.NotEqual(t, deepX, deepY)
+	require.Equal(t, strings.Repeat("[", 25)+`"x"`+strings.Repeat("]", 25), deepX)
 }

@@ -2,6 +2,7 @@ package transform
 
 import (
 	"bytes"
+	"encoding/csv"
 	"regexp"
 	"testing"
 
@@ -236,4 +237,32 @@ func TestMetricsCSVWriter_MarshalCSV_LiftLabel(t *testing.T) {
 	require.Equal(t, `Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real,Zip:string,Zap:string,Region:string,Hostname:string,Bar:string
 2022-11-22T10:22:04.001Z,1265838189064375029,"{""measurement"":""used_cpu_user_children""}",0.000000000,,host_1,eastus,,
 `, b.String())
+}
+
+func TestMetricsCSVWriter_MarshalCSV_LiftLabelQuotesSpecialCharacters(t *testing.T) {
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
+			{Name: []byte("__name__"), Value: []byte("m")},
+			{Name: []byte("hostname"), Value: []byte(`host,"1"`)},
+			{Name: []byte("region"), Value: []byte("east\nus")},
+		},
+		Samples: []*prompb.Sample{{Timestamp: 1669112524001, Value: 0}},
+	}
+
+	mapping := schema.DefaultMetricsMapping
+	mapping = mapping.AddStringMapping("Hostname")
+	mapping = mapping.AddStringMapping("Region")
+
+	var b bytes.Buffer
+	w := NewMetricsCSVWriterWithSchema(&b, []Field{
+		{Name: "Hostname", Source: "hostname", Type: "string"},
+		{Name: "Region", Source: "region", Type: "string"},
+	}, mapping)
+	require.NoError(t, w.MarshalCSV(&prompb.WriteRequest{}, ts))
+
+	records, err := csv.NewReader(&b).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	require.Equal(t, []string{"Hostname:string", "Region:string"}, records[0][4:])
+	require.Equal(t, []string{`host,"1"`, "east\nus"}, records[1][4:])
 }
