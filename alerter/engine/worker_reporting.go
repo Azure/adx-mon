@@ -37,7 +37,15 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		return
 	}
 	evaluation := result.retry.evaluation
+	evalCli, isEvalCli := e.alertCli.(EvaluationAlertCli)
+	sealEval := func(forceThrottled bool, extra []alert.SuppressedAlert, extraTotal int, incomplete bool) {
+		if isEvalCli && result.retry.evalID != 0 {
+			evalCli.SealEvaluation(result.retry.evalID, forceThrottled, extra, extraTotal, incomplete)
+			result.retry.evalID = 0
+		}
+	}
 	defer func() {
+		sealEval(false, nil, 0, true)
 		// Reporting uses the lifecycle context, not the expired query budget.
 		// Shutdown during delivery must not be recorded as notification failure.
 		if err := ctx.Err(); err != nil {
@@ -59,6 +67,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		return
 	}
 	if err == nil && !result.retry.notificationsThrottled {
+		sealEval(false, nil, 0, false)
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 		metrics.QueriesRunTotal.WithLabelValues().Inc()
 		logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, e.clock.Since(evaluation.executionTime))
@@ -73,9 +82,27 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		if overflow, ok := errors.AsType[*ThrottledNotificationsError](err); ok {
 			result.retry.throttledAlerts.merge(overflow)
 		}
-		summary := throttledNotificationSummary(&result.retry.throttledAlerts)
-		if err != nil && !errors.Is(err, alert.ErrTooManyRequests) {
+		incomplete := err != nil && !errors.Is(err, alert.ErrTooManyRequests)
+		if incomplete {
 			logger.Errorf("Failed to collect throttled notifications for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+		}
+		if isEvalCli && result.retry.evalID != 0 {
+			extra := make([]alert.SuppressedAlert, 0, len(result.retry.throttledAlerts.Notifications))
+			for _, n := range result.retry.throttledAlerts.Notifications {
+				extra = append(extra, alert.SuppressedAlert{
+					Title:    n.Title,
+					Severity: clampInt64ToInt(n.Severity),
+				})
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			sealEval(true, extra, result.retry.throttledAlerts.Total, incomplete)
+			e.updateAlertRuleStatus(ctx, evaluation, "Throttled", "Too many notifications sent")
+			return
+		}
+		summary := throttledNotificationSummary(&result.retry.throttledAlerts)
+		if incomplete {
 			summary += "<br/>The query results could not be fully processed; this table may be incomplete."
 		}
 		linkedSummary, linkErr := KustoQueryLinks(summary, result.retry.queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
@@ -171,7 +198,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed and unable to send failure alert: %v", originalQueryErr))
 			return
-		} else {
+		} else if !isEvalCli {
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		}
 		if retryExhausted {
@@ -189,6 +216,10 @@ func (e *worker) finishAbortedQuery(result queryAttemptResult) {
 	retry := result.retry
 	if retry == nil {
 		return
+	}
+	if evalCli, ok := e.alertCli.(EvaluationAlertCli); ok && retry.evalID != 0 {
+		evalCli.SealEvaluation(retry.evalID, false, nil, 0, true)
+		retry.evalID = 0
 	}
 	retry.evaluation.outcome = evaluationOutcomeServiceError
 	if errors.Is(result.err, context.Canceled) {

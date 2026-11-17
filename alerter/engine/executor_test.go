@@ -737,6 +737,7 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 		kustoClient: &fakeKustoClient{},
 		workers:     map[string]*worker{},
 	}
+	t.Cleanup(func() { require.NoError(t, e.Close()) })
 
 	require.Equal(t, 0, len(e.workers))
 	e.syncWorkers(ctx)
@@ -758,6 +759,7 @@ func TestExecutor_syncWorkers_NoChange(t *testing.T) {
 		kustoClient: &fakeKustoClient{},
 		workers:     map[string]*worker{},
 	}
+	t.Cleanup(func() { require.NoError(t, e.Close()) })
 
 	require.Equal(t, 0, len(e.workers))
 	e.syncWorkers(ctx)
@@ -783,6 +785,7 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 		kustoClient: &fakeKustoClient{},
 		workers:     map[string]*worker{},
 	}
+	t.Cleanup(func() { require.NoError(t, e.Close()) })
 
 	require.Equal(t, 0, len(e.workers))
 	e.syncWorkers(ctx)

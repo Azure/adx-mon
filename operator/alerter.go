@@ -4,13 +4,13 @@ import (
 	bytes "bytes"
 	context "context"
 	embed "embed"
-	"encoding/json"
 	fmt "fmt"
 	"slices"
 	"strings"
 	texttemplate "text/template"
 	time "time"
 
+	"github.com/Azure/adx-mon/alerter/alert"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -29,6 +29,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	defaultAlerterImage                         = "ghcr.io/azure/adx-mon/alerter:latest"
+	desiredAlerterTerminationGracePeriodSeconds = int64(60)
+)
+
 //go:embed manifests/crds/alertrules_crd.yaml manifests/alerter.yaml
 var alerterFS embed.FS
 
@@ -41,10 +46,17 @@ type AlerterReconciler struct {
 	waitForReadyReason string
 }
 
+func (r *AlerterReconciler) waitReason() string {
+	if r.waitForReadyReason != "" {
+		return r.waitForReadyReason
+	}
+	return "WaitForReady"
+}
+
 func (r *AlerterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	alerter := &adxmonv1.Alerter{}
 	if err := r.Get(ctx, req.NamespacedName, alerter); err != nil {
-		return r.ReconcileComponent(ctx, req)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	if expr := alerter.Spec.CriteriaExpression; expr != "" {
@@ -73,131 +85,118 @@ func (r *AlerterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	if _, err := resolvedNotificationEndpoints(alerter.Spec); err != nil {
+		_ = r.setCondition(ctx, alerter, "InvalidSpec", err.Error(), metav1.ConditionFalse)
+		return ctrl.Result{}, nil
+	}
+
 	condition := meta.FindStatusCondition(alerter.Status.Conditions, adxmonv1.AlerterConditionOwner)
 	switch {
 	case condition == nil:
 		return r.CreateAlerter(ctx, alerter)
-	case condition.Reason == r.waitForReadyReason:
-		return r.IsReady(ctx, alerter)
 	case condition.Status == metav1.ConditionUnknown:
 		return r.CreateAlerter(ctx, alerter)
 	case condition.ObservedGeneration != alerter.GetGeneration():
 		return r.CreateAlerter(ctx, alerter)
 	}
-	return ctrl.Result{}, nil
-}
 
-func (r *AlerterReconciler) ReconcileComponent(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var deployment appsv1.Deployment
-	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	alerter := &adxmonv1.Alerter{}
-	if err := r.Get(ctx, req.NamespacedName, alerter); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	stored, err := alerter.Spec.LoadAppliedProvisioningState()
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to load applied provisioning state: %w", err)
-	}
-
-	var update bool
-
-	// Update image if needed
-	if r.updateImageIfNeeded(&deployment, alerter) {
-		update = true
-	}
-
-	// Handle ADXClusterSelector changes and update args if needed
-	changed, err := r.handleADXClusterSelectorChange(ctx, &deployment, alerter, stored)
+	updated, exists, err := r.reconcileDeployment(ctx, alerter)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if changed {
-		update = true
+	if !exists {
+		return r.CreateAlerter(ctx, alerter)
 	}
-
-	// Apply updates if any
-	if update {
-		if err := r.Update(ctx, &deployment); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update Deployment: %w", err)
-		}
-		if err := r.setCondition(ctx, alerter, r.waitForReadyReason, "Alerter manifest updating...", metav1.ConditionUnknown); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
-		}
+	if updated {
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
-
-	// No changes to apply
+	if condition.Reason == r.waitReason() {
+		return r.IsReady(ctx, alerter)
+	}
 	return ctrl.Result{}, nil
 }
 
-// handleADXClusterSelectorChange checks for selector changes and updates container args if needed.
-func (r *AlerterReconciler) handleADXClusterSelectorChange(ctx context.Context, deployment *appsv1.Deployment, alerter *adxmonv1.Alerter, stored *adxmonv1.AlerterSpec) (bool, error) {
-	if stored == nil {
-		// If there's no stored spec, we can't compare, assume no change needed based on selector diff
-		return false, nil
-	}
-	storedSel, _ := json.Marshal(stored.ADXClusterSelector)
-	currentSel, _ := json.Marshal(alerter.Spec.ADXClusterSelector)
-	if string(storedSel) == string(currentSel) {
-		// Selector hasn't changed
-		return false, nil
-	}
-	logger.Infof("ADXClusterSelector changed for alerter %s/%s: stored=%s, current=%s", alerter.Namespace, alerter.Name, string(storedSel), string(currentSel))
-
-	_, data, err := r.templateData(ctx, alerter)
-	if err != nil {
-		// If we fail to get template data (e.g., cluster not ready), report error but don't mark as changed yet.
-		// The reconciliation should requeue and try again later.
-		return false, fmt.Errorf("failed to get template data for selector change: %w", err)
-	}
-
-	// Filter existing args, keeping only those not related to kusto endpoints
-	currentArgs := deployment.Spec.Template.Spec.Containers[0].Args
-	newArgs := make([]string, 0, len(currentArgs)) // Pre-allocate capacity
-	for _, arg := range currentArgs {
-		if !strings.HasPrefix(arg, "--kusto-endpoint=") {
-			newArgs = append(newArgs, arg)
+// reconcileDeployment directly compares and updates image, --alerter-address=, and --kusto-endpoint=
+// on Deployment/alerter without mutating Alerter.Spec or calling StoreAppliedProvisioningState.
+func (r *AlerterReconciler) reconcileDeployment(ctx context.Context, alerter *adxmonv1.Alerter) (updated bool, exists bool, err error) {
+	var deployment appsv1.Deployment
+	if err := r.Get(ctx, client.ObjectKey{Namespace: alerter.GetNamespace(), Name: "alerter"}, &deployment); err != nil {
+		if errors.IsNotFound(err) {
+			return false, false, nil
 		}
+		return false, false, err
 	}
 
-	// Append new endpoint args based on the current selector
-	for _, cluster := range data.KustoEndpoints {
-		newArgs = append(newArgs, fmt.Sprintf("--kusto-endpoint=%s", cluster))
+	ready, data, err := r.templateData(ctx, alerter)
+	if err != nil {
+		return false, true, fmt.Errorf("failed to get template data: %w", err)
+	}
+	if !ready {
+		_ = r.setCondition(ctx, alerter, "NotReady", "ADXCluster not ready", metav1.ConditionUnknown)
+		return true, true, nil
 	}
 
-	// Check if the arguments actually changed before assigning back
-	// Sort slices before comparing to ensure order doesn't matter
-	currentArgsSorted := slices.Clone(currentArgs)
-	newArgsSorted := slices.Clone(newArgs)
-	slices.Sort(currentArgsSorted)
-	slices.Sort(newArgsSorted)
-
-	if slices.Equal(currentArgsSorted, newArgsSorted) {
-		// No actual change in arguments after filtering and adding new ones based on the new selector
-		logger.Infof("ADXClusterSelector changed for alerter %s/%s, but resulting args are the same.", alerter.Namespace, alerter.Name)
-		return false, nil
+	if !applyDesiredDeploymentSpec(&deployment, alerter, data) {
+		return false, true, nil
 	}
 
-	logger.Infof("Updating args for alerter %s/%s due to ADXClusterSelector change.", alerter.Namespace, alerter.Name)
-	deployment.Spec.Template.Spec.Containers[0].Args = newArgs // Assign the final list of args
-
-	return true, nil
+	if err := r.Update(ctx, &deployment); err != nil {
+		return false, true, fmt.Errorf("failed to update Deployment: %w", err)
+	}
+	if err := r.setCondition(ctx, alerter, r.waitReason(), "Alerter manifest updating...", metav1.ConditionUnknown); err != nil {
+		return false, true, fmt.Errorf("failed to set status condition: %w", err)
+	}
+	return true, true, nil
 }
 
-// updateImageIfNeeded updates the Deployment image if it differs from the Alerter spec.
-func (r *AlerterReconciler) updateImageIfNeeded(deployment *appsv1.Deployment, alerter *adxmonv1.Alerter) bool {
-	if len(deployment.Spec.Template.Spec.Containers) == 1 {
-		if deployment.Spec.Template.Spec.Containers[0].Image != alerter.Spec.Image {
-			logger.Infof("Updating image for alerter %s/%s from %s to %s", alerter.Namespace, alerter.Name, deployment.Spec.Template.Spec.Containers[0].Image, alerter.Spec.Image)
-			deployment.Spec.Template.Spec.Containers[0].Image = alerter.Spec.Image
-			return true
-		}
+func applyDesiredDeploymentSpec(deployment *appsv1.Deployment, alerter *adxmonv1.Alerter, data *alerterTemplateData) bool {
+	if len(deployment.Spec.Template.Spec.Containers) == 0 {
+		return false
 	}
-	return false
+
+	var changed bool
+	container := &deployment.Spec.Template.Spec.Containers[0]
+	if container.Image != data.Image {
+		logger.Infof("Updating image for alerter %s/%s from %s to %s", alerter.Namespace, alerter.Name, container.Image, data.Image)
+		container.Image = data.Image
+		changed = true
+	}
+
+	desiredArgs := desiredAlerterArgs(container.Args, data.AlerterEndpoints, data.KustoEndpoints)
+	if !slices.Equal(container.Args, desiredArgs) {
+		logger.Infof("Updating args for alerter %s/%s", alerter.Namespace, alerter.Name)
+		container.Args = desiredArgs
+		changed = true
+	}
+
+	if deployment.Spec.Template.Spec.TerminationGracePeriodSeconds == nil ||
+		*deployment.Spec.Template.Spec.TerminationGracePeriodSeconds != desiredAlerterTerminationGracePeriodSeconds {
+		logger.Infof("Updating terminationGracePeriodSeconds for alerter %s/%s to %d", alerter.Namespace, alerter.Name, desiredAlerterTerminationGracePeriodSeconds)
+		deployment.Spec.Template.Spec.TerminationGracePeriodSeconds = new(desiredAlerterTerminationGracePeriodSeconds)
+		changed = true
+	}
+
+	return changed
+}
+
+func desiredAlerterArgs(currentArgs, alerterEndpoints, kustoEndpoints []string) []string {
+	preserved := make([]string, 0, len(currentArgs))
+	for _, arg := range currentArgs {
+		if strings.HasPrefix(arg, "--alerter-address=") || strings.HasPrefix(arg, "--kusto-endpoint=") {
+			continue
+		}
+		preserved = append(preserved, arg)
+	}
+
+	desired := make([]string, 0, len(alerterEndpoints)+len(preserved)+len(kustoEndpoints))
+	for _, ep := range alerterEndpoints {
+		desired = append(desired, fmt.Sprintf("--alerter-address=%s", ep))
+	}
+	desired = append(desired, preserved...)
+	for _, cluster := range kustoEndpoints {
+		desired = append(desired, fmt.Sprintf("--kusto-endpoint=%s", cluster))
+	}
+	return desired
 }
 
 func (r *AlerterReconciler) IsReady(ctx context.Context, alerter *adxmonv1.Alerter) (ctrl.Result, error) {
@@ -208,7 +207,7 @@ func (r *AlerterReconciler) IsReady(ctx context.Context, alerter *adxmonv1.Alert
 		}
 		return ctrl.Result{}, err
 	}
-	if deploy.Status.ReadyReplicas == *deploy.Spec.Replicas {
+	if deploy.Spec.Replicas != nil && deploy.Status.ReadyReplicas == *deploy.Spec.Replicas {
 		if err := r.setCondition(ctx, alerter, "Ready", "Alerter deployment is ready", metav1.ConditionTrue); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -218,7 +217,11 @@ func (r *AlerterReconciler) IsReady(ctx context.Context, alerter *adxmonv1.Alert
 }
 
 func (r *AlerterReconciler) CreateAlerter(ctx context.Context, alerter *adxmonv1.Alerter) (ctrl.Result, error) {
-	r.applyDefaults(alerter)
+	if _, err := resolvedNotificationEndpoints(alerter.Spec); err != nil {
+		_ = r.setCondition(ctx, alerter, "InvalidSpec", err.Error(), metav1.ConditionFalse)
+		return ctrl.Result{}, nil
+	}
+
 	if err := r.installAlertRuleCRD(ctx); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to install AlertRule CRD: %w", err)
 	}
@@ -272,12 +275,25 @@ func (r *AlerterReconciler) CreateAlerter(ctx context.Context, alerter *adxmonv1
 				}
 			}
 		}
-		if err := r.Create(ctx, obj); err != nil && !errors.IsAlreadyExists(err) {
-			return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		if err := r.Create(ctx, obj); err != nil {
+			if !errors.IsAlreadyExists(err) {
+				return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
+			}
+			if obj.GetKind() == "Deployment" && obj.GetName() == "alerter" {
+				var existingDeploy appsv1.Deployment
+				if err := r.Get(ctx, client.ObjectKey{Namespace: alerter.GetNamespace(), Name: "alerter"}, &existingDeploy); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to get existing Deployment alerter: %w", err)
+				}
+				if applyDesiredDeploymentSpec(&existingDeploy, alerter, data) {
+					if err := r.Update(ctx, &existingDeploy); err != nil {
+						return ctrl.Result{}, fmt.Errorf("failed to update Deployment alerter: %w", err)
+					}
+				}
+			}
 		}
 	}
 
-	if err := r.setCondition(ctx, alerter, r.waitForReadyReason, "Alerter manifests installing", metav1.ConditionTrue); err != nil {
+	if err := r.setCondition(ctx, alerter, r.waitReason(), "Alerter manifests installing", metav1.ConditionTrue); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
@@ -314,21 +330,58 @@ func (r *AlerterReconciler) installAlertRuleCRD(ctx context.Context) error {
 	return nil
 }
 
-func (r *AlerterReconciler) applyDefaults(alerter *adxmonv1.Alerter) {
-	if alerter.Spec.Image == "" {
-		alerter.Spec.Image = "ghcr.io/azure/adx-mon/alerter:latest"
+func desiredAlerterImage(alerter *adxmonv1.Alerter) string {
+	if alerter.Spec.Image != "" {
+		return alerter.Spec.Image
 	}
+	return defaultAlerterImage
+}
+
+func resolvedNotificationEndpoints(spec adxmonv1.AlerterSpec) ([]string, error) {
+	if spec.NotificationEndpoint != "" && len(spec.NotificationEndpoints) > 0 {
+		return nil, fmt.Errorf("exactly one of notificationEndpoint or notificationEndpoints must be specified")
+	}
+
+	var raw []string
+	switch {
+	case len(spec.NotificationEndpoints) > 0:
+		raw = spec.NotificationEndpoints
+	case spec.NotificationEndpoint != "":
+		raw = []string{spec.NotificationEndpoint}
+	default:
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(raw))
+	deduped := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		ep, err := alert.ParseBaseEndpoint(entry)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[ep.URL]; exists {
+			continue
+		}
+		seen[ep.URL] = struct{}{}
+		deduped = append(deduped, strings.TrimSpace(entry))
+	}
+	return deduped, nil
 }
 
 type alerterTemplateData struct {
-	Image           string
-	AlerterEndpoint string
-	KustoEndpoints  []string
-	MSIID           string
-	Namespace       string
+	Image            string
+	AlerterEndpoints []string
+	KustoEndpoints   []string
+	MSIID            string
+	Namespace        string
 }
 
 func (r *AlerterReconciler) templateData(ctx context.Context, alerter *adxmonv1.Alerter) (clustersReady bool, data *alerterTemplateData, err error) {
+	alerterEndpoints, err := resolvedNotificationEndpoints(alerter.Spec)
+	if err != nil {
+		return false, nil, err
+	}
+
 	selector, err := metav1.LabelSelectorAsSelector(alerter.Spec.ADXClusterSelector)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to convert label selector: %w", err)
@@ -350,11 +403,12 @@ func (r *AlerterReconciler) templateData(ctx context.Context, alerter *adxmonv1.
 			kustoEndpoints = append(kustoEndpoints, endpoint)
 		}
 	}
+	slices.Sort(kustoEndpoints)
 	data = &alerterTemplateData{
-		Image:           alerter.Spec.Image,
-		AlerterEndpoint: alerter.Spec.NotificationEndpoint,
-		KustoEndpoints:  kustoEndpoints,
-		Namespace:       alerter.Namespace,
+		Image:            desiredAlerterImage(alerter),
+		AlerterEndpoints: alerterEndpoints,
+		KustoEndpoints:   kustoEndpoints,
+		Namespace:        alerter.Namespace,
 	}
 	return true, data, nil
 }

@@ -37,3 +37,31 @@ func TestNewClient_UsesConfiguredTransport(t *testing.T) {
 	require.Equal(t, responseHeaderTimeout, defaults.ResponseHeaderTimeout)
 	require.Equal(t, idleConnTimeout, defaults.IdleConnTimeout)
 }
+
+func TestNewFanoutClient_IsolatesPerEndpointTransports(t *testing.T) {
+	fcDefault, err := NewFanoutClient([]string{"http://host.example:8080/a", "http://host.example:8080/b"})
+	require.NoError(t, err)
+	require.Len(t, fcDefault.queues, 2)
+	require.NotNil(t, fcDefault.queues[0].ownClient)
+	require.NotNil(t, fcDefault.queues[1].ownClient)
+	require.NotSame(t, fcDefault.queues[0].ownClient, fcDefault.queues[1].ownClient)
+
+	tr0 := fcDefault.queues[0].ownClient.httpClient.Transport.(*http.Transport)
+	tr1 := fcDefault.queues[1].ownClient.httpClient.Transport.(*http.Transport)
+	require.NotSame(t, tr0, tr1)
+	require.Equal(t, 100, tr0.MaxConnsPerHost)
+	require.Equal(t, 100, tr1.MaxConnsPerHost)
+	require.NoError(t, fcDefault.Close())
+
+	fcHigh, err := NewFanoutClient(
+		[]string{"http://host.example:8080/a", "http://host.example:8080/b"},
+		WithConcurrency(150),
+	)
+	require.NoError(t, err)
+	trHigh0 := fcHigh.queues[0].ownClient.httpClient.Transport.(*http.Transport)
+	trHigh1 := fcHigh.queues[1].ownClient.httpClient.Transport.(*http.Transport)
+	require.NotSame(t, trHigh0, trHigh1)
+	require.Equal(t, 150, trHigh0.MaxConnsPerHost)
+	require.Equal(t, 150, trHigh1.MaxConnsPerHost)
+	require.NoError(t, fcHigh.Close())
+}

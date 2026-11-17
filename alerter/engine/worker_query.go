@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
@@ -66,6 +67,7 @@ type queryRetryState struct {
 	evaluationCancel       context.CancelFunc
 	attempt                int
 	initialErr             error
+	evalID                 uint64
 	notificationsThrottled bool
 	throttledAlerts        ThrottledNotificationsError
 }
@@ -162,9 +164,13 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 	queryCtx := retry.evaluationContext
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 
+	var attemptEvalID uint64
 	// Create a wrapper handler that tracks alerts generated and retains rows
 	// after notification throttling so the summary can identify affected alerts.
 	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
+		if attemptEvalID != 0 {
+			ctx = withEvalID(ctx, attemptEvalID)
+		}
 		if !retry.notificationsThrottled {
 			err := e.handlerFn(ctx, endpoint, qc, row)
 			if err == nil {
@@ -187,6 +193,14 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 	var err error
 	if result, stopped := queryContextStopped(ctx, retry); stopped {
 		return result
+	}
+	if evalCli, ok := e.alertCli.(EvaluationAlertCli); ok {
+		if retry.evalID != 0 {
+			evalCli.SealEvaluation(retry.evalID, false, nil, 0, false)
+			retry.evalID = 0
+		}
+		attemptEvalID = evalCli.BeginEvaluation(e.buildEvalMeta(retry.queryContext))
+		retry.evalID = attemptEvalID
 	}
 	err, retry.evaluation.rows = e.kustoClient.Query(queryCtx, retry.queryContext, wrappedHandler)
 	transient := isTransientFailedRequest(err)
@@ -218,6 +232,39 @@ func retriableFailure(retry *queryRetryState, err error) queryAttemptResult {
 		err: &retriableError{
 			initialErr: retry.initialErr,
 			retryErr:   err,
+		},
+	}
+}
+
+func (e *worker) buildEvalMeta(qc *QueryContext) alert.EvalMeta {
+	queryText := qc.Query
+	kustoEndpoint := e.kustoClient.Endpoint(e.rule.Database)
+	database := e.rule.Database
+	ns := e.rule.Namespace
+	name := e.rule.Name
+	dest := e.rule.Destination
+	region := e.region
+	return alert.EvalMeta{
+		Namespace:   ns,
+		Name:        name,
+		Destination: dest,
+		Region:      region,
+		BuildSummaryAlert: func(suppressed []alert.SuppressedAlert, totalSuppressed int, incomplete bool) alert.Alert {
+			summary := alert.FormatThrottledSummary(suppressed, totalSuppressed, incomplete)
+			if linked, linkErr := KustoQueryLinks(summary, queryText, kustoEndpoint, database); linkErr != nil {
+				logger.Errorf("Failed to create query links for throttled notification for %s/%s: %s", ns, name, linkErr)
+			} else {
+				summary = linked
+			}
+			source := fmt.Sprintf("notification-failure/%s/%s", ns, name)
+			return alert.Alert{
+				Destination:   dest,
+				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", ns, name, region),
+				Summary:       summary,
+				Severity:      3,
+				Source:        source,
+				CorrelationID: source,
+			}
 		},
 	}
 }

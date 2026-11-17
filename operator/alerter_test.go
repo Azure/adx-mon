@@ -25,13 +25,17 @@ func TestAlerterReconciler_IsReady(t *testing.T) {
 	alerter := &adxmonv1.Alerter{
 		APIVersion: "adx-mon.azure.com/v1",
 		Kind:       "Alerter",
-		Name:       "test-alerter",
-		Namespace:  "default",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-alerter",
+			Namespace: "default",
+		},
 	}
 
 	dep := &appsv1.Deployment{
-		Name:      "alerter",
-		Namespace: "default",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alerter",
+			Namespace: "default",
+		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: new(int32(2)),
 		},
@@ -62,72 +66,6 @@ func TestAlerterReconciler_IsReady(t *testing.T) {
 	require.False(t, result.IsZero())
 }
 
-func TestAlerterReconciler_ReconcileComponent(t *testing.T) {
-	scheme := runtime.NewScheme()
-	require.NoError(t, adxmonv1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
-
-	alerter := &adxmonv1.Alerter{
-		APIVersion: "adx-mon.azure.com/v1",
-		Kind:       "Alerter",
-		Name:       "test-alerter",
-		Namespace:  "default",
-		Spec: adxmonv1.AlerterSpec{
-			Image:              "test-image:v1",
-			ADXClusterSelector: &metav1.LabelSelector{},
-		},
-	}
-	require.NoError(t, alerter.Spec.StoreAppliedProvisioningState())
-
-	dep := &appsv1.Deployment{
-		Name:      "test-alerter",
-		Namespace: "default",
-		Spec: appsv1.DeploymentSpec{
-			Replicas: new(int32(2)),
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "alerter",
-						Image: "test-image:v1",
-						Args:  []string{"--foo=bar"},
-					}},
-				},
-			},
-		},
-		Status: appsv1.DeploymentStatus{
-			ReadyReplicas: 2,
-		},
-	}
-
-	client := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&adxmonv1.Alerter{}).
-		Build()
-	require.NoError(t, client.Create(context.Background(), alerter))
-	require.NoError(t, client.Create(context.Background(), dep))
-
-	r := &AlerterReconciler{Client: client, Scheme: scheme}
-
-	// No update needed
-	result, err := r.ReconcileComponent(context.Background(), ctrl.Request{
-		Name:      "test-alerter",
-		Namespace: "default",
-	})
-	require.NoError(t, err)
-	require.True(t, result.IsZero())
-
-	// Update image to trigger update path
-	dep.Spec.Template.Spec.Containers[0].Image = "old-image:v1"
-	require.NoError(t, client.Update(context.Background(), dep))
-
-	result, err = r.ReconcileComponent(context.Background(), ctrl.Request{
-		Name:      "test-alerter",
-		Namespace: "default",
-	})
-	require.NoError(t, err)
-	require.False(t, result.IsZero())
-}
-
 func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
@@ -136,14 +74,19 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	cluster := &adxmonv1.ADXCluster{
 		APIVersion: "adx-mon.azure.com/v1",
 		Kind:       "ADXCluster",
-		Name:       "test-cluster",
-		Namespace:  "default",
-		Labels: map[string]string{
-			"app": "test-cluster",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app": "test-cluster",
+			},
 		},
 		Spec: adxmonv1.ADXClusterSpec{
 			ClusterName: "test-cluster",
 			Endpoint:    "https://bring-your-own-adx-cluster",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
 		},
 		Status: adxmonv1.ADXClusterStatus{
 			Conditions: []metav1.Condition{{
@@ -156,9 +99,16 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	alerter := &adxmonv1.Alerter{
 		APIVersion: "adx-mon.azure.com/v1",
 		Kind:       "Alerter",
-		Name:       "test-alerter",
-		Namespace:  "default",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-alerter",
+			Namespace: "default",
+		},
 		Spec: adxmonv1.AlerterSpec{
+			NotificationEndpoints: []string{
+				"http://notifier-a:8080",
+				"https://notifier-b.example.com/team,prod?sig=1",
+				"http://notifier-a:8080/",
+			},
 			ADXClusterSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": "test-cluster",
@@ -186,53 +136,41 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 		Name:      "test-alerter",
 		Namespace: "default",
 	}, updated))
-	require.True(t, meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.AlerterConditionOwner) != nil)
+	require.NotNil(t, meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.AlerterConditionOwner))
+	require.Empty(t, updated.Spec.AppliedProvisionState)
+
+	dep := &appsv1.Deployment{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "alerter",
+		Namespace: "default",
+	}, dep))
+	require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
+	require.Equal(t, int64(60), *dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
+	require.Equal(t, defaultAlerterImage, dep.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, []string{
+		"--alerter-address=http://notifier-a:8080",
+		"--alerter-address=https://notifier-b.example.com/team,prod?sig=1",
+		"--port=8080",
+		"--kusto-endpoint=https://bring-your-own-adx-cluster",
+	}, dep.Spec.Template.Spec.Containers[0].Args)
 }
 
-func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
+func TestAlerterReconciler_ReconcileUpdatesDeploymentDirectly(t *testing.T) {
 	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
 
-	initialSpec := adxmonv1.AlerterSpec{
-		Image: "initial-image:v1",
-		ADXClusterSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"env": "prod"},
+	prodCluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "prod-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"env": "prod"},
 		},
-	}
-	alerter := &adxmonv1.Alerter{
-		Name:      "test-alerter",
-		Namespace: "default",
-		Spec:      initialSpec,
-	}
-	require.NoError(t, alerter.Spec.StoreAppliedProvisioningState())
-
-	dep := &appsv1.Deployment{
-		Name:      "test-alerter",
-		Namespace: "default",
-		Spec: appsv1.DeploymentSpec{
-			Replicas: new(int32(1)),
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "alerter",
-						Image: "initial-image:v1",
-						Args: []string{
-							"--kusto-endpoint=https://oldcluster.kusto.windows.net",
-							"--other-arg=value",
-						},
-					}},
-				},
-			},
-		},
-	}
-
-	newCluster := &adxmonv1.ADXCluster{
-		Name:      "new-cluster",
-		Namespace: "default",
-		Labels:    map[string]string{"env": "staging"},
 		Spec: adxmonv1.ADXClusterSpec{
-			Endpoint: "https://newcluster.kusto.windows.net",
+			Endpoint: "https://prod.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "ProdDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
 		},
 		Status: adxmonv1.ADXClusterStatus{
 			Conditions: []metav1.Condition{{
@@ -242,53 +180,179 @@ func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
 		},
 	}
 
-	client := fake.NewClientBuilder().
+	stagingCluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "staging-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"env": "staging"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://staging.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "StageDB", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{{
+				Type:   adxmonv1.ADXClusterConditionOwner,
+				Status: metav1.ConditionTrue,
+			}},
+		},
+	}
+
+	alerter := &adxmonv1.Alerter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "custom-alerter-cr",
+			Namespace:  "default",
+			Generation: 1,
+		},
+		Spec: adxmonv1.AlerterSpec{
+			Image:                "alerter:v1",
+			NotificationEndpoint: "http://legacy-notifier:8080",
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+		},
+	}
+
+	cli := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(alerter, dep, newCluster).
+		WithObjects(prodCluster, stagingCluster, alerter).
 		WithStatusSubresource(&adxmonv1.Alerter{}, &adxmonv1.ADXCluster{}).
 		Build()
 
-	r := &AlerterReconciler{Client: client, Scheme: scheme}
+	r := &AlerterReconciler{Client: cli, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "custom-alerter-cr"}}
 
-	storedSpec, err := alerter.Spec.LoadAppliedProvisioningState()
+	// Initial reconcile creates Deployment/alerter with single --alerter-address
+	res, err := r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	require.NotNil(t, storedSpec)
+	require.False(t, res.IsZero())
 
-	updatedAlerter := alerter.DeepCopy()
-	updatedAlerter.Spec.ADXClusterSelector = &metav1.LabelSelector{
+	dep := &appsv1.Deployment{}
+	require.NoError(t, cli.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "alerter"}, dep))
+	require.Equal(t, "alerter:v1", dep.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, []string{
+		"--alerter-address=http://legacy-notifier:8080",
+		"--port=8080",
+		"--kusto-endpoint=https://prod.kusto.windows.net",
+	}, dep.Spec.Template.Spec.Containers[0].Args)
+
+	// Mark Deployment ready and inject a custom flag to ensure unrelated args are preserved
+	dep.Spec.Template.Spec.Containers[0].Args = []string{
+		"--alerter-address=http://legacy-notifier:8080",
+		"--port=8080",
+		"--concurrency=20",
+		"--kusto-endpoint=https://prod.kusto.windows.net",
+	}
+	dep.Status.ReadyReplicas = *dep.Spec.Replicas
+	require.NoError(t, cli.Update(context.Background(), dep))
+	dep.Status.ReadyReplicas = *dep.Spec.Replicas
+	require.NoError(t, cli.Status().Update(context.Background(), dep))
+
+	// Reconcile transitions condition to Ready with zero Deployment update and no AppliedProvisionState
+	res, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, res.IsZero())
+
+	require.NoError(t, cli.Get(context.Background(), req.NamespacedName, alerter))
+	require.Empty(t, alerter.Spec.AppliedProvisionState)
+	cond := meta.FindStatusCondition(alerter.Status.Conditions, adxmonv1.AlerterConditionOwner)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "Ready", cond.Reason)
+
+	// Simulate legacy Deployment created with terminationGracePeriodSeconds=30 before upgrade
+	dep.Spec.Template.Spec.TerminationGracePeriodSeconds = new(int64(30))
+
+	// Migrate CR from single NotificationEndpoint to NotificationEndpoints, bump image and selector
+	// WITHOUT bumping Generation first (simulating direct Deployment drift / fake-client update)
+	alerter.Spec.Image = "alerter:v2"
+	alerter.Spec.NotificationEndpoint = ""
+	alerter.Spec.NotificationEndpoints = []string{
+		"http://notifier-1:8080",
+		"http://notifier-2:8080",
+	}
+	alerter.Spec.ADXClusterSelector = &metav1.LabelSelector{
 		MatchLabels: map[string]string{"env": "staging"},
 	}
+	require.NoError(t, cli.Update(context.Background(), dep))
+	require.NoError(t, cli.Update(context.Background(), alerter))
 
-	changed, err := r.handleADXClusterSelectorChange(context.Background(), dep, updatedAlerter, storedSpec)
+	res, err = r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	require.True(t, changed, "Expected change to be detected")
+	require.False(t, res.IsZero())
 
-	// Args should be updated: only --other-arg=value and new --kusto-endpoint
-	expectedArgs := []string{
-		"--other-arg=value",
-		"--kusto-endpoint=https://newcluster.kusto.windows.net",
+	require.NoError(t, cli.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "alerter"}, dep))
+	require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
+	require.Equal(t, int64(60), *dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
+	require.Equal(t, "alerter:v2", dep.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, []string{
+		"--alerter-address=http://notifier-1:8080",
+		"--alerter-address=http://notifier-2:8080",
+		"--port=8080",
+		"--concurrency=20",
+		"--kusto-endpoint=https://staging.kusto.windows.net",
+	}, dep.Spec.Template.Spec.Containers[0].Args)
+
+	// Also verify Generation-bump update path updates Deployment/alerter in-place without AppliedProvisionState
+	require.NoError(t, cli.Get(context.Background(), req.NamespacedName, alerter))
+	require.Empty(t, alerter.Spec.AppliedProvisionState)
+	alerter.Generation = 2
+	alerter.Spec.NotificationEndpoints = []string{"http://notifier-3:8080"}
+	require.NoError(t, cli.Update(context.Background(), alerter))
+
+	res, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.False(t, res.IsZero())
+
+	require.NoError(t, cli.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "alerter"}, dep))
+	require.Equal(t, []string{
+		"--alerter-address=http://notifier-3:8080",
+		"--port=8080",
+		"--concurrency=20",
+		"--kusto-endpoint=https://staging.kusto.windows.net",
+	}, dep.Spec.Template.Spec.Containers[0].Args)
+
+	require.NoError(t, cli.Get(context.Background(), req.NamespacedName, alerter))
+	require.Empty(t, alerter.Spec.AppliedProvisionState)
+}
+
+func TestAlerterReconciler_RejectsConflictingNotificationEndpoints(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	alerter := &adxmonv1.Alerter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "invalid-alerter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.AlerterSpec{
+			NotificationEndpoint:  "http://notifier-a:8080",
+			NotificationEndpoints: []string{"http://notifier-b:8080"},
+			ADXClusterSelector:    &metav1.LabelSelector{},
+		},
 	}
-	require.ElementsMatch(t, expectedArgs, dep.Spec.Template.Spec.Containers[0].Args, "Args mismatch after selector change")
 
-	// --- Test Case 2: Selector Not Changed ---
-	dep.Spec.Template.Spec.Containers[0].Args = expectedArgs
-	require.NoError(t, updatedAlerter.Spec.StoreAppliedProvisioningState())
-	require.NoError(t, client.Update(context.Background(), updatedAlerter))
+	cli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(alerter).
+		WithStatusSubresource(&adxmonv1.Alerter{}).
+		Build()
 
-	storedSpecNow, err := updatedAlerter.Spec.LoadAppliedProvisioningState()
+	r := &AlerterReconciler{Client: cli, Scheme: scheme}
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "default", Name: "invalid-alerter"},
+	})
 	require.NoError(t, err)
-	require.NotNil(t, storedSpecNow)
+	require.True(t, res.IsZero())
 
-	changed, err = r.handleADXClusterSelectorChange(context.Background(), dep, updatedAlerter, storedSpecNow)
-	require.NoError(t, err)
-	require.False(t, changed, "Expected no change when selector is the same")
-	require.ElementsMatch(t, expectedArgs, dep.Spec.Template.Spec.Containers[0].Args, "Args should not change when selector is the same")
-
-	// --- Test Case 3: Stored Spec is Nil ---
-	changed, err = r.handleADXClusterSelectorChange(context.Background(), dep, updatedAlerter, nil)
-	require.NoError(t, err)
-	require.False(t, changed, "Expected no change when stored spec is nil")
-	require.ElementsMatch(t, expectedArgs, dep.Spec.Template.Spec.Containers[0].Args, "Args should not change when stored spec is nil")
+	require.NoError(t, cli.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "invalid-alerter"}, alerter))
+	cond := meta.FindStatusCondition(alerter.Status.Conditions, adxmonv1.AlerterConditionOwner)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, "InvalidSpec", cond.Reason)
 }
 
 func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
@@ -297,18 +361,23 @@ func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	alerter := &adxmonv1.Alerter{
-		Name:      "test-alerter",
-		Namespace: "default",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-alerter",
+			Namespace: "default",
+		},
 		Spec: adxmonv1.AlerterSpec{
-			Image: "test-image:v1",
+			Image:                "test-image:v1",
+			NotificationEndpoint: "http://notifier:8080",
 		},
 	}
 
 	cluster := &adxmonv1.ADXCluster{
-		Name:      "test-cluster",
-		Namespace: "default",
-		Labels: map[string]string{
-			"app": "adx-mon",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app": "adx-mon",
+			},
 		},
 		Spec: adxmonv1.ADXClusterSpec{
 			Endpoint: "https://test.kusto.windows.net",
