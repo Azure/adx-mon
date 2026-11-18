@@ -212,6 +212,10 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 	fakeClient.UpsertPod(pod)
 
 	require.NoError(t, informer.Open(ctx))
+	originalHandler := newFakeHandler()
+	originalReg, err := informer.Add(ctx, originalHandler)
+	require.NoError(t, err)
+	originalHandler.waitAdd(t)
 
 	// Multiple closes not an error
 	wg.Go(func() {
@@ -219,6 +223,11 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 	})
 	wg.Wait()
 	require.NoError(t, informer.Close())
+	select {
+	case <-originalReg.(*kubeletRegistration).done:
+	case <-time.After(time.Second):
+		t.Fatal("original handler did not stop after Close")
+	}
 
 	podTwo := corev1.Pod{Name: "pod-2", UID: types.UID("pod-2")}
 	fakeClient.UpsertPod(podTwo)
@@ -237,6 +246,7 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 		require.True(t, add2.Initial)
 	})
 	wg.Wait()
+	originalHandler.assertNoMoreEvents(t)
 
 	require.NoError(t, informer.Close())
 }
@@ -304,45 +314,157 @@ func TestKubeletPodInformerSlowHandlerDoesNotBlockOthers(t *testing.T) {
 	require.NoError(t, informer.Remove(slowReg))
 }
 
-func TestKubeletPodInformerRemoveAndCloseDoNotWaitForBlockedHandler(t *testing.T) {
-	fakeClient := newFakePodClient()
-	clk := clocktesting.NewFakeClock(time.Now())
+func TestKubeletPodInformerShutdownDoesNotWaitForBlockedHandler(t *testing.T) {
+	for _, shutdown := range []string{"remove then close", "close", "cancel"} {
+		t.Run(shutdown, func(t *testing.T) {
+			fakeClient := newFakePodClient()
+			clk := clocktesting.NewFakeClock(time.Now())
+			informer, err := NewKubeletPodInformer(KubeletInformerOptions{
+				ClientFactory: func() (podListClient, error) { return fakeClient, nil },
+				PollInterval:  time.Minute,
+				Clock:         clk,
+			})
+			require.NoError(t, err)
 
-	informer, err := NewKubeletPodInformer(KubeletInformerOptions{
-		ClientFactory: func() (podListClient, error) { return fakeClient, nil },
-		PollInterval:  time.Minute,
-		Clock:         clk,
-	})
-	require.NoError(t, err)
+			ctx := t.Context()
+			runCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			pod := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
+			fakeClient.UpsertPod(pod)
+			require.NoError(t, informer.Open(runCtx))
+			defer informer.Close()
 
-	ctx := t.Context()
-	pod := corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")}
-	fakeClient.UpsertPod(pod)
-	require.NoError(t, informer.Open(ctx))
+			slow := newBlockingUpdateHandler()
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(slow.release) }) }
+			defer release()
+			reg, err := informer.Add(ctx, slow)
+			require.NoError(t, err)
+			slow.waitAdd(t)
+			fast := newFakeHandler()
+			fastReg, err := informer.Add(ctx, fast)
+			require.NoError(t, err)
+			fast.waitAdd(t)
 
-	slow := newBlockingUpdateHandler()
-	defer close(slow.release)
-	reg, err := informer.Add(ctx, slow)
-	require.NoError(t, err)
-	slow.waitAdd(t)
+			updated := pod.DeepCopy()
+			updated.Labels = map[string]string{"v": "1"}
+			fakeClient.UpsertPod(*updated)
+			clk.Step(time.Minute)
+			slow.waitEntered(t)
+			fast.waitUpdate(t)
 
-	updated := pod.DeepCopy()
-	updated.Labels = map[string]string{"v": "1"}
-	fakeClient.UpsertPod(*updated)
-	clk.Step(time.Minute)
-	slow.waitEntered(t)
+			// Leave a second notification queued behind the blocked callback.
+			updated = updated.DeepCopy()
+			updated.Labels["v"] = "2"
+			fakeClient.UpsertPod(*updated)
+			clk.Step(time.Minute)
+			fast.waitUpdate(t)
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, informer.Remove(reg))
-		require.NoError(t, informer.Close())
-	}()
+			done := make(chan error, 1)
+			go func() {
+				switch shutdown {
+				case "remove then close":
+					if err := informer.Remove(reg); err != nil {
+						done <- err
+						return
+					}
+					done <- informer.Close()
+				case "close":
+					done <- informer.Close()
+				case "cancel":
+					cancel()
+					done <- nil
+				}
+			}()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("shutdown blocked on a stuck handler")
+			}
+			select {
+			case <-fastReg.(*kubeletRegistration).done:
+			case <-time.After(time.Second):
+				t.Fatal("idle handler did not stop on shutdown")
+			}
+			informer.processingMut.Lock()
+			handlerCount := len(informer.handlers)
+			informer.processingMut.Unlock()
+			require.Zero(t, handlerCount)
+			registration := reg.(*kubeletRegistration)
+			registration.mu.Lock()
+			pendingCount, queueLength := len(registration.pending), len(registration.queue)
+			registration.mu.Unlock()
+			require.Zero(t, pendingCount)
+			require.Zero(t, queueLength)
+			_, err = informer.Add(ctx, newFakeHandler())
+			require.Error(t, err, "a stopped informer must reject new registrations")
 
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Remove and Close blocked on a stuck handler")
+			release()
+			select {
+			case <-registration.done:
+			case <-time.After(time.Second):
+				t.Fatal("blocked handler did not exit after its callback returned")
+			}
+			require.Equal(t, "1", slow.waitUpdate(t).NewPod.Labels["v"])
+			slow.assertNoMoreEvents(t)
+		})
+	}
+}
+
+func TestKubeletPodInformerShutdownUnblocksInitialSync(t *testing.T) {
+	for _, shutdown := range []string{"close", "cancel", "cancel shared context"} {
+		t.Run(shutdown, func(t *testing.T) {
+			fakeClient := newFakePodClient()
+			fakeClient.UpsertPod(corev1.Pod{Name: "pod-1", UID: types.UID("pod-1")})
+			informer, err := NewKubeletPodInformer(KubeletInformerOptions{
+				ClientFactory: func() (podListClient, error) { return fakeClient, nil },
+			})
+			require.NoError(t, err)
+			ctx := t.Context()
+			runCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			require.NoError(t, informer.Open(runCtx))
+			defer informer.Close()
+			addCtx := ctx
+			if shutdown == "cancel shared context" {
+				addCtx = runCtx
+			}
+
+			entered, release := make(chan struct{}), make(chan struct{})
+			defer close(release)
+			added := make(chan error, 1)
+			go func() {
+				_, err := informer.Add(addCtx, cache.ResourceEventHandlerDetailedFuncs{
+					AddFunc: func(any, bool) {
+						close(entered)
+						<-release
+					},
+				})
+				added <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("initial handler callback did not start")
+			}
+
+			if shutdown == "close" {
+				require.NoError(t, informer.Close())
+			} else {
+				cancel()
+			}
+			select {
+			case err := <-added:
+				if shutdown == "cancel shared context" {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.ErrorContains(t, err, "stopped")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Add kept waiting for initial sync after shutdown")
+			}
+		})
 	}
 }
 
