@@ -233,5 +233,11 @@ func (r *kubeletRegistration) deliver(n podNotification) {
 func (r *kubeletRegistration) stop() {
 	r.stopOnce.Do(func() {
 		close(r.stopCh)
+		// A blocked callback can outlive shutdown. Release its queued pod state
+		// immediately rather than retaining it until that callback returns.
+		r.mu.Lock()
+		clear(r.pending)
+		r.queue = nil
+		r.mu.Unlock()
 	})
 }

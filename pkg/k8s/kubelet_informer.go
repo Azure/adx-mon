@@ -157,6 +157,7 @@ func NewKubeletPodInformer(opts KubeletInformerOptions) (*KubeletPodInformer, er
 }
 
 // Open starts the kubelet polling loop. This must be called before adding any handlers.
+// Handlers must be registered again if the informer is reopened after shutdown.
 func (k *KubeletPodInformer) Open(ctx context.Context) error {
 	k.runningMut.Lock()
 	defer k.runningMut.Unlock()
@@ -182,7 +183,8 @@ func (k *KubeletPodInformer) Open(ctx context.Context) error {
 	return nil
 }
 
-// Close stops the kubelet polling loop and cleans up resources.
+// Close stops the kubelet polling loop, unregisters all handlers, and cleans up resources.
+// It does not wait for an in-progress handler callback to return.
 func (k *KubeletPodInformer) Close() error {
 	k.runningMut.Lock()
 	defer k.runningMut.Unlock()
@@ -211,26 +213,35 @@ func (k *KubeletPodInformer) Add(ctx context.Context, handler cache.ResourceEven
 		k.runningMut.Unlock()
 		return nil, fmt.Errorf("kubelet pod informer: not started - call Open() first")
 	}
-	k.runningMut.Unlock()
-
-	reg := newKubeletRegistration(k, handler)
-	go reg.run()
 
 	k.processingMut.Lock()
+	// Check while holding processingMut so registration cannot happen after the
+	// poller's shutdown cleanup, including when its context was cancelled without Close.
+	if err := k.runCtx.Err(); err != nil {
+		k.processingMut.Unlock()
+		k.runningMut.Unlock()
+		return nil, fmt.Errorf("kubelet pod informer: stopped: %w", err)
+	}
+	reg := newKubeletRegistration(k, handler)
 	for _, pod := range k.currentPods {
 		reg.enqueueAdd(pod, true)
 	}
 	k.handlers[reg] = struct{}{}
-	k.processingMut.Unlock()
 	reg.markInitialListQueued()
+	k.processingMut.Unlock()
+	k.runningMut.Unlock()
+	go reg.run()
 
 	select {
 	case <-reg.syncedCh:
 		return reg, nil
-	case <-ctx.Done():
-		if err := k.Remove(reg); err != nil {
-			logger.Warnf("kubelet pod informer: remove handler after cancelled add: %v", err)
+	case <-reg.stopCh:
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("kubelet pod informer: wait for handler initial sync: %w", err)
 		}
+		return nil, fmt.Errorf("kubelet pod informer: stopped before handler initial sync")
+	case <-ctx.Done():
+		k.removeRegistration(reg)
 		return nil, fmt.Errorf("kubelet pod informer: wait for handler initial sync: %w", ctx.Err())
 	}
 }
@@ -242,20 +253,38 @@ func (k *KubeletPodInformer) Remove(reg cache.ResourceEventHandlerRegistration) 
 	if !ok || registration.informer != k {
 		return fmt.Errorf("kubelet pod informer: registration does not belong to this informer")
 	}
+	if !k.removeRegistration(registration) {
+		return fmt.Errorf("kubelet pod informer: handler not registered")
+	}
+	return nil
+}
 
+// removeRegistration is also used to clean up a cancelled Add, which may race with shutdown.
+func (k *KubeletPodInformer) removeRegistration(registration *kubeletRegistration) bool {
 	k.processingMut.Lock()
 	defer k.processingMut.Unlock()
 
 	if _, exists := k.handlers[registration]; !exists {
-		return fmt.Errorf("kubelet pod informer: handler not registered")
+		return false
 	}
 	delete(k.handlers, registration)
 	registration.stop()
+	return true
+}
 
-	return nil
+// stopHandlers runs when the poller exits, whether from Close or context cancellation.
+func (k *KubeletPodInformer) stopHandlers() {
+	k.processingMut.Lock()
+	defer k.processingMut.Unlock()
+
+	for registration := range k.handlers {
+		registration.stop()
+	}
+	clear(k.handlers)
 }
 
 func (k *KubeletPodInformer) run(ctx context.Context, initialSync chan struct{}) {
+	defer k.stopHandlers()
 	ticker := k.clock.NewTicker(k.pollInterval)
 	defer ticker.Stop()
 
