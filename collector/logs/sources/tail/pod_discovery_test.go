@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/k8s"
@@ -290,84 +292,110 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 }
 
 func TestPodDiscoveryUpdatesDoNotBlockOnStuckTailer(t *testing.T) {
-	_, tailSource, podDiscovery := create()
-	defer tailSource.Close()
-	tailSource.ignoreUpdates = true
+	synctest.Test(t, func(t *testing.T) {
+		_, tailSource, podDiscovery := create()
+		defer tailSource.Close()
+		tailSource.ignoreUpdates = true
 
-	pod := scrapedPod("pod1")
-	podDiscovery.OnAdd(pod, false)
-	require.Len(t, tailSource.targetAdds, 1)
+		pod := scrapedPod("pod1")
+		podDiscovery.OnAdd(pod, false)
+		require.Len(t, tailSource.targetAdds, 1)
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for _, table := range []string{"t1", "t2", "t3"} {
-			pod.Annotations["adx-mon/log-destination"] = "db:" + table
-			podDiscovery.OnUpdate(nil, pod)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for _, table := range []string{"t1", "t2", "t3"} {
+				pod.Annotations["adx-mon/log-destination"] = "db:" + table
+				podDiscovery.OnUpdate(nil, pod)
+			}
+		}()
+		defer func() {
+			for {
+				select {
+				case <-done:
+					return
+				case <-tailSource.lastUpdateChan:
+				}
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("OnUpdate blocked on a tailer that is not reading updates")
 		}
-	}()
-	select {
-	case <-done:
-	case <-time.After(assertPollMax):
-		t.Fatal("OnUpdate blocked on a tailer that is not reading updates")
-	}
 
-	select {
-	case latest := <-tailSource.lastUpdateChan:
-		require.Equal(t, "t3", latest.Table)
-	default:
-		t.Fatal("expected the latest update to be pending")
-	}
+		select {
+		case latest := <-tailSource.lastUpdateChan:
+			require.Equal(t, "t3", latest.Table)
+		default:
+			t.Fatal("expected the latest update to be pending")
+		}
+	})
 }
 
 func TestPodDiscoverySlowRemovalDoesNotBlockPodEvents(t *testing.T) {
-	fakeNow, tailSource, podDiscovery := create()
-	defer tailSource.Close()
-	tailSource.removeRelease = make(chan struct{})
+	synctest.Test(t, func(t *testing.T) {
+		fakeNow, tailSource, podDiscovery := create()
+		defer tailSource.Close()
+		tailSource.removeRelease = make(chan struct{})
+		releaseRemoval := sync.OnceFunc(func() { close(tailSource.removeRelease) })
+		defer releaseRemoval()
 
-	oldPod := scrapedPod("old")
-	podDiscovery.OnAdd(oldPod, false)
-	podDiscovery.OnDelete(oldPod)
-	fakeNow.Advance(time.Minute + time.Millisecond)
-	<-tailSource.targetAdds
+		oldPod := scrapedPod("old")
+		podDiscovery.OnAdd(oldPod, false)
+		podDiscovery.OnDelete(oldPod)
+		fakeNow.Advance(time.Minute + time.Millisecond)
+		<-tailSource.targetAdds
 
-	cleanupDone := make(chan struct{})
-	go func() {
-		defer close(cleanupDone)
-		podDiscovery.cleanTombstonedTargets()
-	}()
-	removed := <-tailSource.targetRemoves
+		cleanupDone := make(chan struct{})
+		go func() {
+			defer close(cleanupDone)
+			podDiscovery.cleanTombstonedTargets()
+		}()
+		removed := <-tailSource.targetRemoves
+		if !podDiscovery.mut.TryLock() {
+			t.Fatal("PodDiscovery mutex is held while removing a target")
+		}
+		podDiscovery.mut.Unlock()
 
-	// RemoveTarget is blocked; pod events must still be processed.
-	eventDone := make(chan struct{})
-	go func() {
-		defer close(eventDone)
-		podDiscovery.OnAdd(scrapedPod("new"), false)
-		// Re-adding the pod being removed must wait for the removal to finish.
-		podDiscovery.OnUpdate(nil, oldPod)
-	}()
-	select {
-	case <-eventDone:
-	case <-time.After(assertPollMax):
-		t.Fatal("pod events blocked on a slow target removal")
-	}
-	added := <-tailSource.targetAdds
-	require.NotEqual(t, removed, added.FilePath)
-	require.Empty(t, tailSource.targetAdds)
+		// RemoveTarget is blocked; pod events must still be processed.
+		eventDone := make(chan struct{})
+		go func() {
+			defer close(eventDone)
+			podDiscovery.OnAdd(scrapedPod("new"), false)
+			// Re-adding the pod being removed must wait for the removal to finish.
+			podDiscovery.OnUpdate(nil, oldPod)
+		}()
+		synctest.Wait()
+		select {
+		case <-eventDone:
+		default:
+			t.Fatal("pod events blocked on a slow target removal")
+		}
+		added := <-tailSource.targetAdds
+		require.NotEqual(t, removed, added.FilePath)
+		require.Empty(t, tailSource.targetAdds)
 
-	close(tailSource.removeRelease)
-	<-cleanupDone
+		releaseRemoval()
+		synctest.Wait()
+		select {
+		case <-cleanupDone:
+		default:
+			t.Fatal("cleanup did not finish after removal was released")
+		}
 
-	readded := <-tailSource.targetAdds
-	require.Equal(t, removed, readded.FilePath)
+		readded := <-tailSource.targetAdds
+		require.Equal(t, removed, readded.FilePath)
 
-	podDiscovery.mut.Lock()
-	defer podDiscovery.mut.Unlock()
-	require.Empty(t, podDiscovery.removing)
-	target := podDiscovery.podidToTargets[string(oldPod.UID)][removed]
-	require.NotNil(t, target)
-	require.False(t, target.pendingStart)
-	require.NotNil(t, target.UpdateChan)
+		podDiscovery.mut.Lock()
+		defer podDiscovery.mut.Unlock()
+		require.Empty(t, podDiscovery.removing)
+		target := podDiscovery.podidToTargets[string(oldPod.UID)][removed]
+		require.NotNil(t, target)
+		require.False(t, target.pendingStart)
+		require.NotNil(t, target.UpdateChan)
+	})
 }
 
 func cleanTombstonedTargets(podDiscovery *PodDiscovery) {
