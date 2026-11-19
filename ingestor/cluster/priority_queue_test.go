@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,25 @@ func TestPriorityQueues_NextPrefersRealtime(t *testing.T) {
 	require.Same(t, queued, b)
 }
 
+func TestPriorityQueues_NextDrainsClosedQueues(t *testing.T) {
+	ctx := t.Context()
+	q := PriorityQueues{Realtime: make(chan *Batch, 1), Queued: make(chan *Batch, 1)}
+	realtime, queued := &Batch{Prefix: "realtime"}, &Batch{Prefix: "queued"}
+	q.Realtime <- realtime
+	q.Queued <- queued
+	close(q.Realtime)
+	close(q.Queued)
+
+	for _, want := range []*Batch{realtime, queued} {
+		b, ok := q.Next(ctx, false)
+		require.True(t, ok)
+		require.Same(t, want, b)
+	}
+	b, ok := q.Next(ctx, false)
+	require.False(t, ok)
+	require.Nil(t, b)
+}
+
 func TestPriorityQueues_ReservedOnlyTakesQueued(t *testing.T) {
 	q := PriorityQueues{Realtime: make(chan *Batch, 10), Queued: make(chan *Batch, 10)}
 	realtime := &Batch{Prefix: "realtime"}
@@ -63,9 +83,15 @@ func TestPriorityQueues_ReservedOnlyTakesQueued(t *testing.T) {
 
 	queued := &Batch{Prefix: "queued"}
 	q.Queued <- queued
+	close(q.Queued)
 	b, ok := q.Next(context.Background(), true)
 	require.True(t, ok)
 	require.Same(t, queued, b)
+
+	b, ok = q.Next(context.Background(), true)
+	require.False(t, ok)
+	require.Nil(t, b)
+	require.Len(t, q.Realtime, 1)
 }
 
 func TestPriorityQueues_NilRealtimeQueue(t *testing.T) {
@@ -125,6 +151,47 @@ func TestPriorityQueues_NextDoesNotConsumeWorkAfterContextDone(t *testing.T) {
 			require.Len(t, q.Queued, wantQueued)
 		})
 	}
+}
+
+func TestRunWorkers_FairQueueCloses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		queueCtx, stopQueue := context.WithCancel(ctx)
+		q := PriorityQueues{
+			Realtime: make(chan *Batch, 1),
+			Queued:   FairQueue(queueCtx, make(chan *Batch), FairQueueOpts{}),
+		}
+		processed := make(chan *Batch, 1)
+		done := make(chan struct{})
+		RunWorkers(ctx, q, 1, 10, func(b *Batch) {
+			select {
+			case processed <- b:
+			case <-ctx.Done():
+			}
+		}, func() { close(done) })
+		synctest.Wait()
+
+		// Close FairQueue's output while the worker is blocked in Next. Keep the worker's context alive so the
+		// receive observes closure rather than cancellation.
+		stopQueue()
+		synctest.Wait()
+		require.Empty(t, processed, "closing a queue must not dispatch a nil batch")
+
+		realtime := &Batch{Prefix: "realtime"}
+		q.Realtime <- realtime
+		synctest.Wait()
+		require.Len(t, processed, 1, "the worker must keep taking realtime batches")
+		require.Same(t, realtime, <-processed)
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("worker did not exit after cancellation")
+		}
+	})
 }
 
 func TestRunWorkers_QueuedNotStarvedByRealtime(t *testing.T) {
