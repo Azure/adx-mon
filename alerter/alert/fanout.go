@@ -147,15 +147,11 @@ func RedactURL(raw string) string {
 func parseAndValidateHTTPURL(trimmed string) (*url.URL, error) {
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			return nil, fmt.Errorf("invalid notification endpoint URL: %w", ue.Err)
-		}
 		return nil, errors.New("invalid notification endpoint URL")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return nil, fmt.Errorf("invalid notification endpoint scheme %q: must be http or https", u.Scheme)
+		return nil, errors.New("invalid notification endpoint scheme: must be http or https")
 	}
 	if u.Opaque != "" || u.Host == "" || u.Hostname() == "" {
 		return nil, errors.New("invalid notification endpoint: host must not be empty")
@@ -806,20 +802,20 @@ func (q *endpointQueue) enqueueItemsLocked(pending []queuedItem) (evicted []queu
 		item := pending[0]
 		pending = pending[1:]
 
+		if item.sizeBytes > q.maxQueueBytes {
+			evicted = append(evicted, item)
+			if summary := q.decrementEvalOnlyLocked(item.evalID); summary != nil {
+				pending = append(pending, *summary)
+			}
+			continue
+		}
+
 		for q.queueLenLocked() > 0 && (q.queueLenLocked() >= q.maxQueueItems || q.queuedBytes+item.sizeBytes > q.maxQueueBytes) {
 			dropped := q.popHeadRawLocked()
 			evicted = append(evicted, dropped)
 			if summary := q.decrementEvalOnlyLocked(dropped.evalID); summary != nil {
 				pending = append(pending, *summary)
 			}
-		}
-
-		if q.queueLenLocked() == 0 && item.sizeBytes > q.maxQueueBytes {
-			evicted = append(evicted, item)
-			if summary := q.decrementEvalOnlyLocked(item.evalID); summary != nil {
-				pending = append(pending, *summary)
-			}
-			continue
 		}
 
 		if q.head > 0 && (q.head >= 64 || q.head*2 >= len(q.queue)) {
@@ -851,6 +847,11 @@ func (q *endpointQueue) popHeadRawLocked() queuedItem {
 
 func (q *endpointQueue) logAndCountOverflowDrop(dropped queuedItem) {
 	q.recordDrop(dropped.rule, DropReasonOverflow, true)
+	if dropped.sizeBytes > q.maxQueueBytes {
+		logger.Warnf("Notification payload size (%d bytes) exceeds maxQueueBytes (%d) for %s; dropped oversized alert %q (source=%s)",
+			dropped.sizeBytes, q.maxQueueBytes, q.endpoint.ID, dropped.alert.Title, dropped.alert.Source)
+		return
+	}
 	logger.Warnf("Notification queue overflow (maxItems=%d maxBytes=%d) for %s; dropped oldest queued alert %q (source=%s)",
 		q.maxQueueItems, q.maxQueueBytes, q.endpoint.ID, dropped.alert.Title, dropped.alert.Source)
 }
@@ -1139,24 +1140,40 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 			return
 		}
 
-		err, timedOut := q.sendOnce(workerCtx, item.alert)
-		if err == nil {
-			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomeSuccess).Inc()
-			q.health.recordSuccess(item.rule, q.endpoint.ID)
-			q.finishEvalRef(item.evalID)
+		err, timedOut, ttlExpired, attempted := q.sendOnce(workerCtx, item)
+		if !attempted {
+			logger.Warnf("Dropping expired alert %q (source=%s) for %s after exceeding %s TTL",
+				item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge)
+			q.finishItem(item, DropReasonTTLExpired, true)
 			return
 		}
-
 		if workerCtx.Err() != nil && !timedOut {
 			q.finishItem(item, DropReasonShutdown, false)
 			return
 		}
-
-		if errors.Is(err, ErrTooManyRequests) {
+		if ttlExpired {
+			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomePermanentError).Inc()
+			if err != nil {
+				logger.Warnf("Dropping alert %q (source=%s) for %s after TTL expired (%s): %s",
+					item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge, q.redactErr(err))
+			} else {
+				logger.Warnf("Dropping alert %q (source=%s) for %s after TTL expired (%s) during delivery",
+					item.alert.Title, item.alert.Source, q.endpoint.ID, q.maxItemAge)
+			}
+			q.finishItem(item, DropReasonTTLExpired, true)
+			return
+		}
+		if err != nil && errors.Is(err, ErrTooManyRequests) {
 			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomeThrottled).Inc()
 			logger.Warnf("Notification throttled (HTTP 429) for alert %q (source=%s) on %s",
 				item.alert.Title, item.alert.Source, q.endpoint.ID)
 			q.handleHTTP429(item)
+			return
+		}
+		if err == nil {
+			q.health.recordSuccess(item.rule, q.endpoint.ID)
+			q.finishEvalRef(item.evalID)
+			metrics.NotificationsSentTotal.WithLabelValues(q.endpoint.ID, OutcomeSuccess).Inc()
 			return
 		}
 
@@ -1203,10 +1220,22 @@ func (q *endpointQueue) deliverItem(workerCtx context.Context, item queuedItem) 
 	}
 }
 
-func (q *endpointQueue) sendOnce(workerCtx context.Context, a Alert) (err error, timedOut bool) {
+func (q *endpointQueue) sendOnce(workerCtx context.Context, item queuedItem) (err error, timedOut bool, ttlExpired bool, attempted bool) {
+	remaining := item.deadline.Sub(q.clock.Now())
+	if remaining <= 0 {
+		return context.DeadlineExceeded, true, true, false
+	}
+
+	attemptTimeout := q.requestTimeout
+	cappedByTTL := false
+	if remaining <= attemptTimeout {
+		attemptTimeout = remaining
+		cappedByTTL = true
+	}
+
 	attemptCtx, attemptCancel := context.WithCancel(workerCtx)
 	var didTimeout atomic.Bool
-	reqTimer := q.clock.NewTimer(q.requestTimeout)
+	reqTimer := q.clock.NewTimer(attemptTimeout)
 	timerDone := make(chan struct{})
 	go func() {
 		select {
@@ -1217,11 +1246,14 @@ func (q *endpointQueue) sendOnce(workerCtx context.Context, a Alert) (err error,
 		}
 	}()
 
-	err = q.sender.Create(attemptCtx, q.endpoint.URL, a)
+	err = q.sender.Create(attemptCtx, q.endpoint.URL, item.alert)
 	close(timerDone)
 	reqTimer.Stop()
 	attemptCancel()
-	return err, didTimeout.Load()
+
+	timedOut = didTimeout.Load()
+	ttlExpired = (timedOut && cappedByTTL) || !q.clock.Now().Before(item.deadline)
+	return err, timedOut, ttlExpired, true
 }
 
 func (q *endpointQueue) isEvalThrottled(evalID uint64) bool {
@@ -1338,13 +1370,13 @@ func (q *endpointQueue) finishEvalRef(evalID uint64) {
 }
 
 func (q *endpointQueue) recordDrop(rk ruleKey, reason string, markUnhealthy bool) {
-	metrics.NotificationsDroppedTotal.WithLabelValues(q.endpoint.ID, reason).Inc()
-	if rk.namespace != "" && rk.name != "" {
-		metrics.RuleNotificationFailuresTotal.WithLabelValues(rk.namespace, rk.name, q.endpoint.ID, reason).Inc()
-	}
 	if markUnhealthy {
 		q.health.recordFailure(rk, q.endpoint.ID)
 	}
+	if rk.namespace != "" && rk.name != "" {
+		metrics.RuleNotificationFailuresTotal.WithLabelValues(rk.namespace, rk.name, q.endpoint.ID, reason).Inc()
+	}
+	metrics.NotificationsDroppedTotal.WithLabelValues(q.endpoint.ID, reason).Inc()
 }
 
 func (q *endpointQueue) baseBackoff(attempt int) time.Duration {
@@ -1387,7 +1419,7 @@ func (q *endpointQueue) redactErr(err error) string {
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return fmt.Sprintf("%s %s: %s", ue.Op, q.endpoint.ID, q.replacer.Replace(ue.Err.Error()))
+		return q.replacer.Replace(sanitizeHTTPError(err, q.endpoint.URL).Error())
 	}
 	return q.replacer.Replace(err.Error())
 }

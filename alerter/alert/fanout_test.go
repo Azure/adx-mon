@@ -376,16 +376,20 @@ func TestFanoutClient_RetriesWithExponentialBackoffJitterAnd5mTTL(t *testing.T) 
 		require.Equal(t, beforeExhausted+1, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonRetriesExhausted)))
 	})
 
-	t.Run("60s per-POST timeout retries and 5m TTL drops expired item", func(t *testing.T) {
+	t.Run("60s per-POST timeout retries and 5m TTL drops expired item at item deadline", func(t *testing.T) {
 		fakeClock := clocktesting.NewFakeClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
 		var attempts atomic.Int32
 		started := make(chan int32, 8)
+		attempt3Done := make(chan struct{})
 
-		// Each POST hangs until its 60s attempt context expires.
+		// Each POST hangs until its attempt context expires.
 		sender := senderFunc(func(ctx context.Context, _ string, _ alert.Alert) error {
 			n := attempts.Add(1)
 			started <- n
 			<-ctx.Done()
+			if n == 3 {
+				close(attempt3Done)
+			}
 			return ctx.Err()
 		})
 
@@ -394,7 +398,7 @@ func TestFanoutClient_RetriesWithExponentialBackoffJitterAnd5mTTL(t *testing.T) 
 			alert.WithSender(sender),
 			alert.WithConcurrency(1),
 			alert.WithClock(fakeClock),
-			alert.WithMaxItemAge(130*time.Second), // 2x 60s timeouts + backoff exceeds 130s TTL before 3rd retry
+			alert.WithMaxItemAge(130*time.Second), // 2x 60s timeouts + 1.5s backoff leaves 8.5s remaining TTL on attempt 3
 			alert.WithJitter(func(base time.Duration) time.Duration { return base }),
 		)
 		require.NoError(t, err)
@@ -423,12 +427,28 @@ func TestFanoutClient_RetriesWithExponentialBackoffJitterAnd5mTTL(t *testing.T) 
 		waitForRetryTimer(t, fakeClock, epID, beforeRetry+2)
 		fakeClock.Step(time.Second)
 
-		// Attempt 3 hangs until 60s per-POST timeout (t = 181.5s > 130s TTL) -> dropped with ttl_expired
+		// Attempt 3 starts at t = 121.5s with item.deadline at t = 130.0s (8.5s remaining < 60s requestTimeout).
 		require.Equal(t, int32(3), recvWithTimeout(t, started, "ttl attempt 3"))
 		require.Eventually(t, fakeClock.HasWaiters, 5*time.Second, time.Millisecond)
-		fakeClock.Step(60 * time.Second)
+
+		// At t = 129.5s (< 130s deadline), attempt 3 must still be running.
+		fakeClock.Step(8 * time.Second)
+		select {
+		case <-attempt3Done:
+			t.Fatal("attempt 3 cancelled before item.deadline")
+		default:
+		}
+		require.Equal(t, beforeTTL, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)))
+
+		// Stepping the remaining 500ms to t = 130.0s (item.deadline) cancels attempt 3 immediately without waiting 60s.
+		fakeClock.Step(500 * time.Millisecond)
+		recvWithTimeout(t, attempt3Done, "ttl attempt 3 cancelled at item.deadline")
+		require.Eventually(t, func() bool {
+			return metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)) == beforeTTL+1
+		}, 5*time.Second, time.Millisecond)
 
 		require.NoError(t, fc.Close())
+		require.Equal(t, int32(3), attempts.Load())
 		require.Equal(t, beforeTTL+1, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)))
 	})
 }
@@ -1106,6 +1126,7 @@ func TestFanoutClient_SameHostPerEndpointTransportIsolationUnder100Concurrency(t
 	var slowInFlight atomic.Int32
 	allSlowOccupied := make(chan struct{})
 	releaseSlow := make(chan struct{})
+	releaseSlowOnce := sync.OnceFunc(func() { close(releaseSlow) })
 	var fastDelivered atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1121,6 +1142,7 @@ func TestFanoutClient_SameHostPerEndpointTransportIsolationUnder100Concurrency(t
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
+	defer releaseSlowOnce()
 
 	fc, err := alert.NewFanoutClient(
 		[]string{srv.URL + "/slow", srv.URL + "/fast"},
@@ -1128,6 +1150,10 @@ func TestFanoutClient_SameHostPerEndpointTransportIsolationUnder100Concurrency(t
 	)
 	require.NoError(t, err)
 	require.NoError(t, fc.Open(context.Background()))
+	defer func() {
+		releaseSlowOnce()
+		_ = fc.Close()
+	}()
 
 	for i := range workers {
 		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{
@@ -1150,6 +1176,476 @@ func TestFanoutClient_SameHostPerEndpointTransportIsolationUnder100Concurrency(t
 		return fastDelivered.Load() == workers+1
 	}, 2*time.Second, 5*time.Millisecond)
 
-	close(releaseSlow)
+	releaseSlowOnce()
 	require.NoError(t, fc.Close())
+}
+
+func TestFanoutClient_OversizedAlertRejectedWithoutEvictingQueuedItems(t *testing.T) {
+	inFlightStarted := make(chan struct{})
+	releaseInFlight := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(releaseInFlight) })
+	defer releaseOnce()
+
+	var mu sync.Mutex
+	var delivered []string
+
+	sender := senderFunc(func(_ context.Context, _ string, a alert.Alert) error {
+		if a.Title == "inflight-1" {
+			close(inFlightStarted)
+			<-releaseInFlight
+		}
+		mu.Lock()
+		delivered = append(delivered, a.Title)
+		mu.Unlock()
+		return nil
+	})
+
+	fc, err := alert.NewFanoutClient(
+		[]string{"http://oversized-check.example:8080"},
+		alert.WithSender(sender),
+		alert.WithConcurrency(1),
+	)
+	require.NoError(t, err)
+	epID := fc.EndpointIDs()[0]
+	beforeOverflow := metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonOverflow))
+
+	require.NoError(t, fc.Open(context.Background()))
+	defer func() {
+		releaseOnce()
+		_ = fc.Close()
+	}()
+
+	require.NoError(t, fc.Create(context.Background(), "", alert.Alert{
+		Title:    "inflight-1",
+		Severity: 2,
+		Source:   "ns/oversized-rule",
+	}))
+	recvWithTimeout(t, inFlightStarted, "inflight-1 started")
+
+	// Queue 3 normal notifications behind inflight-1.
+	for _, title := range []string{"queued-1", "queued-2", "queued-3"} {
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{
+			Title:    title,
+			Severity: 2,
+			Source:   "ns/oversized-rule",
+		}))
+	}
+	require.Equal(t, float64(3), metricValue(t, metrics.EndpointQueueDepth.WithLabelValues(epID)))
+
+	// Enqueue an oversized (> 16 MiB) alert inside a tracked evaluation that also emits a throttled summary.
+	evalID := fc.BeginEvaluation(alert.EvalMeta{
+		Namespace:   "ns",
+		Name:        "oversized-rule",
+		Destination: "dest",
+		Region:      "eastus",
+	})
+	oversizedPayload := strings.Repeat("X", alert.DefaultMaxQueueBytes+1024)
+	require.NoError(t, fc.EnqueueEvaluation(context.Background(), evalID, alert.Alert{
+		Title:       "oversized-row",
+		Description: oversizedPayload,
+		Severity:    2,
+		Source:      "ns/oversized-rule",
+	}))
+	fc.SealEvaluation(evalID, true, []alert.SuppressedAlert{{Title: "suppressed-1", Severity: 2}}, 1, false)
+
+	// Oversized row is rejected immediately without evicting any of queued-1..3, and its eval ref is decremented
+	// so SealEvaluation immediately enqueues the summary item behind queued-1..3 (depth = 4).
+	require.Equal(t, beforeOverflow+1, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonOverflow)))
+	require.Equal(t, float64(4), metricValue(t, metrics.EndpointQueueDepth.WithLabelValues(epID)))
+
+	releaseOnce()
+	require.NoError(t, fc.Close())
+
+	require.Equal(t, []string{
+		"inflight-1",
+		"queued-1",
+		"queued-2",
+		"queued-3",
+		"Alert ns/oversized-rule has too many notifications in eastus",
+	}, delivered)
+}
+
+func TestMalformedEndpointParseRedaction(t *testing.T) {
+	malformedInputs := []struct {
+		raw     string
+		secrets []string
+	}{
+		{
+			raw:     "https://hooks.example.com:SECRET_PORT_TOKEN/hook?sig=SECRET_QUERY_TOK",
+			secrets: []string{"SECRET_PORT_TOKEN", "SECRET_QUERY_TOK", "hooks.example.com"},
+		},
+		{
+			raw:     ":SECRET_PORT_TOKEN",
+			secrets: []string{"SECRET_PORT_TOKEN"},
+		},
+		{
+			raw:     "http://user:SECRET_USER_PASS@hooks.example.com:SECRET_PORT_TOKEN/path",
+			secrets: []string{"SECRET_USER_PASS", "SECRET_PORT_TOKEN"},
+		},
+		{
+			raw:     "SECRET_SCHEME_TOKEN:opaque-secret-value",
+			secrets: []string{"SECRET_SCHEME_TOKEN", "opaque-secret-value"},
+		},
+	}
+
+	cli, err := alert.NewClient(time.Second)
+	require.NoError(t, err)
+
+	for _, tc := range malformedInputs {
+		_, parseErr := alert.ParseBaseEndpoint(tc.raw)
+		require.Error(t, parseErr, "expected ParseBaseEndpoint error for %q", tc.raw)
+		for _, sec := range tc.secrets {
+			require.NotContains(t, parseErr.Error(), sec, "ParseBaseEndpoint leaked %q", sec)
+		}
+
+		redacted := alert.RedactURL(tc.raw)
+		require.Equal(t, "<redacted-endpoint>", redacted)
+
+		createErr := cli.Create(context.Background(), tc.raw, alert.Alert{
+			Title:    "malformed-url-test",
+			Severity: 2,
+			Source:   "ns/malformed",
+		})
+		require.Error(t, createErr, "expected Client.Create error for %q", tc.raw)
+		require.Contains(t, createErr.Error(), "invalid notification endpoint URL")
+		for _, sec := range tc.secrets {
+			require.NotContains(t, createErr.Error(), sec, "Client.Create leaked %q", sec)
+		}
+
+		// Underlying parse/validation error remains available via Unwrap, and error is non-retryable.
+		require.NotNil(t, errors.Unwrap(createErr))
+		var rc interface{ Retryable() bool }
+		require.ErrorAs(t, createErr, &rc)
+		require.False(t, rc.Retryable())
+	}
+}
+
+func TestClient_TruncatedErrorBodyDiscardsPartialCredentials(t *testing.T) {
+	const fullToken = "SUPER_SECRET_QUERY_TOKEN_9876543210"
+
+	for _, statusCode := range []int{http.StatusBadRequest, http.StatusBadGateway} {
+		t.Run(fmt.Sprintf("status_%d", statusCode), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sig := r.URL.Query().Get("sig")
+				partial := "upstream error for sig=" + sig[:len(sig)/2]
+
+				hj, ok := w.(http.Hijacker)
+				require.True(t, ok)
+				conn, buf, err := hj.Hijack()
+				require.NoError(t, err)
+				defer conn.Close()
+
+				// Declare Content-Length larger than partial payload, flush partial token prefix, and close socket.
+				_, _ = fmt.Fprintf(buf, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: 2048\r\n\r\n%s",
+					statusCode, http.StatusText(statusCode), partial)
+				_ = buf.Flush()
+			}))
+			defer srv.Close()
+
+			ep, err := alert.ParseBaseEndpoint(srv.URL + "/hook?sig=" + fullToken)
+			require.NoError(t, err)
+
+			cli, err := alert.NewClient(2 * time.Second)
+			require.NoError(t, err)
+
+			gotErr := cli.Create(context.Background(), ep.URL, alert.Alert{
+				Title:    "trunc-cred",
+				Severity: 2,
+				Source:   "ns/trunc-cred",
+			})
+			require.Error(t, gotErr)
+
+			var statusErr *alert.StatusError
+			require.ErrorAs(t, gotErr, &statusErr)
+			require.Equal(t, statusCode, statusErr.StatusCode)
+			require.Equal(t, statusCode >= 500, statusErr.Retryable())
+			require.Empty(t, statusErr.Body, "partial body must be discarded on read error")
+
+			for prefixLen := 4; prefixLen <= len(fullToken); prefixLen++ {
+				sub := fullToken[:prefixLen]
+				require.NotContains(t, statusErr.Body, sub)
+				require.NotContains(t, gotErr.Error(), sub)
+			}
+		})
+	}
+}
+
+func TestFanoutClient_SendOnceCappedAtItemDeadline(t *testing.T) {
+	t.Run("dequeued at age 4m59s cancels attempt at 5m00s deadline rather than 5m59s", func(t *testing.T) {
+		fakeClock := clocktesting.NewFakeClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+		blockerStarted := make(chan struct{})
+		releaseBlocker := make(chan struct{})
+		releaseBlockerOnce := sync.OnceFunc(func() { close(releaseBlocker) })
+		defer releaseBlockerOnce()
+
+		targetStarted := make(chan struct{})
+		targetCancelled := make(chan struct{})
+
+		sender := senderFunc(func(ctx context.Context, _ string, a alert.Alert) error {
+			if a.Title == "blocker" {
+				close(blockerStarted)
+				<-releaseBlocker
+				return nil
+			}
+			close(targetStarted)
+			<-ctx.Done()
+			close(targetCancelled)
+			return ctx.Err()
+		})
+
+		fc, err := alert.NewFanoutClient(
+			[]string{"http://deadline-cap.example:8080"},
+			alert.WithSender(sender),
+			alert.WithConcurrency(1),
+			alert.WithClock(fakeClock),
+		)
+		require.NoError(t, err)
+		epID := fc.EndpointIDs()[0]
+		beforeTTL := metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired))
+		beforeSuccess := metricValue(t, metrics.NotificationsSentTotal.WithLabelValues(epID, alert.OutcomeSuccess))
+
+		require.NoError(t, fc.Open(context.Background()))
+		defer func() {
+			releaseBlockerOnce()
+			_ = fc.Close()
+		}()
+
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{Title: "blocker", Severity: 1, Source: "ns/cap"}))
+		recvWithTimeout(t, blockerStarted, "blocker started")
+
+		// Enqueue target at t = 0 (deadline = t + 5m).
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{Title: "aged-alert", Severity: 2, Source: "ns/cap"}))
+
+		// Advance clock to 4m59s while blocker occupies the worker, then release blocker so target dequeues with 1s TTL left.
+		fakeClock.Step(4*time.Minute + 59*time.Second)
+		releaseBlockerOnce()
+		recvWithTimeout(t, targetStarted, "target started at 4m59s")
+		require.Eventually(t, fakeClock.HasWaiters, 5*time.Second, time.Millisecond)
+
+		// At 4m59.9s, target attempt is still active.
+		fakeClock.Step(900 * time.Millisecond)
+		select {
+		case <-targetCancelled:
+			t.Fatal("target cancelled before 5m item.deadline")
+		default:
+		}
+
+		// At 5m00s, target attempt is cancelled immediately at item.deadline and dropped as ttl_expired.
+		fakeClock.Step(100 * time.Millisecond)
+		recvWithTimeout(t, targetCancelled, "target cancelled at 5m00s item.deadline")
+		require.Eventually(t, func() bool {
+			return metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)) == beforeTTL+1
+		}, 5*time.Second, time.Millisecond)
+
+		require.NoError(t, fc.Close())
+		require.Equal(t, beforeSuccess+1, metricValue(t, metrics.NotificationsSentTotal.WithLabelValues(epID, alert.OutcomeSuccess)), "only blocker succeeded")
+	})
+
+	t.Run("late nil response after item.deadline is classified as ttl_expired and not counted as success", func(t *testing.T) {
+		fakeClock := clocktesting.NewFakeClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+		started := make(chan struct{})
+		finishLate := make(chan struct{})
+
+		sender := senderFunc(func(ctx context.Context, _ string, _ alert.Alert) error {
+			close(started)
+			<-ctx.Done()
+			<-finishLate
+			return nil
+		})
+
+		fc, err := alert.NewFanoutClient(
+			[]string{"http://late-delivery.example:8080"},
+			alert.WithSender(sender),
+			alert.WithConcurrency(1),
+			alert.WithClock(fakeClock),
+			alert.WithMaxItemAge(5*time.Second),
+		)
+		require.NoError(t, err)
+		epID := fc.EndpointIDs()[0]
+		beforeTTL := metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired))
+		beforeSuccess := metricValue(t, metrics.NotificationsSentTotal.WithLabelValues(epID, alert.OutcomeSuccess))
+
+		require.NoError(t, fc.Open(context.Background()))
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{Title: "late-ok", Severity: 2, Source: "ns/late-rule"}))
+
+		recvWithTimeout(t, started, "late attempt started")
+		require.Eventually(t, fakeClock.HasWaiters, 5*time.Second, time.Millisecond)
+
+		// Advance clock to the 5s item.deadline so attemptCtx cancels, then let sender return nil past deadline.
+		fakeClock.Step(5 * time.Second)
+		close(finishLate)
+
+		require.NoError(t, fc.Close())
+		require.Equal(t, beforeTTL+1, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)))
+		require.Equal(t, beforeSuccess, metricValue(t, metrics.NotificationsSentTotal.WithLabelValues(epID, alert.OutcomeSuccess)))
+	})
+
+	t.Run("429 response whose body stalls past item.deadline is classified as ttl_expired rather than throttled", func(t *testing.T) {
+		releaseBody := make(chan struct{})
+		releaseBodyOnce := sync.OnceFunc(func() { close(releaseBody) })
+		defer releaseBodyOnce()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Length", "2048")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("throttled"))
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+			case <-releaseBody:
+			}
+		}))
+		defer srv.Close()
+		defer releaseBodyOnce()
+
+		fc, err := alert.NewFanoutClient(
+			[]string{srv.URL},
+			alert.WithConcurrency(1),
+			alert.WithTimeout(5*time.Second),
+			alert.WithMaxItemAge(60*time.Millisecond),
+		)
+		require.NoError(t, err)
+		epID := fc.EndpointIDs()[0]
+		beforeTTL := metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired))
+		beforeThrottledDrop := metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonThrottled))
+		beforeThrottledSent := metricValue(t, metrics.NotificationsSentTotal.WithLabelValues(epID, alert.OutcomeThrottled))
+
+		require.NoError(t, fc.Open(context.Background()))
+		defer func() {
+			releaseBodyOnce()
+			_ = fc.Close()
+		}()
+
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{
+			Title:    "stalled-429-body",
+			Severity: 2,
+			Source:   "ns/stalled-429-ttl",
+		}))
+
+		require.Eventually(t, func() bool {
+			return metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)) == beforeTTL+1
+		}, 3*time.Second, 5*time.Millisecond)
+
+		releaseBodyOnce()
+		require.NoError(t, fc.Close())
+
+		require.Equal(t, beforeTTL+1, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonTTLExpired)))
+		require.Equal(t, beforeThrottledDrop, metricValue(t, metrics.NotificationsDroppedTotal.WithLabelValues(epID, alert.DropReasonThrottled)))
+		require.Equal(t, beforeThrottledSent, metricValue(t, metrics.NotificationsSentTotal.WithLabelValues(epID, alert.OutcomeThrottled)))
+		require.Equal(t, float64(1), metricValue(t, metrics.NotificationUnhealthy.WithLabelValues("ns", "stalled-429-ttl")))
+	})
+}
+
+func TestRedirectLocationRedaction(t *testing.T) {
+	t.Run("302 with malformed credential-bearing Location header", func(t *testing.T) {
+		var logBuf syncBuffer
+		prevLogger := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prevLogger)
+
+		const malformedLoc = "https://hooks.example.com:SECRET_PORT_TOKEN/hook?sig=SECRET_REDIR_SIG"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Location", malformedLoc)
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer srv.Close()
+
+		ep, err := alert.ParseBaseEndpoint(srv.URL + "/base?tok=BASE_SECRET_TOK")
+		require.NoError(t, err)
+
+		cli, err := alert.NewClient(2 * time.Second)
+		require.NoError(t, err)
+		directErr := cli.Create(context.Background(), ep.URL, alert.Alert{
+			Title:    "redir-malformed",
+			Severity: 2,
+			Source:   "ns/redir-malformed",
+		})
+		require.Error(t, directErr)
+		require.Contains(t, directErr.Error(), "invalid redirect or endpoint URL")
+
+		fc, err := alert.NewFanoutClient(
+			[]string{srv.URL + "/base?tok=BASE_SECRET_TOK"},
+			alert.WithConcurrency(1),
+			alert.WithBackoff(5*time.Millisecond, 10*time.Millisecond, 1),
+		)
+		require.NoError(t, err)
+		require.NoError(t, fc.Open(context.Background()))
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{
+			Title:    "fanout-redir-malformed",
+			Severity: 2,
+			Source:   "ns/redir-malformed",
+		}))
+		require.NoError(t, fc.Close())
+
+		for _, secret := range []string{"SECRET_PORT_TOKEN", "SECRET_REDIR_SIG", "hooks.example.com", "BASE_SECRET_TOK"} {
+			require.NotContains(t, directErr.Error(), secret)
+			require.NotContains(t, logBuf.String(), secret)
+		}
+	})
+
+	t.Run("302 with valid credential-bearing Location header to failing target", func(t *testing.T) {
+		var logBuf syncBuffer
+		prevLogger := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prevLogger)
+
+		const validSecretLoc = "http://rediruser:SECRET_REDIR_PASS@127.0.0.1:1/secret-redir-cb?sig=SECRET_REDIR_SIG2"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Location", validSecretLoc)
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer srv.Close()
+
+		ep, err := alert.ParseBaseEndpoint(srv.URL + "/base?tok=BASE_SECRET_TOK2")
+		require.NoError(t, err)
+
+		cli, err := alert.NewClient(500 * time.Millisecond)
+		require.NoError(t, err)
+		directErr := cli.Create(context.Background(), ep.URL, alert.Alert{
+			Title:    "redir-valid-secret",
+			Severity: 2,
+			Source:   "ns/redir-valid",
+		})
+		require.Error(t, directErr)
+
+		fc, err := alert.NewFanoutClient(
+			[]string{srv.URL + "/base?tok=BASE_SECRET_TOK2"},
+			alert.WithConcurrency(1),
+			alert.WithTimeout(500*time.Millisecond),
+			alert.WithBackoff(5*time.Millisecond, 10*time.Millisecond, 1),
+		)
+		require.NoError(t, err)
+		require.NoError(t, fc.Open(context.Background()))
+		require.NoError(t, fc.Create(context.Background(), "", alert.Alert{
+			Title:    "fanout-redir-valid-secret",
+			Severity: 2,
+			Source:   "ns/redir-valid",
+		}))
+		require.NoError(t, fc.Close())
+
+		for _, secret := range []string{
+			"rediruser",
+			"SECRET_REDIR_PASS",
+			"secret-redir-cb",
+			"SECRET_REDIR_SIG2",
+			"BASE_SECRET_TOK2",
+		} {
+			require.NotContains(t, directErr.Error(), secret)
+			require.NotContains(t, logBuf.String(), secret)
+		}
+	})
 }

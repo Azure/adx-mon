@@ -136,12 +136,16 @@ func (c *Client) Create(ctx context.Context, endpoint string, alert Alert) error
 
 		// Read past the 4 KiB boundary by up to maxSecretLen, sanitize in a single pass,
 		// and truncate afterwards so secrets straddling byte 4096 never leave a partial prefix.
+		// If reading the diagnostic body fails mid-stream, discard the partial body so a
+		// truncated echoed credential prefix cannot bypass redaction.
+		var sanitizedBody string
 		replacer, maxSecretLen := buildURLReplacer(endpoint)
 		lookahead := min(max(256, maxSecretLen), maxSecretLookaheadBytes)
-		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorBodyBytes+lookahead)))
-		sanitizedBody := replacer.Replace(string(rawBody))
-		if len(sanitizedBody) > maxErrorBodyBytes {
-			sanitizedBody = sanitizedBody[:maxErrorBodyBytes]
+		if rawBody, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorBodyBytes+lookahead))); readErr == nil {
+			sanitizedBody = replacer.Replace(string(rawBody))
+			if len(sanitizedBody) > maxErrorBodyBytes {
+				sanitizedBody = sanitizedBody[:maxErrorBodyBytes]
+			}
 		}
 		return &StatusError{
 			StatusCode: resp.StatusCode,
@@ -159,6 +163,30 @@ func localHTTPStatusLine(code int) string {
 	return strconv.Itoa(code)
 }
 
+func collectURLErrors(err error) []*url.Error {
+	var out []*url.Error
+	var walk func(error)
+	walk = func(cur error) {
+		if cur == nil {
+			return
+		}
+		if ue, ok := cur.(*url.Error); ok {
+			out = append(out, ue)
+		}
+		if u, ok := cur.(interface{ Unwrap() error }); ok {
+			walk(u.Unwrap())
+			return
+		}
+		if u, ok := cur.(interface{ Unwrap() []error }); ok {
+			for _, child := range u.Unwrap() {
+				walk(child)
+			}
+		}
+	}
+	walk(err)
+	return out
+}
+
 func sanitizeHTTPError(err error, rawEndpoint string) error {
 	if err == nil {
 		return nil
@@ -168,19 +196,60 @@ func sanitizeHTTPError(err error, rawEndpoint string) error {
 		return err
 	}
 
-	redactedID := RedactURL(rawEndpoint)
+	trimmedEndpoint := strings.TrimSpace(rawEndpoint)
 	var ue *url.Error
+	if _, parseErr := parseAndValidateHTTPURL(trimmedEndpoint); parseErr != nil {
+		inner := err
+		if errors.As(err, &ue) && ue.Err != nil {
+			inner = ue.Err
+		}
+		return &redactedError{
+			msg: "invalid notification endpoint URL",
+			err: inner,
+		}
+	}
+
+	redactedID := RedactURL(trimmedEndpoint)
 	if errors.As(err, &ue) {
 		inner := ue.Err
-		replacer, _ := buildURLReplacer(rawEndpoint, ue.URL)
-		innerMsg := replacer.Replace(inner.Error())
+		nestedUEs := collectURLErrors(ue)
+		extraURLs := make([]string, 0, len(nestedUEs)+1)
+		extraURLs = append(extraURLs, trimmedEndpoint)
+		for _, nested := range nestedUEs {
+			if strings.EqualFold(nested.Op, "parse") {
+				return &redactedError{
+					msg: fmt.Sprintf("%s %s: invalid redirect or endpoint URL", ue.Op, redactedID),
+					err: inner,
+				}
+			}
+			if nested.URL != "" {
+				if _, uErr := parseAndValidateHTTPURL(strings.TrimSpace(nested.URL)); uErr != nil {
+					return &redactedError{
+						msg: fmt.Sprintf("%s %s: invalid redirect or endpoint URL", ue.Op, redactedID),
+						err: inner,
+					}
+				}
+				extraURLs = append(extraURLs, nested.URL)
+			}
+		}
+		if inner != nil && strings.Contains(inner.Error(), "Location header") {
+			return &redactedError{
+				msg: fmt.Sprintf("%s %s: invalid redirect or endpoint URL", ue.Op, redactedID),
+				err: inner,
+			}
+		}
+		replacer, _ := buildURLReplacer(extraURLs...)
+		innerMsg := ""
+		if inner != nil {
+			innerMsg = replacer.Replace(inner.Error())
+		}
 		return &redactedError{
 			msg: fmt.Sprintf("%s %s: %s", ue.Op, redactedID, innerMsg),
 			err: inner,
 		}
 	}
 
-	replacer, _ := buildURLReplacer(rawEndpoint)
+	replacer, _ := buildURLReplacer(trimmedEndpoint)
 	msg := err.Error()
 	sanitized := replacer.Replace(msg)
 	if sanitized == msg {

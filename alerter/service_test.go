@@ -42,7 +42,6 @@ func TestNewService(t *testing.T) {
 }
 
 func TestAlerter_OpenClose(t *testing.T) {
-	port := freeTCPPort(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	}))
@@ -50,11 +49,11 @@ func TestAlerter_OpenClose(t *testing.T) {
 
 	opts := &alerter.AlerterOpts{
 		Dev:              true,
-		KustoEndpoints:   map[string]string{"fake": fmt.Sprintf("http://127.0.0.1:%d", port)},
+		KustoEndpoints:   map[string]string{"fake": "http://fake.endpoint"},
 		Region:           "test-region",
 		AlertAddr:        srv.URL,
 		Cloud:            "Azure",
-		Port:             port,
+		Port:             0,
 		Concurrency:      5,
 		Tags:             map[string]string{"env": "test"},
 		MaxNotifications: 10,
@@ -339,14 +338,6 @@ spec:
 	}
 }
 
-func freeTCPPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
-}
-
 func TestNewService_AlertAddrsValidationAndFakeLoopback(t *testing.T) {
 	baseOpts := func() *alerter.AlerterOpts {
 		return &alerter.AlerterOpts{
@@ -354,7 +345,7 @@ func TestNewService_AlertAddrsValidationAndFakeLoopback(t *testing.T) {
 			KustoEndpoints:   map[string]string{"fake": "http://fake.endpoint"},
 			Region:           "test-region",
 			Cloud:            "Azure",
-			Port:             freeTCPPort(t),
+			Port:             0,
 			Concurrency:      4,
 			Tags:             map[string]string{"env": "test"},
 			MaxNotifications: 10,
