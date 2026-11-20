@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"io/fs"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
@@ -312,4 +314,72 @@ func serializedMSR(t *testing.T, msg *v1.ExportMetricsServiceRequest) []byte {
 	b, err := proto.Marshal(msg)
 	require.NoError(t, err)
 	return b
+}
+
+func TestNewSeriesUsesPlainAttributeValues(t *testing.T) {
+	str := func(s string) *commonv1.AnyValue {
+		return &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: s}}
+	}
+	series := newSeries("m", []*commonv1.KeyValue{
+		{Key: "s", Value: str("eastus")},
+		{Key: "i", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 42}}},
+		{Key: "d", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 1.5}}},
+		{Key: "b", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_BoolValue{BoolValue: true}}},
+		{Key: "y", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_BytesValue{BytesValue: []byte("hi")}}},
+		{Key: "d6", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 1e6}}},
+		{Key: "dsmall", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: 1e-7}}},
+		{Key: "dinf", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: math.Inf(1)}}},
+		{Key: "a", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_ArrayValue{ArrayValue: &commonv1.ArrayValue{Values: []*commonv1.AnyValue{str("x"), {}, str("y")}}}}},
+		{Key: "k", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_KvlistValue{KvlistValue: &commonv1.KeyValueList{Values: []*commonv1.KeyValue{{Key: "z", Value: str("a<b&c")}}}}}},
+		{Key: "e", Value: &commonv1.AnyValue{}},
+		{Key: "n"},
+	})
+	t.Cleanup(func() { prompb.TimeSeriesPool.Put(series) })
+
+	got := map[string]string{}
+	for _, l := range series.Labels {
+		got[string(l.Name)] = string(l.Value)
+	}
+	require.Equal(t, map[string]string{
+		"__name__": "m",
+		"s":        "eastus",
+		"i":        "42",
+		"d":        "1.5",
+		"d6":       "1000000",
+		"dsmall":   "1e-7",
+		"dinf":     "+Inf",
+		"b":        "true",
+		"y":        "aGk=",
+		"a":        `["x",null,"y"]`,
+		"k":        `{"z":"a<b&c"}`,
+		"e":        "",
+		"n":        "",
+	}, got)
+}
+
+func TestNewSeriesNestedAttributeValues(t *testing.T) {
+	str := func(s string) *commonv1.AnyValue {
+		return &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: s}}
+	}
+	arr := func(vs ...*commonv1.AnyValue) *commonv1.AnyValue {
+		return &commonv1.AnyValue{Value: &commonv1.AnyValue_ArrayValue{ArrayValue: &commonv1.ArrayValue{Values: vs}}}
+	}
+	nest := func(v *commonv1.AnyValue, n int) *commonv1.AnyValue {
+		for i := 0; i < n; i++ {
+			v = arr(v)
+		}
+		return v
+	}
+	label := func(v *commonv1.AnyValue) string {
+		series := newSeries("m", []*commonv1.KeyValue{{Key: "v", Value: v}})
+		defer prompb.TimeSeriesPool.Put(series)
+		return string(series.Labels[1].Value)
+	}
+
+	emptyBytes := &commonv1.AnyValue{Value: &commonv1.AnyValue_BytesValue{}}
+	require.Equal(t, `["",null]`, label(arr(emptyBytes, &commonv1.AnyValue{})))
+
+	deepX, deepY := label(nest(str("x"), 25)), label(nest(str("y"), 25))
+	require.NotEqual(t, deepX, deepY)
+	require.Equal(t, strings.Repeat("[", 25)+`"x"`+strings.Repeat("]", 25), deepX)
 }

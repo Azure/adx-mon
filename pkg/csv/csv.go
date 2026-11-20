@@ -1,10 +1,21 @@
 package csv
 
+import "bytes"
+
 // Append CSV appends a record to the given buffer without quoting.
 func Append(dst []byte, record []byte) []byte {
 	dst = append(dst, ',')
 	dst = append(dst, record...)
 	return dst
+}
+
+// AppendField appends a field, quoting it only when it contains a comma, quote
+// or line break.
+func AppendField(dst []byte, field []byte) []byte {
+	if bytes.ContainsAny(field, ",\"\r\n") {
+		return AppendQuoted(dst, field)
+	}
+	return Append(dst, field)
 }
 
 // AppendQuota CSV appends a record to the given buffer with quoting.
