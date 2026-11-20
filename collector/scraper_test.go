@@ -2,12 +2,14 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/scrapetls"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/stretchr/testify/require"
@@ -15,6 +17,40 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
+
+func TestScraper_OpenClosesResourcesWhenPodInformerAddFails(t *testing.T) {
+	addErr := errors.New("registration failed")
+	informer := &failingPodInformer{err: addErr}
+	s := NewScraper(&ScraperOpts{
+		PodInformer:    informer,
+		ScrapeInterval: time.Minute,
+		ScrapeTLSProfiles: map[string]scrapetls.Profile{
+			"profile": {CAFile: "missing-ca", UsernameFile: "missing-user", PasswordFile: "missing-password"},
+		},
+	})
+
+	err := s.Open(context.Background())
+
+	require.ErrorIs(t, err, addErr)
+	require.ErrorIs(t, informer.ctx.Err(), context.Canceled)
+	select {
+	case <-s.scrapeClient.closing:
+	default:
+		t.Fatal("metrics client was not closed after informer registration failed")
+	}
+}
+
+type failingPodInformer struct {
+	ctx context.Context
+	err error
+}
+
+func (f *failingPodInformer) Add(ctx context.Context, _ cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
+	f.ctx = ctx
+	return nil, f.err
+}
+
+func (*failingPodInformer) Remove(cache.ResourceEventHandlerRegistration) error { return nil }
 
 func TestScraper_OnUpdatePodReplacement(t *testing.T) {
 	tests := []struct {

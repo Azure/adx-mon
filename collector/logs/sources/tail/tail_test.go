@@ -207,8 +207,8 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	// Same contents that were read with same offsets, but different files with different ids.
 	require.NotEqual(t, fidone, fidtwo)
 
-	tailSource.RemoveTarget(testFileOne)
-	tailSource.RemoveTarget(testFileTwo)
+	tailSource.removeTarget(testFileOne)
+	tailSource.removeTarget(testFileTwo)
 
 	// Removing targets removes cursor files
 	_, _, err = readCursor(cursorPath(testDir, testFileOne))

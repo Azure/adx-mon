@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 )
 
 var (
@@ -35,7 +36,7 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		delete(pod.Annotations, "adx-mon/scrape")
 		delete(pod.Annotations, "adx-mon/log-destination")
 		podDiscovery.OnAdd(pod, false)
-		require.Empty(t, tailSource.targetAdds)
+		require.Len(t, tailSource.targetAdds, 0)
 
 		pod.Annotations["adx-mon/log-destination"] = "db:table"
 		podDiscovery.OnUpdate(nil, pod)
@@ -48,18 +49,18 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		pod.Annotations["adx-mon/log-destination"] = "db:"
 		podDiscovery.OnUpdate(nil, pod)
 		cleanTombstonedTargets(podDiscovery)
-		require.Empty(t, tailSource.targetRemoves)
+		require.Len(t, tailSource.targetRemoves, 0)
 
 		pod.Annotations["adx-mon/log-destination"] = "db:table"
 		podDiscovery.OnUpdate(nil, pod)
 		fakeNow.Advance(time.Minute + time.Millisecond)
 		cleanTombstonedTargets(podDiscovery)
-		require.Empty(t, tailSource.targetRemoves)
+		require.Len(t, tailSource.targetRemoves, 0)
 
 		delete(pod.Annotations, "adx-mon/log-destination")
 		podDiscovery.OnUpdate(nil, pod)
 		cleanTombstonedTargets(podDiscovery)
-		require.Empty(t, tailSource.targetRemoves)
+		require.Len(t, tailSource.targetRemoves, 0)
 
 		fakeNow.Advance(time.Minute + time.Millisecond)
 		cleanTombstonedTargets(podDiscovery)
@@ -375,7 +376,7 @@ func TestPodDiscoverySlowRemovalDoesNotBlockPodEvents(t *testing.T) {
 		}
 		added := <-tailSource.targetAdds
 		require.NotEqual(t, removed, added.FilePath)
-		require.Empty(t, tailSource.targetAdds)
+		require.Len(t, tailSource.targetAdds, 0)
 
 		releaseRemoval()
 		synctest.Wait()
@@ -396,6 +397,121 @@ func TestPodDiscoverySlowRemovalDoesNotBlockPodEvents(t *testing.T) {
 		require.False(t, target.pendingStart)
 		require.NotNil(t, target.UpdateChan)
 	})
+}
+
+func TestPodDiscoveryCloseFencesAlreadyDispatchedCallback(t *testing.T) {
+	_, tailSource, podDiscovery := create()
+	informer := &pausingPodInformer{inner: podDiscovery.podInformer, removed: make(chan struct{})}
+	podDiscovery.podInformer = informer
+	require.NoError(t, podDiscovery.Open(context.Background()))
+
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseCallback) })
+	defer func() {
+		_ = podDiscovery.Close()
+		tailSource.Close()
+		release()
+	}()
+	callbackDone := make(chan struct{})
+	go func() {
+		defer close(callbackDone)
+		close(callbackEntered)
+		<-releaseCallback
+		informer.handler.OnAdd(scrapedPod("late"), false)
+	}()
+	<-callbackEntered
+
+	require.NoError(t, podDiscovery.Close())
+	<-informer.removed
+	tailSource.Close()
+	release()
+	<-callbackDone
+
+	require.Len(t, tailSource.targetAdds, 0)
+	require.Empty(t, podDiscovery.podidToTargets)
+}
+
+func TestPodDiscoveryCloseJoinsRemovalWithoutStartingPendingReplacement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fakeNow, tailSource, podDiscovery := create()
+		removeRelease := make(chan struct{})
+		tailSource.removeRelease = removeRelease
+		releaseRemoval := sync.OnceFunc(func() { close(removeRelease) })
+		defer func() {
+			releaseRemoval()
+			_ = podDiscovery.Close()
+			tailSource.Close()
+		}()
+		require.NoError(t, podDiscovery.Open(context.Background()))
+
+		pod := scrapedPod("same-path")
+		podDiscovery.OnAdd(pod, false)
+		<-tailSource.targetAdds
+		podDiscovery.OnDelete(pod)
+		fakeNow.Advance(time.Minute + time.Millisecond)
+
+		cleanupDone := make(chan struct{})
+		podDiscovery.wg.Go(func() {
+			defer close(cleanupDone)
+			podDiscovery.cleanTombstonedTargets()
+		})
+		removedPath := <-tailSource.targetRemoves
+		podDiscovery.OnAdd(pod, false)
+		target := podDiscovery.podidToTargets[string(pod.UID)][removedPath]
+		require.NotNil(t, target)
+		require.True(t, target.pendingStart)
+
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			_ = podDiscovery.Close()
+		}()
+		synctest.Wait()
+		select {
+		case <-closeDone:
+			t.Fatal("Close returned before the in-progress removal finished")
+		default:
+		}
+
+		releaseRemoval()
+		synctest.Wait()
+		select {
+		case <-closeDone:
+		default:
+			t.Fatal("Close did not return after the removal finished")
+		}
+		select {
+		case <-cleanupDone:
+		default:
+			t.Fatal("cleanup did not finish after removal was released")
+		}
+		require.Len(t, tailSource.targetAdds, 0)
+		require.Empty(t, podDiscovery.removing)
+		tailSource.Close()
+	})
+}
+
+func TestPodDiscoveryDoesNotScheduleCleanupAfterClose(t *testing.T) {
+	fakeNow, tailSource, podDiscovery := create()
+	defer tailSource.Close()
+	pod := scrapedPod("closed")
+	podDiscovery.OnAdd(pod, false)
+	podDiscovery.OnDelete(pod)
+	fakeNow.Advance(time.Minute + time.Millisecond)
+
+	require.NoError(t, podDiscovery.Close())
+	podDiscovery.cleanTombstonedTargets()
+	require.Len(t, tailSource.targetRemoves, 0)
+	require.Empty(t, podDiscovery.removing)
+}
+
+func TestPodDiscoveryCannotReopenAfterClose(t *testing.T) {
+	_, tailSource, podDiscovery := create()
+	defer tailSource.Close()
+	require.NoError(t, podDiscovery.Open(context.Background()))
+	require.NoError(t, podDiscovery.Close())
+	require.ErrorContains(t, podDiscovery.Open(context.Background()), "cannot be reopened")
 }
 
 func cleanTombstonedTargets(podDiscovery *PodDiscovery) {
@@ -539,11 +655,27 @@ func (f *fakeTailSource) AddTarget(target FileTailTarget, updateChan <-chan File
 	return nil
 }
 
-func (f *fakeTailSource) RemoveTarget(filePath string) {
+func (f *fakeTailSource) removeTarget(filePath string) {
 	f.targetRemoves <- filePath
 	if f.removeRelease != nil {
 		<-f.removeRelease
 	}
+}
+
+type pausingPodInformer struct {
+	inner   k8s.PodInformerInterface
+	handler cache.ResourceEventHandler
+	removed chan struct{}
+}
+
+func (i *pausingPodInformer) Add(ctx context.Context, handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
+	i.handler = handler
+	return i.inner.Add(ctx, handler)
+}
+
+func (i *pausingPodInformer) Remove(registration cache.ResourceEventHandlerRegistration) error {
+	close(i.removed)
+	return i.inner.Remove(registration)
 }
 
 type fakeNow struct {

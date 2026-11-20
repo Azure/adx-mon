@@ -160,6 +160,7 @@ func (s *TailSource) Open(ctx context.Context) error {
 
 func (s *TailSource) Close() error {
 	if s.podDiscovery != nil {
+		// PodDiscovery owns dynamic removal scheduling and joins any in-progress removals before the remaining tailers stop.
 		s.podDiscovery.Close()
 	}
 
@@ -215,10 +216,9 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 	return nil
 }
 
-// RemoveTarget removes a file from being tailed.
-// This also removes the cursor file, so this should only be called when the file is not longer expected to be tailed in the future.
-// Waiting for the tailer to drain happens without holding the lock, so other targets can be added and removed meanwhile.
-func (s *TailSource) RemoveTarget(filePath string) {
+// removeTarget removes a file from being tailed. It also removes the cursor file, so PodDiscovery calls it only when
+// the file is no longer expected to be tailed. Waiting for the tailer to drain happens without holding the lock.
+func (s *TailSource) removeTarget(filePath string) {
 	s.mu.Lock()
 	tailer, ok := s.tailers[filePath]
 	if !ok {

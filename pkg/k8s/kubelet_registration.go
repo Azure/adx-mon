@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -17,8 +18,10 @@ const (
 	podNotificationDelete
 )
 
-// podNotification is a pending event for one pod. For adds, the pod is in newPod. For updates, oldPod is the
-// last state delivered to the handler and newPod is the latest state. For deletes, the pod is in oldPod.
+// podNotification is a pending event for one pod UID. Intermediate updates and deletes may be coalesced, so oldPod
+// can be an earlier observed state rather than the last state delivered across a delete/readd. Handlers should
+// reconcile from the full newPod snapshot; when an informer reports an identity replacement as an update, compare
+// the old and new UIDs. Notifications for different UIDs are never merged.
 type podNotification struct {
 	kind    podNotificationKind
 	oldPod  *corev1.Pod
@@ -88,6 +91,7 @@ func (r *kubeletRegistration) enqueueAdd(pod *corev1.Pod, initial bool) {
 }
 
 func (r *kubeletRegistration) enqueueUpdate(oldPod, newPod *corev1.Pod) {
+	// The queue is keyed by UID: an identity replacement is not merged with the old UID's pending notifications.
 	r.enqueue(newPod.UID, podNotification{kind: podNotificationUpdate, oldPod: oldPod, newPod: newPod})
 }
 
@@ -104,6 +108,8 @@ func (r *kubeletRegistration) enqueue(uid types.UID, n podNotification) {
 	if existing, ok := r.pending[uid]; ok {
 		if !mergeNotification(existing, n) {
 			delete(r.pending, uid)
+			index := slices.Index(r.queue, uid)
+			r.queue = slices.Delete(r.queue, index, index+1)
 			if existing.initial {
 				r.finishInitialLocked()
 			}
@@ -120,8 +126,10 @@ func (r *kubeletRegistration) enqueue(uid types.UID, n podNotification) {
 	}
 }
 
-// mergeNotification folds next into the pending notification so the handler observes a valid transition from the
-// state it last saw to the latest state. Returns false when the two cancel out and nothing should be delivered.
+// mergeNotification folds next into the pending notification, keeping the latest full snapshot for the UID.
+// Intermediate events may be coalesced; for example, an update followed by delete and readd becomes an update whose
+// oldPod is the state observed at the delete, not necessarily the last state delivered to the handler. Returns false
+// when the two cancel out and nothing should be delivered.
 func mergeNotification(pending *podNotification, next podNotification) bool {
 	switch pending.kind {
 	case podNotificationAdd:
@@ -140,7 +148,7 @@ func mergeNotification(pending *podNotification, next podNotification) bool {
 		pending.newPod = next.newPod
 	case podNotificationDelete:
 		if next.kind != podNotificationDelete {
-			// The pod reappeared before the handler saw the delete; oldPod is still the last state it saw.
+			// The pod reappeared before the handler saw the delete; oldPod is the delete snapshot, which may not have been delivered.
 			pending.kind = podNotificationUpdate
 			pending.newPod = next.newPod
 		} else {
