@@ -21,9 +21,9 @@ type currenttarget struct {
 	pendingStart bool
 }
 
-type TailerSourceInterface interface {
+type tailerSourceInterface interface {
 	AddTarget(target FileTailTarget, updateChan <-chan FileTailTarget) error
-	RemoveTarget(target string)
+	removeTarget(target string)
 }
 
 type PodDiscoveryOpts struct {
@@ -40,18 +40,21 @@ type StaticPodTargets struct {
 	Destination string
 }
 
+// PodDiscovery has a single-use lifecycle. Close is terminal because informer callbacks may already be dispatched
+// when they are unregistered; reopening would allow those callbacks to race with a new lifecycle.
 type PodDiscovery struct {
 	NodeName         string
 	staticPodTargets []*StaticPodTargets
 
 	nowFunc func() time.Time
 
-	tailsource TailerSourceInterface
+	tailsource tailerSourceInterface
 	// pod uid -> filename -> target
 	podidToTargets map[string]map[string]*currenttarget
 	// file paths whose tailers are being removed outside of mut
 	removing map[string]struct{}
-	mut      sync.Mutex // protect podidToTargets and removing
+	mut      sync.Mutex // protect podidToTargets, removing, and lifecycle state
+	closed   bool       // terminal lifecycle fence; a PodDiscovery cannot be reopened
 
 	cancel               context.CancelFunc
 	podInformer          k8s.PodInformerInterface
@@ -59,7 +62,7 @@ type PodDiscovery struct {
 	wg                   sync.WaitGroup
 }
 
-func NewPodDiscovery(opts PodDiscoveryOpts, tailsource TailerSourceInterface) *PodDiscovery {
+func NewPodDiscovery(opts PodDiscoveryOpts, tailsource tailerSourceInterface) *PodDiscovery {
 	return &PodDiscovery{
 		nowFunc:          time.Now,
 		NodeName:         opts.NodeName,
@@ -74,13 +77,29 @@ func NewPodDiscovery(opts PodDiscoveryOpts, tailsource TailerSourceInterface) *P
 func (i *PodDiscovery) Open(ctx context.Context) error {
 	logger.Infof("Starting logging scraper for node %s", i.NodeName)
 	ctx, cancelFn := context.WithCancel(ctx)
+	i.mut.Lock()
+	if i.closed {
+		i.mut.Unlock()
+		cancelFn()
+		return fmt.Errorf("pod discovery cannot be reopened after Close")
+	}
 	i.cancel = cancelFn
+	i.mut.Unlock()
 
-	var err error
-	if i.informerRegistration, err = i.podInformer.Add(ctx, i); err != nil {
+	registration, err := i.podInformer.Add(ctx, i)
+	if err != nil {
+		cancelFn()
 		return err
 	}
 
+	i.mut.Lock()
+	if i.closed {
+		i.mut.Unlock()
+		cancelFn()
+		_ = i.podInformer.Remove(registration)
+		return fmt.Errorf("pod discovery closed while opening")
+	}
+	i.informerRegistration = registration
 	i.wg.Go(func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -93,14 +112,27 @@ func (i *PodDiscovery) Open(ctx context.Context) error {
 			}
 		}
 	})
+	i.mut.Unlock()
 
 	return nil
 }
 
+// Close fences event handling and joins the cleaner, including any dynamic target removals already in progress.
 func (i *PodDiscovery) Close() error {
-	i.cancel()
-	i.podInformer.Remove(i.informerRegistration)
+	i.mut.Lock()
+	i.closed = true
+	cancel := i.cancel
+	registration := i.informerRegistration
 	i.informerRegistration = nil
+	i.mut.Unlock()
+
+	// Don't hold mut while unregistering or waiting: callbacks and cleaner removals may need it to finish.
+	if cancel != nil {
+		cancel()
+	}
+	if registration != nil {
+		_ = i.podInformer.Remove(registration)
+	}
 	i.wg.Wait()
 	return nil
 }
@@ -116,6 +148,9 @@ func (i *PodDiscovery) OnAdd(obj any, isInitialList bool) {
 
 	i.mut.Lock()
 	defer i.mut.Unlock()
+	if i.closed {
+		return
+	}
 	existingTargets, hasExistingTargets := i.podidToTargets[string(pod.UID)]
 	if !hasExistingTargets && len(targets) == 0 {
 		// Nothing to update or keep track of.
@@ -183,6 +218,9 @@ func (i *PodDiscovery) OnDelete(obj any) {
 
 	i.mut.Lock()
 	defer i.mut.Unlock()
+	if i.closed {
+		return
+	}
 	existingTargets, hasExistingTargets := i.podidToTargets[string(pod.UID)]
 	if !hasExistingTargets {
 		return
@@ -266,7 +304,7 @@ func (i *PodDiscovery) cleanTombstonedTargets() {
 	paths := i.takeExpiredTargets()
 	for _, path := range paths {
 		logger.Infof("Removing tombstoned target %s", path)
-		i.tailsource.RemoveTarget(path)
+		i.tailsource.removeTarget(path)
 		i.finishRemoval(path)
 	}
 }
@@ -275,6 +313,9 @@ func (i *PodDiscovery) cleanTombstonedTargets() {
 func (i *PodDiscovery) takeExpiredTargets() []string {
 	i.mut.Lock()
 	defer i.mut.Unlock()
+	if i.closed {
+		return nil
+	}
 
 	var paths []string
 	now := i.nowFunc()
@@ -302,6 +343,9 @@ func (i *PodDiscovery) finishRemoval(path string) {
 	defer i.mut.Unlock()
 
 	delete(i.removing, path)
+	if i.closed {
+		return
+	}
 	for podID, existingTargets := range i.podidToTargets {
 		existingTarget, ok := existingTargets[path]
 		if !ok || !existingTarget.pendingStart {

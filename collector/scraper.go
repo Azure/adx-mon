@@ -196,6 +196,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 		ScrapeTLSRefreshInterval: s.opts.ScrapeInterval / 2,
 	})
 	if err != nil {
+		cancelFn()
 		return fmt.Errorf("failed to create metrics client: %w", err)
 	}
 
@@ -213,6 +214,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 	if !s.opts.DisableDiscovery {
 		s.informerRegistration, err = s.podInformer.Add(ctx, s)
 		if err != nil {
+			s.Close()
 			return fmt.Errorf("failed to add pod informer: %w", err)
 		}
 	}

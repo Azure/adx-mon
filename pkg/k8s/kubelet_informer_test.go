@@ -489,9 +489,10 @@ func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		enqueue func(r *kubeletRegistration)
-		want    *podNotification
+		name     string
+		enqueue  func(r *kubeletRegistration)
+		want     *podNotification
+		wantUIDs []types.UID
 	}{
 		{
 			name: "add then update delivers add with latest state",
@@ -499,7 +500,8 @@ func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
 				r.enqueueAdd(podVersion("1"), false)
 				r.enqueueUpdate(podVersion("1"), podVersion("2"))
 			},
-			want: &podNotification{kind: podNotificationAdd, newPod: podVersion("2")},
+			want:     &podNotification{kind: podNotificationAdd, newPod: podVersion("2")},
+			wantUIDs: []types.UID{"pod-1"},
 		},
 		{
 			name: "add then delete delivers nothing",
@@ -507,6 +509,7 @@ func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
 				r.enqueueAdd(podVersion("1"), false)
 				r.enqueueDelete(podVersion("1"))
 			},
+			wantUIDs: []types.UID{},
 		},
 		{
 			name: "update then update keeps first old and latest new",
@@ -514,7 +517,8 @@ func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
 				r.enqueueUpdate(podVersion("1"), podVersion("2"))
 				r.enqueueUpdate(podVersion("2"), podVersion("3"))
 			},
-			want: &podNotification{kind: podNotificationUpdate, oldPod: podVersion("1"), newPod: podVersion("3")},
+			want:     &podNotification{kind: podNotificationUpdate, oldPod: podVersion("1"), newPod: podVersion("3")},
+			wantUIDs: []types.UID{"pod-1"},
 		},
 		{
 			name: "update then delete delivers delete",
@@ -522,15 +526,27 @@ func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
 				r.enqueueUpdate(podVersion("1"), podVersion("2"))
 				r.enqueueDelete(podVersion("2"))
 			},
-			want: &podNotification{kind: podNotificationDelete, oldPod: podVersion("2")},
+			want:     &podNotification{kind: podNotificationDelete, oldPod: podVersion("2")},
+			wantUIDs: []types.UID{"pod-1"},
 		},
 		{
-			name: "delete then add delivers update from last seen state",
+			name: "delete then add delivers update from observed delete state",
 			enqueue: func(r *kubeletRegistration) {
 				r.enqueueDelete(podVersion("1"))
 				r.enqueueAdd(podVersion("2"), false)
 			},
-			want: &podNotification{kind: podNotificationUpdate, oldPod: podVersion("1"), newPod: podVersion("2")},
+			want:     &podNotification{kind: podNotificationUpdate, oldPod: podVersion("1"), newPod: podVersion("2")},
+			wantUIDs: []types.UID{"pod-1"},
+		},
+		{
+			name: "update delete and readd keeps delete-observed old state",
+			enqueue: func(r *kubeletRegistration) {
+				r.enqueueUpdate(podVersion("1"), podVersion("2"))
+				r.enqueueDelete(podVersion("2"))
+				r.enqueueAdd(podVersion("3"), false)
+			},
+			want:     &podNotification{kind: podNotificationUpdate, oldPod: podVersion("2"), newPod: podVersion("3")},
+			wantUIDs: []types.UID{"pod-1"},
 		},
 	}
 
@@ -538,6 +554,7 @@ func TestKubeletRegistrationMergesPendingNotifications(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newKubeletRegistration(nil, nil)
 			tt.enqueue(r)
+			require.Equal(t, tt.wantUIDs, r.queue)
 
 			got, ok := r.next()
 			if tt.want == nil {
@@ -562,8 +579,37 @@ func TestKubeletRegistrationSyncedWhenInitialAddIsDropped(t *testing.T) {
 
 	r.enqueueDelete(pod)
 	require.True(t, r.HasSynced())
+	require.Empty(t, r.queue)
 	_, ok := r.next()
 	require.False(t, ok)
+}
+
+func TestKubeletRegistrationCanceledUIDsPreserveQueueOrder(t *testing.T) {
+	r := newKubeletRegistration(nil, nil)
+	for _, uid := range []types.UID{"first", "middle", "last"} {
+		r.enqueueAdd(&corev1.Pod{UID: uid}, false)
+	}
+	r.enqueueDelete(&corev1.Pod{UID: "middle"})
+	require.Equal(t, []types.UID{"first", "last"}, r.queue)
+
+	for _, uid := range []types.UID{"first", "last"} {
+		n, ok := r.next()
+		require.True(t, ok)
+		require.Equal(t, uid, n.newPod.UID)
+	}
+	_, ok := r.next()
+	require.False(t, ok)
+}
+
+func TestKubeletRegistrationAddDeleteChurnDoesNotRetainQueueEntries(t *testing.T) {
+	r := newKubeletRegistration(nil, nil)
+	for n := range 500 {
+		pod := &corev1.Pod{UID: types.UID(fmt.Sprintf("pod-%d", n))}
+		r.enqueueAdd(pod, false)
+		r.enqueueDelete(pod)
+	}
+	require.Empty(t, r.queue)
+	require.Empty(t, r.pending)
 }
 
 type blockingUpdateHandler struct {
