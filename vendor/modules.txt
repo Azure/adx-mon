@@ -541,6 +541,8 @@ github.com/prometheus/client_model/go
 # github.com/prometheus/common v0.74.0
 ## explicit; go 1.26.0
 github.com/prometheus/common/config
+github.com/prometheus/common/config/internal/secretvalue
+github.com/prometheus/common/config/secret
 github.com/prometheus/common/expfmt
 github.com/prometheus/common/model
 # github.com/prometheus/procfs v0.22.0
@@ -1348,7 +1350,7 @@ k8s.io/utils/ptr
 k8s.io/utils/strings/slices
 k8s.io/utils/third_party/forked/golang/btree
 k8s.io/utils/trace
-# sigs.k8s.io/controller-runtime v0.25.2
+# sigs.k8s.io/controller-runtime v0.25.3
 ## explicit; go 1.26.0
 sigs.k8s.io/controller-runtime
 sigs.k8s.io/controller-runtime/pkg/builder

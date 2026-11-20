@@ -1,14 +1,11 @@
 package clickhouse
 
-import (
-	"context"
-	"sync"
-)
+import "context"
 
 // contextWatchdog is a helper function to run a callback when the context is done.
-// Its idempotent stop function prevents the callback from running, or waits for
-// an already-running callback to finish. Stop before releasing a resource that
-// the callback can access, so cancellation cannot affect its next owner.
+// It has a cancellation function to prevent the callback from running.
+// The cancellation function blocks until the watchdog goroutine exits. When it
+// returns, the callback has either not run and never will, or has completed.
 // Useful for interrupting some logic when the context is done,
 // but you want to not bother about context cancellation if your logic is already done.
 // Example:
@@ -16,14 +13,23 @@ import (
 // // do something else
 // defer stopCW()
 func contextWatchdog(ctx context.Context, callback func()) (cancel func()) {
+	exit := make(chan struct{})
 	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
+
+	// The goroutine exits when cancel is called or after callback returns.
+	go func() {
 		defer close(done)
-		callback()
-	})
-	return sync.OnceFunc(func() {
-		if !stop() {
-			<-done
+		select {
+		case <-exit:
+			return
+		case <-ctx.Done():
+			callback()
+			return
 		}
-	})
+	}()
+
+	return func() {
+		close(exit)
+		<-done
+	}
 }
