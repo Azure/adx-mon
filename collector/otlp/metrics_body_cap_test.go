@@ -17,9 +17,9 @@ import (
 // 64 KiB (restored in cleanup) and sends a 512 KiB body: 8x over the lowered
 // cap, but small enough to keep the test fast.
 func TestMetricsService_RejectsOversizedBody(t *testing.T) {
-	orig := maxMetricsBodyBytes
-	maxMetricsBodyBytes = 64 << 10 // 64 KiB
-	defer func() { maxMetricsBodyBytes = orig }()
+	orig := maxOTLPRequestBodySize
+	maxOTLPRequestBodySize = 64 << 10 // 64 KiB
+	defer func() { maxOTLPRequestBodySize = orig }()
 
 	s := NewMetricsService(metricWriterWithError(nil), "/fake/path", 0)
 	resp := httptest.NewRecorder()

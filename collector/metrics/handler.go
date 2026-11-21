@@ -23,7 +23,7 @@ import (
 )
 
 // maxRemoteWriteBodyBytes bounds the size of a prometheus remote-write request
-// body. It mirrors maxMetricsBodyBytes / maxLogsBodyBytes in the OTLP
+// body. It mirrors maxOTLPRequestBodySize / maxLogsBodyBytes in the OTLP
 // handlers: a client-supplied body larger than this cap is rejected with 413
 // instead of being read in full, preventing unbounded per-request allocation.
 var maxRemoteWriteBodyBytes int64 = 64 << 20
