@@ -38,6 +38,38 @@ func TestMetricsService_OLTP_protobuf(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
+			name:             "too short content length",
+			writer:           metricWriterWithError(nil),
+			input:            serializedMSR(t, newServiceRequest()),
+			overriddenLength: 1,
+			expectedStatus:   http.StatusBadRequest,
+		},
+		{
+			name:             "not enough bytes",
+			writer:           metricWriterWithError(nil),
+			input:            serializedMSR(t, newServiceRequest()),
+			overriddenLength: 1024,
+			expectedStatus:   http.StatusBadRequest,
+		},
+		{
+			name:             "chunked request",
+			writer:           metricWriterWithError(nil),
+			input:            serializedMSR(t, newServiceRequest()),
+			overriddenLength: -1,
+			expectedStatus:   http.StatusLengthRequired,
+		},
+		{
+			name:           "empty request",
+			writer:         metricWriterWithError(nil),
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:             "oversized request",
+			writer:           metricWriterWithError(nil),
+			overriddenLength: maxOTLPRequestBodySize + 1,
+			expectedStatus:   http.StatusRequestEntityTooLarge,
+		},
+		{
 			name:           "writer got unknown metric",
 			writer:         metricWriterWithError(ErrUnknownMetricType),
 			input:          serializedMSR(t, newServiceRequest()),
@@ -71,7 +103,7 @@ func TestMetricsService_OLTP_protobuf(t *testing.T) {
 
 			req := httptest.NewRequest("POST", "/fake/path", bytes.NewReader(tc.input))
 			req.Header.Set("Content-Type", "application/x-protobuf")
-			if tc.overriddenLength > 0 {
+			if tc.overriddenLength != 0 {
 				req.ContentLength = tc.overriddenLength
 			}
 
