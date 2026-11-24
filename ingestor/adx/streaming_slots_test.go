@@ -126,7 +126,7 @@ func TestStreamingSlots_HandOffInSegmentAgeOrder(t *testing.T) {
 			if id == 1 {
 				waitCtx = ctx
 			}
-			go func() { grants <- result{id, s.acquire(waitCtx, now.Add(-age))} }()
+			go func() { grants <- result{id, s.acquire(waitCtx, &slotWaiter{oldest: now.Add(-age)})} }()
 			synctest.Wait()
 		}
 		require.Equal(t, 4, s.Stats().Waiting)
@@ -138,10 +138,42 @@ func TestStreamingSlots_HandOffInSegmentAgeOrder(t *testing.T) {
 			_, ok := s.TryAcquire()
 			require.False(t, ok, "the next waiter already owns the slot")
 			require.Equal(t, result{id: want}, <-grants)
-			s.release(true, false)
+			s.release(nil, true, false)
 		}
 		require.Zero(t, s.Stats().InUse)
 		require.Zero(t, s.Stats().Waiting)
+	})
+}
+
+// A busy database must not reserve an idle endpoint slot. Its oldest batch becomes eligible
+// as soon as both the local upload permit and the shared endpoint slot are available.
+func TestStreamingSlots_GrantOnlyWhenDatabaseCanUpload(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
+		held, ok := s.TryAcquire()
+		require.True(t, ok)
+		older := &slotWaiter{oldest: time.Now().Add(-time.Second), uploads: make(chan struct{}, 1)}
+		younger := &slotWaiter{oldest: time.Now(), uploads: make(chan struct{}, 1)}
+		older.uploads <- struct{}{} // An ordinary queued upload is already running.
+		grants := make(chan *slotWaiter, 2)
+		for _, waiter := range []*slotWaiter{older, younger} {
+			go func() {
+				if s.acquire(t.Context(), waiter) == nil {
+					grants <- waiter
+				}
+			}()
+		}
+		synctest.Wait()
+		held(false)
+		require.Same(t, younger, <-grants)
+		s.release(younger.uploads, true, false)
+		require.Zero(t, s.Stats().InUse)
+		require.Equal(t, 1, s.Stats().Waiting)
+		s.releaseUploadPermit(older.uploads)
+		require.Same(t, older, <-grants)
+		s.release(older.uploads, true, false)
+		require.Zero(t, s.Stats().InUse)
+		require.Empty(t, older.uploads)
 	})
 }
 

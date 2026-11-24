@@ -169,14 +169,18 @@ func TestUploader_ShutdownAllowsInflightUploadToComplete(t *testing.T) {
 					// FairQueue may have claimed pending queued work before shutdown;
 					// releasing that claim leaves its WAL data available for retry.
 					require.False(t, pendingQueued.IsRemoved())
-					require.False(t, pendingRealtime.IsReleased())
+					require.False(t, pendingRealtime.IsRemoved(), "shutdown must preserve pending realtime WAL data")
 					require.False(t, afterClose.IsReleased())
 					if pendingQueued.IsReleased() {
 						require.Len(t, u.UploadQueue(), 1)
 					} else {
 						require.Len(t, u.UploadQueue(), 2)
 					}
-					require.Len(t, u.RealtimeUploadQueue(), 1)
+					if pendingRealtime.IsReleased() {
+						require.Empty(t, u.RealtimeUploadQueue())
+					} else {
+						require.Len(t, u.RealtimeUploadQueue(), 1)
+					}
 					require.Zero(t, u.realtime.Slots.Stats().InUse)
 				})
 			})
