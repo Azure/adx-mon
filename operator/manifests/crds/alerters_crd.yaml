@@ -110,14 +110,33 @@ spec:
                   Optional; if omitted, a default image will be used.
                 type: string
               notificationEndpoint:
-                description: NotificationEndpoint is the URI where alert notifications
-                  will be sent. This field is required.
+                description: |-
+                  NotificationEndpoint is the URI where alert notifications will be sent.
+                  Exactly one of notificationEndpoint or notificationEndpoints must be specified.
                 format: uri
+                minLength: 1
                 type: string
+              notificationEndpoints:
+                description: |-
+                  NotificationEndpoints is the list of URIs where alert notifications will be fanned out.
+                  Exactly one of notificationEndpoint or notificationEndpoints must be specified.
+                items:
+                  format: uri
+                  minLength: 1
+                  type: string
+                minItems: 1
+                type: array
             required:
             - adxClusterSelector
-            - notificationEndpoint
             type: object
+            x-kubernetes-validations:
+            - message: exactly one of notificationEndpoint or notificationEndpoints
+                must be specified
+              rule: (has(self.notificationEndpoint) && size(self.notificationEndpoint)
+                > 0) != (has(self.notificationEndpoints) && size(self.notificationEndpoints)
+                > 0) && (!has(self.notificationEndpoint) || !has(self.notificationEndpoints))
+                && (!has(self.notificationEndpoints) || self.notificationEndpoints.all(e,
+                size(e) > 0))
           status:
             description: AlerterStatus defines the observed state of Alerter
             properties:
