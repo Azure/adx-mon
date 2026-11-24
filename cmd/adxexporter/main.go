@@ -8,6 +8,7 @@ import (
 
 	"github.com/Azure/adx-mon/adxexporter"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2"
@@ -31,6 +32,7 @@ func main() {
 				Name:  "kusto-endpoints",
 				Usage: "Kusto endpoint in the format of <db>=<endpoint> for query execution",
 			},
+			&cli.StringSliceFlag{Name: "kusto-trusted-hosts", Usage: "Additional exact Kusto hostnames or IPs to trust (repeatable; no scheme or port)"},
 			&cli.StringFlag{
 				Name:     "otlp-endpoint",
 				Usage:    "OTLP/HTTP endpoint URL for pushing metrics (required)",
@@ -60,6 +62,10 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
+	if err := kustoutil.AddTrustedHosts(ctx.StringSlice("kusto-trusted-hosts")); err != nil {
+		return err
+	}
+
 	clusterLabels, err := parseClusterLabels(ctx.StringSlice("cluster-labels"))
 	if err != nil {
 		return err

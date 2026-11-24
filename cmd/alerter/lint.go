@@ -6,6 +6,7 @@ import (
 
 	"github.com/Azure/adx-mon/alerter"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/urfave/cli/v2"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -18,6 +19,7 @@ func NewLintCommand() *cli.Command {
 		Usage:   "lint a directory by running each rule once",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"},
+			&cli.StringSliceFlag{Name: "kusto-trusted-hosts", Usage: "Additional exact Kusto hostnames or IPs to trust (repeatable; no scheme or port)"},
 			&cli.StringFlag{Name: "lint-dir", Usage: "Read alert rules from local filesystem", Required: true},
 			&cli.StringFlag{Name: "auth-msi-id", Usage: "MSI client ID for authentication to Kusto"},
 			&cli.StringFlag{Name: "auth-token", Usage: "Application token for authentication to Kusto"},
@@ -31,6 +33,10 @@ func NewLintCommand() *cli.Command {
 }
 
 func lintMain(ctx *cli.Context) error {
+	if err := kustoutil.AddTrustedHosts(ctx.StringSlice("kusto-trusted-hosts")); err != nil {
+		return err
+	}
+
 	endpoints := make(map[string]string)
 	endpointsArg := ctx.StringSlice("kusto-endpoint")
 	for _, v := range endpointsArg {

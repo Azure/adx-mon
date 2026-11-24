@@ -92,6 +92,7 @@ spec:
             - "--port=8080"
             - "--kusto-endpoint=Metrics=http://kustainer.default.svc.cluster.local:8080"
             - "--kusto-endpoint=Logs=http://kustainer.default.svc.cluster.local:8080"
+            - "--kusto-trusted-hosts=kustainer.default.svc.cluster.local"
           env:
             # Disable HTTP/2 in Go's HTTP client. This primarily affects the kusto client.
             # Prevents us from running into issues like https://github.com/golang/go/issues/59690
@@ -116,4 +117,3 @@ spec:
           hostPath:
             path: /etc/pki/ca-trust/extracted
             type: DirectoryOrCreate
-

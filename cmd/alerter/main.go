@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/alerter"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/version"
@@ -28,6 +29,7 @@ func main() {
 		Usage: "adx-mon alerting engine for ADX",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"},
+			&cli.StringSliceFlag{Name: "kusto-trusted-hosts", Usage: "Additional exact Kusto hostnames or IPs to trust (repeatable; no scheme or port)"},
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.IntFlag{Name: "port", Value: 4023, Usage: "Metrics port number"},
 			&cli.StringFlag{Name: "auth-msi-id", Usage: "MSI client ID for authentication to Kusto"},
@@ -54,6 +56,9 @@ func main() {
 
 func realMain(ctx *cli.Context) error {
 	logger.Infof("%s version:%s", os.Args[0], version.String())
+	if err := kustoutil.AddTrustedHosts(ctx.StringSlice("kusto-trusted-hosts")); err != nil {
+		return err
+	}
 
 	endpoints := make(map[string]string)
 	endpointsArg := ctx.StringSlice("kusto-endpoint")

@@ -209,6 +209,10 @@ func (m *Manager) AuthContext(ctx context.Context) (string, error) {
 	tk, err := m.refreshAuthContext(ctx)
 	now = m.currentTime()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+
 		if m.hasAuthToken && m.authTokenValidUntil.After(now) {
 			m.nextAuthRefreshAttempt = now.Add(authRetryIntervalWithCachedToken)
 			return m.kustoToken.AuthContext, nil
