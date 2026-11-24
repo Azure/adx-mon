@@ -75,7 +75,23 @@ spec:
               database:
                 type: string
               destination:
+                description: |-
+                  Destination is the legacy singular notification target identifier. Deprecated in favor of Destinations;
+                  mutually exclusive with Destinations.
                 type: string
+              destinations:
+                description: |-
+                  Destinations is an ordered list of notification target identifiers used to route alerts across receivers.
+                  Mutually exclusive with deprecated Destination.
+                items:
+                  maxLength: 512
+                  minLength: 1
+                  type: string
+                maxItems: 32
+                type: array
+                x-kubernetes-validations:
+                - message: destinations must not contain duplicate entries
+                  rule: self.all(x, self.exists_one(y, x == y))
               interval:
                 type: string
                 x-kubernetes-validations:
@@ -86,14 +102,18 @@ spec:
             required:
             - interval
             type: object
+            x-kubernetes-validations:
+            - message: destination and destinations are mutually exclusive
+              rule: '!(has(self.destination) && size(self.destination) > 0 && has(self.destinations)
+                && size(self.destinations) > 0)'
           status:
             description: AlertRuleStatus defines the observed state of AlertRule
             properties:
               conditions:
                 description: |-
                   Conditions provide standardized status signaling. Controllers may
-                  set shared conditions defined in conditions.go such as ConditionCriteria
-                  to reflect evaluation of Spec.Criteria / Spec.CriteriaExpression.
+                  set shared conditions defined in conditions.go such as ConditionCriteria,
+                  ConditionDestinationMatched, and ConditionNotificationDelivery.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -149,6 +169,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               lastAlertTime:
                 format: date-time
                 type: string

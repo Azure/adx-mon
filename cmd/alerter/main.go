@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -15,6 +16,7 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Azure/adx-mon/alerter"
+	"github.com/Azure/adx-mon/alerter/alert"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -22,8 +24,47 @@ import (
 	"github.com/Azure/adx-mon/pkg/version"
 )
 
-func main() {
-	app := &cli.App{
+type repeatedStringFlag struct {
+	values []string
+}
+
+func (f *repeatedStringFlag) Set(value string) error {
+	f.values = append(f.values, value)
+	return nil
+}
+
+func validateAlertAddrs(addrs []string) error {
+	for _, raw := range addrs {
+		if strings.TrimSpace(raw) == "" {
+			return fmt.Errorf("--alerter-address must not be empty")
+		}
+		if _, err := alert.ParseBaseEndpoint(raw); err != nil {
+			return fmt.Errorf("invalid --alerter-address: %w", err)
+		}
+	}
+	return nil
+}
+
+func (f *repeatedStringFlag) String() string {
+	if f == nil || len(f.values) == 0 {
+		return ""
+	}
+	redacted := make([]string, len(f.values))
+	for i, v := range f.values {
+		redacted[i] = alert.RedactURL(v)
+	}
+	return strings.Join(redacted, ", ")
+}
+
+func (f *repeatedStringFlag) Values() []string {
+	if f == nil || len(f.values) == 0 {
+		return nil
+	}
+	return slices.Clone(f.values)
+}
+
+func newApp(action cli.ActionFunc) *cli.App {
+	return &cli.App{
 		Name:  "alerter",
 		Usage: "adx-mon alerting engine for ADX",
 		Flags: []cli.Flag{
@@ -34,18 +75,33 @@ func main() {
 			&cli.StringFlag{Name: "auth-token", Usage: "Application token for authentication to Kusto"},
 			&cli.StringFlag{Name: "cloud", Usage: "Azure cloud"},
 			&cli.StringFlag{Name: "region", Usage: "Current region"},
-			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
+			&cli.GenericFlag{
+				Name:  "alerter-address",
+				Value: &repeatedStringFlag{},
+				Usage: "Address of the alert notification service (may be specified multiple times)",
+			},
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
 			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "Tag in the format of <key>=<value> that applies to execution context"},
 			&cli.BoolFlag{Name: "enable-pprof", Usage: "Enable pprof endpoints."},
 		},
-		Action: realMain,
+		Action: action,
 		Commands: []*cli.Command{
 			NewLintCommand(),
 		},
 		Version: version.String(),
 	}
+}
+
+func alertAddrsFromContext(ctx *cli.Context) []string {
+	if g, ok := ctx.Generic("alerter-address").(*repeatedStringFlag); ok {
+		return g.Values()
+	}
+	return nil
+}
+
+func main() {
+	app := newApp(realMain)
 
 	if err := app.Run(os.Args); err != nil {
 		logger.Fatal(err.Error())
@@ -54,6 +110,11 @@ func main() {
 
 func realMain(ctx *cli.Context) error {
 	logger.Infof("%s version:%s", os.Args[0], version.String())
+
+	alertAddrs := alertAddrsFromContext(ctx)
+	if err := validateAlertAddrs(alertAddrs); err != nil {
+		return err
+	}
 
 	endpoints := make(map[string]string)
 	endpointsArg := ctx.StringSlice("kusto-endpoint")
@@ -101,7 +162,7 @@ func realMain(ctx *cli.Context) error {
 		KustoEndpoints:   endpoints,
 		Region:           ctx.String("region"),
 		Cloud:            ctx.String("cloud"),
-		AlertAddr:        ctx.String("alerter-address"),
+		AlertAddrs:       alertAddrs,
 		Concurrency:      ctx.Int("concurrency"),
 		MaxNotifications: ctx.Int("max-notifications"),
 		MSIID:            ctx.String("auth-msi-id"),

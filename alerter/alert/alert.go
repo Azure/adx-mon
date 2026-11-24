@@ -4,6 +4,10 @@ type Alert struct {
 	// Destination is the identifier indicating where the alert should be routed by the alert receiver.
 	Destination string
 
+	// Destinations is the ordered list of matched destination identifiers when AlertRule.spec.destinations was authored.
+	// Omitted when singular AlertRule.spec.destination or KQL Recipient was used.
+	Destinations []string `json:",omitempty"`
+
 	// Title is the title of the alert.
 	Title string
 
