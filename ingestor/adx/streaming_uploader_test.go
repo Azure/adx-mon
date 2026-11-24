@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -390,27 +391,66 @@ func TestRealtimeUploadOptsDefaults(t *testing.T) {
 	require.Equal(t, time.Second, opts.RequestTimeout)
 }
 
-func TestStreamBatch_NoSlotRetriesWithoutHoldingWorker(t *testing.T) {
-	env := newStreamingTestEnv(t)
-	env.u.realtime.Slots = NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
-	release, err := env.u.realtime.Slots.Acquire(context.Background())
-	require.NoError(t, err)
-	defer release(false)
+func TestStreamBatch_WaitsForSlot(t *testing.T) {
+	for _, outcome := range []string{"streamed", "retry_shutdown", "fallback_lag", "fallback_cooldown"} {
+		t.Run(outcome, func(t *testing.T) {
+			env := newStreamingTestEnv(t)
+			path := env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
+			batch := env.nextBatch(t, ingestpolicy.PriorityRealtime)
+			synctest.Test(t, func(t *testing.T) {
+				slots := NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
+				env.u.realtime.Slots = slots
+				env.u.realtime.MaxLag = 30 * time.Second
+				batch.Segments[0].CreatedAt = time.Now()
+				held, ok := slots.TryAcquire()
+				require.True(t, ok)
+				defer held(false)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				before := realtimeBatchCount(t, "Cpu", outcome)
 
-	path := env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
-	batch := env.nextBatch(t, ingestpolicy.PriorityRealtime)
+				go env.u.uploadBatch(ctx, batch)
+				synctest.Wait()
+				time.Sleep(time.Second)
+				synctest.Wait()
+				require.Equal(t, 1, slots.Stats().Waiting)
+				require.False(t, batch.IsReleased())
+				require.FileExists(t, path)
 
-	start := time.Now()
-	env.u.uploadBatch(context.Background(), batch)
-
-	// The worker gives up after a short wait and the batch is retried later rather than using queued ingestion.
-	require.Less(t, time.Since(start), maxSlotWait+500*time.Millisecond)
-	require.GreaterOrEqual(t, time.Since(start), maxSlotWait)
-	require.Zero(t, env.stream.calls)
-	require.Zero(t, env.queue.calls)
-	require.FileExists(t, path)
-	require.True(t, batch.IsReleased())
-	require.False(t, batch.IsRemoved())
+				switch outcome {
+				case "streamed":
+					held(false)
+				case "retry_shutdown":
+					cancel()
+				case "fallback_lag":
+					time.Sleep(29 * time.Second)
+				case "fallback_cooldown":
+					env.u.cooldowns.start("Cpu", time.Now().Add(time.Minute))
+					held(false)
+				}
+				synctest.Wait()
+				require.Zero(t, slots.Stats().Waiting)
+				require.Equal(t, before+1, realtimeBatchCount(t, "Cpu", outcome))
+				require.True(t, batch.IsReleased())
+				switch outcome {
+				case "streamed":
+					require.Equal(t, 1, env.stream.calls)
+					require.Equal(t, testCSV, env.stream.data)
+					require.Zero(t, env.queue.calls)
+				case "retry_shutdown":
+					require.FileExists(t, path)
+					require.Zero(t, env.queue.calls)
+					require.Zero(t, env.stream.calls)
+					return
+				default:
+					require.Equal(t, 1, env.queue.calls)
+					require.Equal(t, testCSV, env.queue.data)
+					require.Zero(t, env.stream.calls)
+				}
+				require.NoFileExists(t, path)
+			})
+		})
+	}
 }
 
 func realtimeBatchCount(t *testing.T, table, outcome string) float64 {
@@ -452,11 +492,6 @@ func TestStreamBatch_Metrics(t *testing.T) {
 		}, outcome: "fallback_unavailable"},
 		{name: "lag", createdAt: time.Now().Add(-time.Hour), outcome: "fallback_lag"},
 		{name: "direct ingest", setup: func(env *streamingTestEnv) { env.u.requireDirectIngest = true }, outcome: "fallback_direct_ingest"},
-		{name: "no slot", setup: func(env *streamingTestEnv) {
-			env.u.realtime.Slots = NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
-			_, ok := env.u.realtime.Slots.TryAcquire()
-			require.True(t, ok)
-		}, outcome: "retry_no_slot"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			env := newStreamingTestEnv(t)

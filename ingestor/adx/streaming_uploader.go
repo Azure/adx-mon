@@ -23,10 +23,6 @@ const (
 
 	defaultStreamingCooldown       = 5 * time.Minute
 	defaultStreamingRequestTimeout = 30 * time.Second
-
-	// maxSlotWait bounds how long an upload worker waits for a streaming slot.  Batches that cannot get a slot are
-	// released and retried so they wait in the WAL rather than holding workers that could upload queued batches.
-	maxSlotWait = 250 * time.Millisecond
 )
 
 // RealtimeUploadOpts configures streaming ingestion of realtime batches.
@@ -161,32 +157,37 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 		return n.retry(table, "shutdown")
 	}
 
-	// Wait briefly for a slot.  If the batch reaches its max lag first it uses queued ingestion, otherwise it is
-	// retried later.
-	slotDeadline := now.Add(maxSlotWait)
+	// Each worker queues one prepared request. Its WAL segments remain owned by the batch until upload completes.
+	slotCtx := ctx
 	lagDeadline := oldest.Add(rt.MaxLag)
-	if rt.MaxLag > 0 && lagDeadline.Before(slotDeadline) {
-		slotDeadline = lagDeadline
+	if rt.MaxLag > 0 {
+		var cancel context.CancelFunc
+		slotCtx, cancel = context.WithDeadline(ctx, lagDeadline)
+		defer cancel()
 	}
-	slotCtx, cancel := context.WithDeadline(ctx, slotDeadline)
-	release, err := rt.Slots.Acquire(slotCtx)
-	cancel()
-	if err != nil {
+	if err := rt.Slots.acquire(slotCtx, oldest); err != nil {
 		if ctx.Err() != nil {
 			return n.retry(table, "shutdown")
 		}
-		if rt.MaxLag <= 0 || time.Now().Before(lagDeadline) {
-			return n.retry(table, "no_slot")
-		}
 		return n.fallback(table, "lag", bytes.NewReader(buffered))
 	}
+	// Only completed requests should affect the adaptive limit.
+	var attempted, throttled bool
+	defer func() { rt.Slots.release(attempted, throttled) }()
 	if ctx.Err() != nil {
-		release(false)
 		return n.retry(table, "shutdown")
+	}
+	// The deadline may have passed or a cooldown may have started while the worker was waiting.
+	if rt.MaxLag > 0 && !time.Now().Before(lagDeadline) {
+		return n.fallback(table, "lag", bytes.NewReader(buffered))
+	}
+	if n.cooldowns.active(table, time.Now()) {
+		return n.fallback(table, "cooldown", bytes.NewReader(buffered))
 	}
 
 	requestCtx, cancel := context.WithTimeout(ctx, rt.RequestTimeout)
 	start := time.Now()
+	attempted = true
 	_, err = n.streamer.FromReader(requestCtx, bytes.NewReader(buffered),
 		azkustoingest.Database(n.database),
 		azkustoingest.Table(table),
@@ -198,7 +199,6 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	metrics.IngestorUploadDuration.WithLabelValues(n.database, "streaming").Observe(time.Since(start).Seconds())
 
 	if err == nil {
-		release(false)
 		n.recordRealtime(table, "streamed")
 		metrics.IngestorRealtimeIngestLatency.WithLabelValues(n.database, table).Set(time.Since(oldest).Seconds())
 		metrics.IngestorUploadLatency.WithLabelValues(n.database, "streaming").Observe(time.Since(oldest).Seconds())
@@ -209,7 +209,7 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	}
 
 	failure := classifyStreamingError(err)
-	release(failure == streamingThrottled)
+	throttled = failure == streamingThrottled
 	if ctx.Err() != nil {
 		return n.retry(table, "shutdown")
 	}
