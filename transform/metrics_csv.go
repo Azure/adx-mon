@@ -160,7 +160,7 @@ func (w *MetricsCSVWriter) MarshalCSV(req *prompb.WriteRequest, ts *prompb.TimeS
 						continue labels
 					}
 					if cmp == 0 {
-						line = adxcsv.Append(line, label.Value)
+						line = adxcsv.AppendField(line, label.Value)
 						j++
 						continue labels
 					}
