@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -104,6 +105,44 @@ func TestStreamingSlots_ReleaseWakesWaiter(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("waiter was not woken")
 	}
+}
+
+func TestStreamingSlots_HandOffInSegmentAgeOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
+		held, ok := s.TryAcquire()
+		require.True(t, ok)
+		now := time.Now()
+
+		type result struct {
+			id  int
+			err error
+		}
+		grants := make(chan result, 4)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		for id, age := range []time.Duration{time.Second, 5 * time.Second, 3 * time.Second, 3 * time.Second} {
+			waitCtx := t.Context()
+			if id == 1 {
+				waitCtx = ctx
+			}
+			go func() { grants <- result{id, s.acquire(waitCtx, now.Add(-age))} }()
+			synctest.Wait()
+		}
+		require.Equal(t, 4, s.Stats().Waiting)
+		cancel()
+		require.Equal(t, result{1, context.Canceled}, <-grants)
+
+		held(false)
+		for _, want := range []int{2, 3, 0} {
+			_, ok := s.TryAcquire()
+			require.False(t, ok, "the next waiter already owns the slot")
+			require.Equal(t, result{id: want}, <-grants)
+			s.release(true, false)
+		}
+		require.Zero(t, s.Stats().InUse)
+		require.Zero(t, s.Stats().Waiting)
+	})
 }
 
 func TestStreamingSlots_ThrottleHalvesLimitAndSuccessRestores(t *testing.T) {
@@ -297,6 +336,7 @@ func TestStreamingSlotsCollector(t *testing.T) {
 		"adxmon_ingestor_realtime_streaming_slots/share":   4,
 		"adxmon_ingestor_realtime_streaming_slots/limit":   4,
 		"adxmon_ingestor_realtime_streaming_slots/in_use":  1,
+		"adxmon_ingestor_realtime_streaming_slots/waiting": 0,
 		"adxmon_ingestor_realtime_streaming_overcommitted": 0,
 	}, got)
 }

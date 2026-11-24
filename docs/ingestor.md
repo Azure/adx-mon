@@ -146,7 +146,7 @@ cluster's capacity among their budgets since each deployment only knows about it
 | Condition | Behavior |
 | --- | --- |
 | Throttled or transient failure | Retried with streaming ingestion until the batch reaches `--realtime-max-lag`. |
-| No streaming slot available | Retried after a short delay, without holding an upload worker, until the batch reaches `--realtime-max-lag`. |
+| No streaming slot available | A worker holds the prepared batch until a slot opens or the batch reaches `--realtime-max-lag`. The next slot goes to the waiting batch with the oldest WAL segment on that endpoint. |
 | Batch older than `--realtime-max-lag` | Queued ingestion. |
 | Uncompressed batch larger than 4MB | Queued ingestion. |
 | Streaming unavailable for the table, such as when the policy is disabled, the schema has not propagated or the database is under maintenance | Queued ingestion, and the table uses queued ingestion for 5 minutes. |
@@ -160,13 +160,12 @@ cluster's capacity among their budgets since each deployment only knows about it
 | `adxmon_ingestor_realtime_streaming_requests_total{database}` | Streaming requests sent. |
 | `adxmon_ingestor_realtime_streaming_duration_seconds_total{database}` | Total duration of streaming requests.  Divide by the request count for the average duration. |
 | `adxmon_ingestor_realtime_ingest_latency_seconds{database,table}` | Age of the oldest segment of the most recently streamed batch. |
-| `adxmon_ingestor_realtime_streaming_slots{endpoint,state}` | Streaming slots by state: `budget`, `peers`, `share`, `limit` and `in_use`. |
+| `adxmon_ingestor_realtime_streaming_slots{endpoint,state}` | Streaming slots by state: `budget`, `peers`, `share`, `limit`, `in_use` and `waiting`. The latter counts prepared batches waiting for a slot. |
 | `adxmon_ingestor_realtime_streaming_overcommitted{endpoint}` | 1 when the minimum slots of all peers exceed the budget. |
 | `adxmon_{ingestor,collector}_wal_segments_size_bytes_by_priority{priority}` | Size of closed WAL segments by priority: `realtime` or `queued`. |
 
-A rising rate of `fallback_*` outcomes means realtime batches are using queued ingestion.  `fallback_lag` and
-`retry_no_slot` usually mean the streaming budget is too small for the realtime volume, and `fallback_too_large`
-means `--realtime-max-batch-bytes` should be lowered.
+A rising rate of `fallback_lag` alongside waiting batches indicates that batches are reaching their age limit
+under slot contention. For `fallback_too_large`, lower `--realtime-max-batch-bytes`.
 
 ## Connection limit
 

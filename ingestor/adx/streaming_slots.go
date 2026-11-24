@@ -5,7 +5,10 @@ package adx
 
 import (
 	"context"
+	"slices"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
@@ -44,6 +47,8 @@ type SlotStats struct {
 	Limit int
 	// InUse is the number of slots currently held.
 	InUse int
+	// Waiting is the number of prepared batches waiting for a slot.
+	Waiting int
 	// Overcommitted is true when the minimum slots of all peers exceeds the budget.
 	Overcommitted bool
 }
@@ -60,9 +65,13 @@ type StreamingSlots struct {
 	limit     int
 	inUse     int
 	successes int
-	// changed is closed and replaced when a slot may have become available and waiters is non-zero.
-	changed chan struct{}
-	waiters int
+	// waiters are ordered by oldest WAL segment, then by arrival for equal ages.
+	waiters []*slotWaiter
+}
+
+type slotWaiter struct {
+	oldest time.Time
+	ready  chan struct{}
 }
 
 // NewStreamingSlots returns a pool for budget concurrent requests shared by peers.  At least one slot is always
@@ -74,7 +83,6 @@ func NewStreamingSlots(budget, minSlots, maxSlots int, peers cluster.PeerInfo) *
 		minSlots:      minSlots,
 		maxSlots:      maxSlots,
 		increaseAfter: defaultSlotIncreaseAfter,
-		changed:       make(chan struct{}),
 	}
 	s.peers = peers
 	s.share = slotShare(budget, peers, minSlots, maxSlots)
@@ -94,7 +102,7 @@ func (s *StreamingSlots) SetPeers(peers cluster.PeerInfo) {
 	s.share = share
 	s.limit = min(s.limit, share)
 	overcommitted := s.overcommittedLocked()
-	s.notifyLocked()
+	s.grantWaitersLocked()
 	s.mu.Unlock()
 
 	if overcommitted {
@@ -105,30 +113,46 @@ func (s *StreamingSlots) SetPeers(peers cluster.PeerInfo) {
 // Acquire waits for a slot.  The returned func must be called when the request completes and reports whether the
 // request was throttled.
 func (s *StreamingSlots) Acquire(ctx context.Context) (release func(throttled bool), err error) {
-	for {
-		s.mu.Lock()
-		if s.inUse < s.limit {
-			s.inUse++
-			s.mu.Unlock()
-			return s.releaseFunc(), nil
-		}
-		changed := s.changed
-		s.waiters++
-		s.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			err = ctx.Err()
-		case <-changed:
-		}
-
-		s.mu.Lock()
-		s.waiters--
-		s.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
+	if err := s.acquire(ctx, time.Now()); err != nil {
+		return nil, err
 	}
+	return s.releaseFunc(), nil
+}
+
+func (s *StreamingSlots) acquire(ctx context.Context, oldest time.Time) error {
+	s.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if s.inUse < s.limit {
+		s.inUse++
+		s.mu.Unlock()
+		return nil
+	}
+
+	w := &slotWaiter{oldest: oldest, ready: make(chan struct{})}
+	i := sort.Search(len(s.waiters), func(i int) bool { return oldest.Before(s.waiters[i].oldest) })
+	s.waiters = slices.Insert(s.waiters, i, w)
+	s.mu.Unlock()
+
+	select {
+	case <-w.ready:
+	case <-ctx.Done():
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Lock()
+		if i := slices.Index(s.waiters, w); i >= 0 {
+			s.waiters = slices.Delete(s.waiters, i, i+1)
+		} else {
+			// Cancellation raced with a grant. Pass the unused slot to the next batch.
+			s.inUse--
+			s.grantWaitersLocked()
+		}
+		s.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // TryAcquire returns a slot if one is available without waiting.
@@ -145,11 +169,11 @@ func (s *StreamingSlots) TryAcquire() (release func(throttled bool), ok bool) {
 func (s *StreamingSlots) releaseFunc() func(throttled bool) {
 	var once sync.Once
 	return func(throttled bool) {
-		once.Do(func() { s.release(throttled) })
+		once.Do(func() { s.release(true, throttled) })
 	}
 }
 
-func (s *StreamingSlots) release(throttled bool) {
+func (s *StreamingSlots) release(attempted, throttled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -157,23 +181,25 @@ func (s *StreamingSlots) release(throttled bool) {
 	if throttled {
 		s.successes = 0
 		s.limit = max(1, s.limit/2)
-	} else if s.limit < s.share {
+	} else if attempted && s.limit < s.share {
 		s.successes++
 		if s.successes >= s.increaseAfter {
 			s.successes = 0
 			s.limit++
 		}
 	}
-	s.notifyLocked()
+	s.grantWaitersLocked()
 }
 
-// notifyLocked wakes goroutines waiting for a slot.  s.mu must be held.
-func (s *StreamingSlots) notifyLocked() {
-	if s.waiters == 0 {
-		return
+// grantWaitersLocked reserves available slots before waking the selected workers, so new arrivals cannot bypass them.
+func (s *StreamingSlots) grantWaitersLocked() {
+	for s.inUse < s.limit && len(s.waiters) > 0 {
+		w := s.waiters[0]
+		s.waiters[0] = nil
+		s.waiters = s.waiters[1:]
+		s.inUse++
+		close(w.ready)
 	}
-	close(s.changed)
-	s.changed = make(chan struct{})
 }
 
 func (s *StreamingSlots) overcommittedLocked() bool {
@@ -190,6 +216,7 @@ func (s *StreamingSlots) Stats() SlotStats {
 		Share:         s.share,
 		Limit:         s.limit,
 		InUse:         s.inUse,
+		Waiting:       len(s.waiters),
 		Overcommitted: s.overcommittedLocked(),
 	}
 }
@@ -208,7 +235,7 @@ func NewStreamingSlotsCollector(slots map[string]*StreamingSlots) prometheus.Col
 		slots: slots,
 		slotsDesc: prometheus.NewDesc(
 			prometheus.BuildFQName(metrics.Namespace, "ingestor", "realtime_streaming_slots"),
-			"Streaming ingestion slots for a Kusto endpoint by state: budget, peers, share, limit and in_use",
+			"Streaming ingestion slots for a Kusto endpoint by state: budget, peers, share, limit, in_use and waiting",
 			[]string{"endpoint", "state"}, nil),
 		overcommitted: prometheus.NewDesc(
 			prometheus.BuildFQName(metrics.Namespace, "ingestor", "realtime_streaming_overcommitted"),
@@ -226,11 +253,12 @@ func (c *streamingSlotsCollector) Collect(ch chan<- prometheus.Metric) {
 	for endpoint, s := range c.slots {
 		st := s.Stats()
 		for state, v := range map[string]int{
-			"budget": st.Budget,
-			"peers":  st.Peers,
-			"share":  st.Share,
-			"limit":  st.Limit,
-			"in_use": st.InUse,
+			"budget":  st.Budget,
+			"peers":   st.Peers,
+			"share":   st.Share,
+			"limit":   st.Limit,
+			"in_use":  st.InUse,
+			"waiting": st.Waiting,
 		} {
 			ch <- prometheus.MustNewConstMetric(c.slotsDesc, prometheus.GaugeValue, float64(v), endpoint, state)
 		}
