@@ -266,7 +266,7 @@ func TestStreamBatch_FallbackFailures(t *testing.T) {
 			require.Equal(t, 1, env.queue.calls)
 			require.Equal(t, testCSV, env.queue.data)
 			require.NoFileExists(t, path)
-			require.Equal(t, tt.cooldown, env.u.cooldowns.active("Cpu", time.Now()))
+			require.Equal(t, tt.cooldown, signaled(env.u.cooldowns.watch("Cpu", time.Now())))
 
 			// During a cooldown the table skips streaming.
 			env.stream.err = nil
@@ -426,7 +426,6 @@ func TestStreamBatch_WaitsForSlot(t *testing.T) {
 					time.Sleep(29 * time.Second)
 				case "fallback_cooldown":
 					env.u.cooldowns.start("Cpu", time.Now().Add(time.Minute))
-					held(false)
 				}
 				synctest.Wait()
 				require.Zero(t, slots.Stats().Waiting)
@@ -451,6 +450,45 @@ func TestStreamBatch_WaitsForSlot(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A database sharing a busy endpoint can still use its only upload worker for queued ingestion.
+// Shutdown must release its parked WAL batch even while the other database keeps the endpoint slot.
+func TestUploader_QueuedWorkAndShutdownDuringSharedSlotWait(t *testing.T) {
+	env := newStreamingTestEnv(t)
+	path := env.addSegment(t, "Realtime", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
+	waiting := env.nextBatch(t, ingestpolicy.PriorityRealtime)
+	env.addSegment(t, "Queued", ingestpolicy.PriorityQueued, testCSV, time.Time{})
+	queued := env.nextBatch(t, ingestpolicy.PriorityQueued)
+
+	synctest.Test(t, func(t *testing.T) {
+		u := env.u
+		prepareShutdownUploader(u)
+		u.realtime.Slots = NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
+		otherDB, ok := u.realtime.Slots.TryAcquire()
+		require.True(t, ok)
+		defer otherDB(false)
+		waiting.Segments[0].CreatedAt = time.Now()
+		u.startWorkers(t.Context())
+		u.RealtimeUploadQueue() <- waiting
+		synctest.Wait()
+		require.Equal(t, 1, u.realtime.Slots.Stats().Waiting)
+
+		u.UploadQueue() <- queued
+		synctest.Wait()
+		require.True(t, queued.IsRemoved())
+		require.Equal(t, 1, env.queue.calls)
+		require.Equal(t, 1, u.realtime.Slots.Stats().Waiting)
+
+		start := time.Now()
+		require.NoError(t, u.Close())
+		require.Equal(t, start, time.Now(), "Close must not wait for the lag deadline")
+		require.True(t, waiting.IsReleased())
+		require.FileExists(t, path)
+		require.Equal(t, 1, env.queue.calls)
+		require.Zero(t, env.stream.calls)
+		require.Zero(t, u.realtime.Slots.Stats().Waiting)
+	})
 }
 
 func realtimeBatchCount(t *testing.T, table, outcome string) float64 {

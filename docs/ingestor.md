@@ -146,7 +146,7 @@ cluster's capacity among their budgets since each deployment only knows about it
 | Condition | Behavior |
 | --- | --- |
 | Throttled or transient failure | Retried with streaming ingestion until the batch reaches `--realtime-max-lag`. |
-| No streaming slot available | A worker holds the prepared batch until a slot opens or the batch reaches `--realtime-max-lag`. The next slot goes to the waiting batch with the oldest WAL segment on that endpoint. |
+| No streaming slot available | Prepared batches wait outside the active upload limit. The next slot goes to the oldest waiting WAL batch with upload capacity at its database. Lag expiry or a table cooldown sends it to queued ingestion; shutdown leaves its data in the WAL. |
 | Batch older than `--realtime-max-lag` | Queued ingestion. |
 | Uncompressed batch larger than 4MB | Queued ingestion. |
 | Streaming unavailable for the table, such as when the policy is disabled, the schema has not propagated or the database is under maintenance | Queued ingestion, and the table uses queued ingestion for 5 minutes. |

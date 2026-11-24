@@ -84,6 +84,9 @@ type uploader struct {
 	realtimeQueue chan *cluster.Batch
 
 	closeFn context.CancelFunc
+	// Active data uploads share this per-database limit. Preparing or waiting for a streaming slot does not use it.
+	uploads  chan struct{}
+	stopping <-chan struct{}
 
 	// realtime and streamer stream realtime batches.  When streamer is nil, realtime batches use queued ingestion.
 	realtime  *RealtimeUploadOpts
@@ -210,19 +213,39 @@ func (n *uploader) startWorkers(ctx context.Context) {
 	// Schedule queued uploads fairly across destinations while preserving the realtime path and the shutdown
 	// behavior for active batches.  Batches of a table waiting for a worker are merged into one ingestion.
 	queued := cluster.FairQueue(workerCtx, n.queue, n.opts.queueOpts())
-	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: queued}
-	n.wg.Add(n.opts.ConcurrentUploads)
-	cluster.RunWorkers(workerCtx, queues, n.opts.ConcurrentUploads, n.opts.QueuedReservedWorkersPercent, func(batch *cluster.Batch) {
-		// Cancellation may race with dequeuing a batch. Do not start that batch after intake stops.
+	run := func(batch *cluster.Batch) {
 		if workerCtx.Err() != nil {
 			batch.Release()
 			return
 		}
-		// Preserve request values, but do not inherit shutdown cancellation or the service deadline.
 		uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), batchUploadTimeout)
 		defer cancel()
 		n.uploadBatch(uploadCtx, batch)
-	}, n.wg.Done)
+	}
+	workers := n.opts.ConcurrentUploads
+	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: queued}
+	if n.streamer != nil && n.realtime != nil {
+		n.uploads = make(chan struct{}, workers)
+		n.stopping = workerCtx.Done()
+		// Realtime workers can prepare and wait independently. Once ready, both paths must obtain one
+		// of the same upload permits. The realtime worker count preserves the queued reservation.
+		realtimeWorkers := workers - cluster.ReservedWorkers(workers, n.opts.QueuedReservedWorkersPercent)
+		realtimeOnly := cluster.PriorityQueues{Realtime: n.realtimeQueue}
+		for range realtimeWorkers {
+			n.wg.Go(func() {
+				for {
+					b, ok := realtimeOnly.Next(workerCtx, false)
+					if !ok {
+						return
+					}
+					run(b)
+				}
+			})
+		}
+		queues.Realtime = nil
+	}
+	n.wg.Add(workers)
+	cluster.RunWorkers(workerCtx, queues, workers, n.opts.QueuedReservedWorkersPercent, run, n.wg.Done)
 }
 
 // Close stops taking new batches and waits for active uploads and cleanup before closing clients.
@@ -540,6 +563,19 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			}
 		}
 
+		if n.uploads != nil {
+			select {
+			case <-n.stopping:
+				return
+			case <-ctx.Done():
+				return
+			case n.uploads <- struct{}{}:
+			}
+			defer n.realtime.Slots.releaseUploadPermit(n.uploads)
+			if signaled(n.stopping) {
+				return
+			}
+		}
 		now := time.Now()
 		if ctx.Err() != nil {
 			return

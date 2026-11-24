@@ -5,6 +5,7 @@ package adx
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sort"
 	"sync"
@@ -70,8 +71,10 @@ type StreamingSlots struct {
 }
 
 type slotWaiter struct {
-	oldest time.Time
-	ready  chan struct{}
+	oldest             time.Time
+	ready              chan struct{}
+	uploads            chan struct{}
+	stopping, cooldown <-chan struct{}
 }
 
 // NewStreamingSlots returns a pool for budget concurrent requests shared by peers.  At least one slot is always
@@ -113,39 +116,80 @@ func (s *StreamingSlots) SetPeers(peers cluster.PeerInfo) {
 // Acquire waits for a slot.  The returned func must be called when the request completes and reports whether the
 // request was throttled.
 func (s *StreamingSlots) Acquire(ctx context.Context) (release func(throttled bool), err error) {
-	if err := s.acquire(ctx, time.Now()); err != nil {
+	if err := s.acquire(ctx, &slotWaiter{oldest: time.Now()}); err != nil {
 		return nil, err
 	}
 	return s.releaseFunc(), nil
 }
 
-func (s *StreamingSlots) acquire(ctx context.Context, oldest time.Time) error {
-	s.mu.Lock()
+var errTableCooldown = errors.New("table streaming cooldown")
+
+func signaled(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *slotWaiter) err(ctx context.Context) error {
+	if signaled(w.stopping) {
+		return context.Canceled
+	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if signaled(w.cooldown) {
+		return errTableCooldown
+	}
+	return nil
+}
+
+// tryPermit claims the database's upload capacity together with the endpoint slot.
+func (w *slotWaiter) tryPermit() bool {
+	if w.uploads == nil {
+		return true
+	}
+	select {
+	case w.uploads <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *StreamingSlots) acquire(ctx context.Context, w *slotWaiter) error {
+	s.mu.Lock()
+	if err := w.err(ctx); err != nil {
 		s.mu.Unlock()
 		return err
 	}
-	if s.inUse < s.limit {
+	if s.inUse < s.limit && w.tryPermit() {
 		s.inUse++
 		s.mu.Unlock()
 		return nil
 	}
 
-	w := &slotWaiter{oldest: oldest, ready: make(chan struct{})}
-	i := sort.Search(len(s.waiters), func(i int) bool { return oldest.Before(s.waiters[i].oldest) })
+	w.ready = make(chan struct{})
+	i := sort.Search(len(s.waiters), func(i int) bool { return w.oldest.Before(s.waiters[i].oldest) })
 	s.waiters = slices.Insert(s.waiters, i, w)
 	s.mu.Unlock()
-
 	select {
 	case <-w.ready:
 	case <-ctx.Done():
+	case <-w.stopping:
+	case <-w.cooldown:
 	}
-	if err := ctx.Err(); err != nil {
+	if err := w.err(ctx); err != nil {
 		s.mu.Lock()
 		if i := slices.Index(s.waiters, w); i >= 0 {
 			s.waiters = slices.Delete(s.waiters, i, i+1)
 		} else {
-			// Cancellation raced with a grant. Pass the unused slot to the next batch.
+			// Cancellation raced with a grant. Return both resources.
+			if w.uploads != nil {
+				<-w.uploads
+			}
 			s.inUse--
 			s.grantWaitersLocked()
 		}
@@ -169,14 +213,25 @@ func (s *StreamingSlots) TryAcquire() (release func(throttled bool), ok bool) {
 func (s *StreamingSlots) releaseFunc() func(throttled bool) {
 	var once sync.Once
 	return func(throttled bool) {
-		once.Do(func() { s.release(true, throttled) })
+		once.Do(func() { s.release(nil, true, throttled) })
 	}
 }
 
-func (s *StreamingSlots) release(attempted, throttled bool) {
+// releaseUploadPermit wakes streaming admissions after an ordinary queued upload finishes.
+func (s *StreamingSlots) releaseUploadPermit(uploads chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	<-uploads
+	s.grantWaitersLocked()
+}
+
+func (s *StreamingSlots) release(uploads chan struct{}, attempted, throttled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if uploads != nil {
+		<-uploads
+	}
 	s.inUse--
 	if throttled {
 		s.successes = 0
@@ -193,10 +248,13 @@ func (s *StreamingSlots) release(attempted, throttled bool) {
 
 // grantWaitersLocked reserves available slots before waking the selected workers, so new arrivals cannot bypass them.
 func (s *StreamingSlots) grantWaitersLocked() {
-	for s.inUse < s.limit && len(s.waiters) > 0 {
-		w := s.waiters[0]
-		s.waiters[0] = nil
-		s.waiters = s.waiters[1:]
+	for i := 0; i < len(s.waiters) && s.inUse < s.limit; {
+		w := s.waiters[i]
+		if signaled(w.stopping) || signaled(w.cooldown) || !w.tryPermit() {
+			i++
+			continue
+		}
+		s.waiters = slices.Delete(s.waiters, i, i+1)
 		s.inUse++
 		close(w.ready)
 	}

@@ -80,28 +80,45 @@ const (
 
 // streamingCooldowns tracks tables that use queued ingestion because streaming ingestion is unavailable.
 type streamingCooldowns struct {
-	mu    sync.Mutex
-	until map[string]time.Time
+	mu     sync.Mutex
+	tables map[string]tableCooldown
 }
 
-func (c *streamingCooldowns) active(table string, now time.Time) bool {
+type tableCooldown struct {
+	started chan struct{}
+	until   time.Time
+}
+
+// watch returns a channel closed when this table enters cooldown. New arrivals during a cooldown see it closed.
+func (c *streamingCooldowns) watch(table string, now time.Time) <-chan struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	until, ok := c.until[table]
-	if ok && !now.Before(until) {
-		delete(c.until, table)
-		return false
+	state := c.tables[table]
+	if state.started == nil || (!state.until.IsZero() && !now.Before(state.until)) {
+		if c.tables == nil {
+			c.tables = make(map[string]tableCooldown)
+		}
+		state = tableCooldown{started: make(chan struct{})}
+		c.tables[table] = state
 	}
-	return ok
+	return state.started
 }
 
 func (c *streamingCooldowns) start(table string, until time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.until == nil {
-		c.until = make(map[string]time.Time)
+	if c.tables == nil {
+		c.tables = make(map[string]tableCooldown)
 	}
-	c.until[table] = until
+	state := c.tables[table]
+	if state.started == nil {
+		state.started = make(chan struct{})
+	}
+	if state.until.IsZero() {
+		close(state.started)
+	}
+	state.until = until
+	c.tables[table] = state
 }
 
 // streamBatch attempts to ingest a realtime batch with streaming ingestion.  data is the batch's uncompressed CSV
@@ -113,11 +130,12 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	rt := n.realtime
 	now := time.Now()
 	oldest := oldestSegment(batch)
+	cooldown := n.cooldowns.watch(table, now)
 
 	switch {
 	case n.requireDirectIngest:
 		return n.fallback(table, "direct_ingest", data)
-	case n.cooldowns.active(table, now):
+	case signaled(cooldown):
 		return n.fallback(table, "cooldown", data)
 	case rt.MaxLag > 0 && now.Sub(oldest) >= rt.MaxLag:
 		return n.fallback(table, "lag", data)
@@ -165,23 +183,27 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 		slotCtx, cancel = context.WithDeadline(ctx, lagDeadline)
 		defer cancel()
 	}
-	if err := rt.Slots.acquire(slotCtx, oldest); err != nil {
-		if ctx.Err() != nil {
+	waiter := slotWaiter{oldest: oldest, uploads: n.uploads, stopping: n.stopping, cooldown: cooldown}
+	if err := rt.Slots.acquire(slotCtx, &waiter); err != nil {
+		if signaled(n.stopping) || ctx.Err() != nil {
 			return n.retry(table, "shutdown")
+		}
+		if err == errTableCooldown {
+			return n.fallback(table, "cooldown", bytes.NewReader(buffered))
 		}
 		return n.fallback(table, "lag", bytes.NewReader(buffered))
 	}
 	// Only completed requests should affect the adaptive limit.
 	var attempted, throttled bool
-	defer func() { rt.Slots.release(attempted, throttled) }()
-	if ctx.Err() != nil {
+	defer func() { rt.Slots.release(n.uploads, attempted, throttled) }()
+	if signaled(n.stopping) || ctx.Err() != nil {
 		return n.retry(table, "shutdown")
 	}
 	// The deadline may have passed or a cooldown may have started while the worker was waiting.
 	if rt.MaxLag > 0 && !time.Now().Before(lagDeadline) {
 		return n.fallback(table, "lag", bytes.NewReader(buffered))
 	}
-	if n.cooldowns.active(table, time.Now()) {
+	if signaled(cooldown) {
 		return n.fallback(table, "cooldown", bytes.NewReader(buffered))
 	}
 
