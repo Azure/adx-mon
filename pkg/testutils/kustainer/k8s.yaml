@@ -37,7 +37,6 @@ metadata:
 spec:
   selector:
     app: {{APP}}
-  type: NodePort
   ports:
     - protocol: TCP
       port: 8080

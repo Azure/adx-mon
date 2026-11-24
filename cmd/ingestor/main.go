@@ -36,6 +36,7 @@ import (
 	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
 	monhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -66,6 +67,7 @@ func newApp() *cli.App {
 			&cli.StringFlag{Name: "storage-backend", Usage: "Storage backend to use (adx or clickhouse)", EnvVars: []string{"INGESTOR_STORAGE_BACKEND"}, Value: string(storage.BackendADX)},
 			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for metrics"},
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for OTLP logs"},
+			&cli.StringSliceFlag{Name: "kusto-trusted-hosts", Usage: "Additional exact Kusto hostnames or IPs to trust (repeatable; no scheme or port)"},
 			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish ingestor clusters. Format: <key>=<value>"},
 			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
@@ -113,6 +115,9 @@ func newApp() *cli.App {
 
 func realMain(ctx *cli.Context) error {
 	logger.Infof("%s version:%s", os.Args[0], version.String())
+	if err := kustoutil.AddTrustedHosts(ctx.StringSlice("kusto-trusted-hosts")); err != nil {
+		return err
+	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -399,9 +399,9 @@ func TestUploader_UploadContextCancellationCancelsIngestRequests(t *testing.T) {
 				_, err := u.syncer.EnsureMapping(executionCtx, "Cpu", u.opts.DefaultMapping)
 				require.NoError(t, err)
 
-				transport := &shutdownTransport{requests: make(chan context.Context)}
+				transport := &shutdownTransport{requests: make(chan context.Context, 1)}
 				httpClient := &http.Client{Transport: transport}
-				csb := azkustodata.NewConnectionStringBuilder("http://localhost:8080")
+				csb := azkustodata.NewConnectionStringBuilder("https://shutdown-test.kusto.windows.net")
 				u.KustoCli, err = azkustodata.New(csb, azkustodata.WithHttpClient(httpClient))
 				require.NoError(t, err)
 				defer u.KustoCli.Close()
@@ -416,8 +416,13 @@ func TestUploader_UploadContextCancellationCancelsIngestRequests(t *testing.T) {
 					u.uploadBatch(executionCtx, batch)
 					finished = true
 				}()
-				requestCtx := <-transport.requests
 				synctest.Wait()
+				var requestCtx context.Context
+				select {
+				case requestCtx = <-transport.requests:
+				default:
+					t.Fatal("ingestion request did not reach the transport")
+				}
 				require.False(t, finished)
 				require.NoError(t, requestCtx.Err())
 				cancelExecution()

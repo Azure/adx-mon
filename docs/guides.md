@@ -1,5 +1,17 @@
 # Guides
 
+## Trust an additional Kusto host
+
+Ingestor, Alerter (including `alerter lint`), and ADX Exporter accept the repeatable
+`--kusto-trusted-hosts` flag for Kusto endpoints that the SDK does not recognize by default.
+For example, when a test runs the Kusto emulator inside Kubernetes, pass
+`--kusto-trusted-hosts=kustainer.default.svc.cluster.local` to the process that connects to it.
+
+Use a bare hostname or IP address, not a URL, port, or wildcard. Each entry matches one exact host
+and extends the SDK's default trust list for that process. This flag does not change TLS verification
+or credential configuration. Set it only for hosts you control and trust to receive Kusto requests
+and any credentials configured for those requests.
+
 ## End-to-end ClickHouse pipeline
 
 This guide walks through wiring the collector, ingestor, and local tooling to land telemetry in

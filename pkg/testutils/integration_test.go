@@ -61,7 +61,7 @@ func TestIntegration(t *testing.T) {
 	wg.Wait()
 }
 
-func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
+func StartCluster(ctx context.Context, t *testing.T) (string, *k3s.K3sContainer) {
 	t.Helper()
 
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1", testutils.WithoutDiskPressure())
@@ -75,29 +75,8 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	restConfig, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
-
-	// Get k3s node IP
-	k3sIP, err := k3sContainer.ContainerIP(ctx)
-	require.NoError(t, err)
-
-	// Create a real Kubernetes clientset for Service/NodePort lookup
-	kubeClientset, err := kubernetes.NewForConfig(restConfig)
-	require.NoError(t, err)
-
-	// Get kustainer NodePort
-	svc, err := kubeClientset.CoreV1().Services("default").Get(ctx, "kustainer", metav1.GetOptions{})
-	require.NoError(t, err)
-	var nodePort int32
-	for _, port := range svc.Spec.Ports {
-		if port.Port == 8080 {
-			nodePort = port.NodePort
-			break
-		}
-	}
-	require.NotZero(t, nodePort, "NodePort for kustainer service not found")
-
-	kustoUrl = fmt.Sprintf("http://%s:%d", k3sIP, nodePort)
-	t.Logf("Kubeconfig: %s", kustoUrl)
+	t.Cleanup(func() { require.NoError(t, kustoContainer.Close()) })
+	kustoUrl := kustoContainer.ConnectionUrl()
 	t.Logf("Kustainer: %s", kustoUrl)
 
 	t.Run("Configure Kusto", func(t *testing.T) {

@@ -115,7 +115,8 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		}
 
 		var img string
-		if req.FromDockerfile.Context != "" {
+		builtLocally := req.FromDockerfile.Context != ""
+		if builtLocally {
 			// We build to "ingestor:latest", load that image into the k3s cluster
 			img = req.FromDockerfile.Repo + ":" + req.FromDockerfile.Tag
 		} else {
@@ -211,6 +212,11 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						"--insecure-skip-verify",
 						"--metrics-kusto-endpoints=Metrics=http://kustainer.default.svc.cluster.local:8080",
 						"--logs-kusto-endpoints=Logs=http://kustainer.default.svc.cluster.local:8080",
+					}
+					if builtLocally {
+						// The published image in the upgrade test may predate this flag.
+						statefulSet.Spec.Template.Spec.Containers[0].Args = append(statefulSet.Spec.Template.Spec.Containers[0].Args,
+							"--kusto-trusted-hosts=kustainer.default.svc.cluster.local")
 					}
 					statefulSet.Spec.Template.Spec.Affinity = nil
 					statefulSet.Spec.Template.Spec.Tolerations = nil
